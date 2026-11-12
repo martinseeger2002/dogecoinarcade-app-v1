@@ -82,18 +82,50 @@ def register(app, st, chains):
         except Exception:                                   # noqa: BLE001
             return ""
 
+    #: Every coin a profile names an address on (2026-11-12, the operator: "profiles must carry an address for every
+    #: coin the arcade supports so anyone can send any profile any coin"; no Bitcoin yet), besides Pepecoin and
+    #: Dogecoin, which have their own places in the announcement. Coins this site keeps no wallet for (ARCADE) are
+    #: named from the same key: one key hash on every real-coin chain (BIP44 type 3), another on every test chain
+    #: (type 1), as Arcade V1.0 derives them.
+    PROFILE_COINS = {"ltc": True, "dgb": True, "kot": True, "flop": True, "wjk": True, "bel": True, "lky": True,
+                     "shic": True, "jkc": True, "arc": True, "ltctest": False, "dgbtest": False, "arctest": False}
+
+    def key_hash(pubkey: str, real: bool) -> bytes:
+        sib = chains.by_network("main" if real else "test")
+        base = chains.account_address(pubkey, sib) if sib is not None else ""
+        try:
+            return b58check_decode(base)[1] if base else b""
+        except Exception:                                   # noqa: BLE001
+            return b""
+
     def chain_hashes(pubkey: str) -> dict[str, bytes]:
+        """The account's address hash on every coin in PROFILE_COINS: the address its browser filed for a coin this
+        site lists, else the same key's hash."""
+        listed = {one.network: one for one in chains.account_chains()}
         out = {}
-        for one in chains.account_chains():
-            if one.network in ("test", "main", "doge"):
-                continue
-            a = any_address(pubkey, one)
-            if a:
+        for net, real in PROFILE_COINS.items():
+            h = b""
+            if net in listed:
+                a = any_address(pubkey, listed[net])
                 try:
-                    out[one.network] = b58check_decode(a)[1]
+                    h = b58check_decode(a)[1] if a else b""
                 except Exception:                           # noqa: BLE001
-                    continue
-        return out
+                    h = b""
+            out[net] = h or key_hash(pubkey, real)
+        return {net: h for net, h in out.items() if len(h) == 20}
+
+    def profile_missing(address: str) -> list[str]:
+        """The coins of PROFILE_COINS the account's published profile names no address on (Arcade V1.0's `linked`);
+        [] when it has published none (nothing to update) or V1.0 does not answer."""
+        try:
+            prof = (v1.cmd("profile", who=address) or {})
+        except V1Error:
+            return []
+        prof = prof.get("profile") or prof
+        if not prof.get("stated") and not prof.get("txid"):
+            return []
+        have = {str(row.get("chain") or "") for row in prof.get("linked") or []}
+        return [net for net in PROFILE_COINS if net not in have]
 
     def doge_hash(pubkey: str) -> bytes:
         doge = chains.by_network("doge")
@@ -226,6 +258,71 @@ def register(app, st, chains):
             return JSONResponse({"detail": str(exc)}, status_code=400)
         return announcement(account, chain, address, said, tag=tag, what="publish your profile", pfp=face or "",
                             bio=text, url=link)
+
+    # ---------------------------------------------------------------- follows (on the chain, as Arcade V1.0 reads them)
+    def account_named(who: str) -> str:
+        """An account's home-chain address from @tag or the address itself; "" when it names nobody."""
+        who = str(who or "").strip()
+        home = chains.account_chain()
+        if who.startswith("@"):
+            try:
+                return str(v1.tag_owner(taglib.validate(who.lstrip("@"))) or "")
+            except (taglib.TagError, V1Error):
+                return ""
+        return who if who and not chains.check_address(who, home) else ""
+
+    @app.post("/account/follow")
+    def account_follow(request: Request, payload: Any = Body(None)):
+        """Follow {who} (on: false unfollows): a feed act on the home chain from this account, offered for its browser
+        to sign like a like. Arcade V1.0 counts the newest act between two accounts."""
+        account = signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        chain = chains.account_chain()
+        address = chains.account_address(account.pubkey, chain)
+        if not address:
+            return no_address(chain)
+        on = said.get("on", True) not in (False, "false", 0, "0")
+        try:
+            them = account_named(str(said.get("who", "")))
+            if not them:
+                raise ValueError("follow whom? Give an @name or a Pepecoin address")
+            if them == address:
+                raise ValueError("that is you")
+            kind = feedlib.FOLLOW if on else feedlib.UNFOLLOW
+            note = feedlib.build(kind, feedlib.follow_target(b58check_decode(them)[1]))
+            what = f"{'follow' if on else 'unfollow'} {said.get('who')}"
+            unsigned = build(account, chain, address, class_c_or_b(chain, address, note, coin_pubkey(account.pubkey)),
+                             what)
+            quota(account, "react", len(note))
+        except (fundinglib.FundingError, feedlib.FeedError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return offered(account, chain, unsigned, unsigned.what, who=them, on=on)
+
+    # ---------------------------------------------------------------- a profile that names every coin
+    def coin_label(net: str) -> str:
+        from arcade.config import NETWORKS
+        p = NETWORKS.get(net)
+        return getattr(p, "label", "") or {"arc": "ARCADE", "arctest": "ARCADE testnet"}.get(net, net)
+
+    @app.get("/account/profile/missing")
+    def account_profile_missing(request: Request):
+        """The coins this account's published profile names no address on, for the one-time "update your profile" card
+        (2026-11-12). `skipped`: the account said "not now" to this same list already."""
+        account = signed_in_account(request)
+        address = chains.account_address(account.pubkey, chains.account_chain())
+        nets = profile_missing(address) if address else []
+        said = st.setting(f"profile_coins_skipped:{account.pubkey}", "") or ""
+        return JSONResponse({"missing": nets, "labels": [coin_label(n) for n in nets],
+                             "skipped": bool(nets) and said == ",".join(nets)})
+
+    @app.post("/account/profile/skip")
+    def account_profile_skip(request: Request, payload: Any = Body(None)):
+        """"Not now" to the card: remembered for this list of coins, so it is asked once (a coin added later asks again)."""
+        account = signed_in_account(request)
+        address = chains.account_address(account.pubkey, chains.account_chain())
+        nets = profile_missing(address) if address else []
+        st.set_setting(f"profile_coins_skipped:{account.pubkey}", ",".join(nets))
+        return JSONResponse({"skipped": nets})
 
     # ---------------------------------------------------------------- the feed
     @app.post("/account/post")

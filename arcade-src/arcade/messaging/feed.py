@@ -77,7 +77,19 @@ WITH_TEXT = (REPLY, SHARE, EDIT, TIP_TOKEN)
 #: The kinds only the post's own author may perform.
 AUTHOR_ONLY = (EDIT, DELETE)
 
-KINDS = (LIKE, UNLIKE, REPLY, SHARE, EDIT, DELETE, TIP, DISLIKE, UNDISLIKE, TIP_TOKEN)
+#: Follow and unfollow an account (2026-11-12, Arcade V1.0 Act::Follow/Unfollow): the target is the followed account's
+#: home-chain address hash160 and 12 zero bytes (`follow_target`). Between two accounts the newest act counts.
+FOLLOW = 11
+UNFOLLOW = 12
+
+KINDS = (LIKE, UNLIKE, REPLY, SHARE, EDIT, DELETE, TIP, DISLIKE, UNDISLIKE, TIP_TOKEN, FOLLOW, UNFOLLOW)
+
+
+def follow_target(hash160: bytes) -> bytes:
+    """A follow's 32-byte target: the account's address hash160, then 12 zero bytes."""
+    if len(hash160) != 20:
+        raise FeedError("an account is followed by its 20-byte address hash")
+    return bytes(hash160) + bytes(12)
 
 #: The kinds that are one person's opinion of a post; the latest of them stands.
 OPINIONS = (LIKE, UNLIKE, DISLIKE, UNDISLIKE)
@@ -85,7 +97,8 @@ OPINIONS = (LIKE, UNLIKE, DISLIKE, UNDISLIKE)
 #: Kind names, for pages and for the reasons the index records.
 NAMES = {LIKE: "like", UNLIKE: "unlike", REPLY: "reply", SHARE: "share",
          EDIT: "edit", DELETE: "delete", TIP: "tip",
-         DISLIKE: "dislike", UNDISLIKE: "undislike", TIP_TOKEN: "tiptoken"}
+         DISLIKE: "dislike", UNDISLIKE: "undislike", TIP_TOKEN: "tiptoken",
+         FOLLOW: "follow", UNFOLLOW: "unfollow"}
 
 #: The same map the other way, for a page that has the word and needs the
 #: byte. It lives here rather than in the page because a browser that sends a

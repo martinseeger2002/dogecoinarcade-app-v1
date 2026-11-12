@@ -670,11 +670,13 @@ document.body.dataset.profileReady = "yes";
   {# No heading or explanation here (2026-09-27): the tab already says
      Feed, and Popular / New / Friends say themselves. #}
   <nav class="row feedsort" aria-label="Order" style="gap:6px;margin:0 0 16px">
-    <a class="btn small {{ 'on' if sort not in ('new', 'friends') else 'ghost' }}" href="/feed">Popular</a>
+    <a class="btn small {{ 'on' if sort not in ('new', 'friends', 'following') else 'ghost' }}" href="/feed">Popular</a>
     <a class="btn small {{ 'on' if sort == 'new' else 'ghost' }}" href="/feed?sort=new">New</a>
     <a class="btn small {{ 'on' if sort == 'friends' else 'ghost' }}" href="/feed?sort=friends">Friends</a>
+    <a class="btn small {{ 'on' if sort == 'following' else 'ghost' }}" href="/feed?sort=following">Following</a>
   </nav>
   <div class="panel empty" id="no-friends" hidden></div>
+  {% if sort == 'following' and following_note %}<div class="panel empty">{{ following_note }}</div>{% endif %}
 {% endif %}
 
 {% if not whose %}

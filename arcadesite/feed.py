@@ -80,10 +80,41 @@ def register(app, st, chains):
                     out[piece] = ""
         return out
 
+    #: The most accounts the Following feed reads (one V1.0 feed question each), newest follows first.
+    FOLLOWING_CAP = 60
+
+    def following_posts(address: str, offset: int, limit: int) -> tuple[list, int, str]:
+        """Posts by the accounts `address` follows (Arcade V1.0 `follows`, newest act between two accounts counts),
+        newest first: (page, total, note). One `feed` question per followed account, merged by height (waiting
+        posts first)."""
+        if not address:
+            return [], 0, "Sign in to see the posts of the people you follow."
+        try:
+            people = [str(r.get("address") or "") for r in (v1.cmd("follows", who=address) or {}).get("following_list") or []]
+        except V1Error:
+            return [], 0, "The arcade behind this site does not keep follows yet."
+        people = [a for a in people if a][:FOLLOWING_CAP]
+        if not people:
+            return [], 0, "You follow nobody yet. Follow people from their profiles, and their posts show here."
+        rows, seen = [], set()
+        for a in people:
+            try:
+                got = (v1.cmd("feed", order="new", author=a, limit=offset + limit) or {}).get("posts") or []
+            except V1Error:
+                continue
+            for p in got:
+                if p.get("txid") not in seen and str((p.get("author") or {}).get("address") or "") == a:
+                    seen.add(p.get("txid"))
+                    rows.append(p)
+        rows.sort(key=lambda p: (p.get("height") is not None, -(p.get("height") or 0), float(p.get("age_hours") or 0)))
+        return rows[offset:offset + limit], len(rows), "" if rows else "Nobody you follow has posted yet."
+
+    app.state.following_posts = following_posts
+
     @app.get("/feed", response_class=HTMLResponse)
     def feed_page(request: Request, before: str | None = None, sort: str = "popular", post: str | None = None):
-        if sort not in ("popular", "new", "friends"):
-            raise HTTPException(400, "sort is popular, new or friends")
+        if sort not in ("popular", "new", "friends", "following"):
+            raise HTTPException(400, "sort is popular, new, friends or following")
         offset = 0
         if before not in (None, ""):
             if not str(before).isdigit():
@@ -91,7 +122,7 @@ def register(app, st, chains):
             offset = int(before)
         mine = me_of(request)
         wanted = (post or "").strip().lower()
-        missing, named = "", ""
+        missing, named, following_note = "", "", ""
         if wanted and not re.fullmatch(r"[0-9a-f]{64}", wanted):
             named, posts, total = wanted, [], 0
         elif wanted:
@@ -99,6 +130,8 @@ def register(app, st, chains):
             posts, total = got.get("posts") or [], 0
             if not posts:
                 missing = wanted
+        elif sort == "following":
+            posts, total, following_note = following_posts(mine["address"], offset, PER_PAGE)
         else:
             got = v1.cmd("feed", order="new" if sort in ("new", "friends") else "popular", limit=PER_PAGE,
                          offset=offset) or {}
@@ -110,4 +143,5 @@ def register(app, st, chains):
             request, "feed.html", chain=chains.account_chain(), posts=shown, bylines=bylines(shown), drawable=drawn,
             frames={k: app.state.frame_src(request, k) for k, t in drawn.items() if t == "text/html"}, cursor=cursor, whose=None, missing=missing, not_an_id=bool(named), focus="",
             here="/feed" if sort == "popular" else f"/feed?sort={sort}", sort=sort, mine=mine,
-            kinds=feedlib.BY_NAME, friends=[], when=L._local_time, node={}, loading=None)
+            kinds=feedlib.BY_NAME, friends=[], when=L._local_time, node={}, loading=None,
+            following_note=following_note)

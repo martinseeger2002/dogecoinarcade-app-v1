@@ -10,6 +10,8 @@ and its Referer). So:
     /r/send, /r/send/<id> a question for the reader ("pay 5 GOLD to @x?"), answered in the reader's own page
     /account/pagesends    ... which that page polls, and /account/pagesends/answer, which it answers
     /r/<name>.js          the shims (storage, realtime, groups, contacts, access, app, node, swap, owner, state, ...)
+    /r/follows/<who>, /r/profile/<who> (the original's answer plus follows and linked), /r/feed/following,
+    POST /r/follow, /r/profile/publish   the Profiles app (2026-11-12): asked in the reader's card, signed there
     /r/<anything else>    read from V1.0's page API, as it is
 
 On the pages host only /content/, /r/ and /site/ are served (the original's PAGES_DOOR).
@@ -217,6 +219,34 @@ def register(app, st, chains, template_dir: Path):
         listed = st.setting("unlimited_accounts", []) or []
         return isinstance(listed, list) and address in listed
 
+    def one_label(net: str) -> str:
+        one = chains.by_network(net)
+        return one.label if one is not None else net
+
+    def profile_address(who: str, net: str) -> str:
+        """The address a name's published profile gives on `net` (Arcade V1.0 `profile` linked; a hash kept as
+        "h160:<hex>" is written with that chain's own version byte). "" when it gives none."""
+        from arcade.script import b58check_encode
+        one = chains.by_network(net)
+        if one is None:
+            return ""
+        try:
+            prof = v1.cmd("profile", who="@" + str(who).lstrip("@")) or {}
+        except V1Error:
+            return ""
+        prof = prof.get("profile") or prof
+        for row in prof.get("linked") or []:
+            if str(row.get("chain") or "") != chain_key(net) and str(row.get("chain") or "") != net:
+                continue
+            a = str(row.get("address") or "")
+            if a.startswith("h160:"):
+                try:
+                    a = b58check_encode(one.params.pubkeyhash_version, bytes.fromhex(a[5:]))
+                except ValueError:
+                    return ""
+            return a if not chains.check_address(a, one) else ""
+        return ""
+
     @app.post("/r/send")
     def r_send(request: Request, body: dict = Body(default={})):
         """A question for the reader (never an action): kind coins | token | inscription, to, amount; an optional
@@ -268,7 +298,10 @@ def register(app, st, chains, template_dir: Path):
             if code != 200 or not prop:
                 return _json({"error": "there is no such token"}, 400)
             name, issuer = prop.get("name") or "", str(prop.get("issuer") or "")
-        to_address = to if not to.startswith("@") else (v1.tag_owner(to.lstrip("@")) if net == "test" else "")
+        to_address = to if not to.startswith("@") else (v1.tag_owner(to.lstrip("@")) if net == "test"
+                                                         else profile_address(to, net))
+        if to.startswith("@") and kind == "coins" and not to_address:
+            return _json({"error": f"{to} has published no {one_label(net)} address in their profile yet"}, 400)
         rid = secrets.token_urlsafe(12)
         one = chains.by_network(net)
         row = {"id": rid, "address": address, "network": net, "kind": kind, "coin": one.params.coin, "to": to[:120],
@@ -566,6 +599,88 @@ def register(app, st, chains, template_dir: Path):
                                     "dec": int(tok.get("dec") if tok.get("dec") is not None else 18),
                                     "deployer": tok.get("deployer"), "holders": tok.get("holders")}),
                         media_type="application/json", headers={**contentlib.CORS, "Cache-Control": "no-store"})
+
+    # ---------------------------------------------------------------- the Profiles app (2026-11-12): follows on the chain
+    @app.get("/r/follows/{who}")
+    def r_follows(who: str):
+        """An account's followers and the accounts it follows (Arcade V1.0 `follows`), with @tags and counts."""
+        want = urllib.parse.unquote(who).strip()
+        try:
+            return _json(v1.cmd("follows", who=want if want.startswith("@") or len(want) > 24 else "@" + want) or {})
+        except V1Error as e:
+            return _json({"error": str(e)}, 404 if "no such" in str(e).lower() or "unknown" in str(e).lower() else 503)
+
+    @app.get("/r/profile/{who}")
+    def r_profile(who: str):
+        """The original's /r/profile answer, unchanged, plus `follows` {followers, following} and `linked` (the address
+        it gives on each coin) from Arcade V1.0's `profile`."""
+        want = urllib.parse.unquote(who).strip()
+        try:
+            code, body = v1.page(f"profile/{urllib.parse.quote(want)}")
+        except V1Error as e:
+            return _json({"error": str(e)}, 503)
+        if code != 200 or not isinstance(body, dict):
+            return _json(body if body is not None else {"error": "no such profile"}, code)
+        try:
+            prof = v1.cmd("profile", who=want if want.startswith("@") or len(want) > 24 else "@" + want) or {}
+        except V1Error:
+            prof = {}
+        inner = prof.get("profile") or prof
+        return _json({**body, "follows": prof.get("follows") or {"followers": 0, "following": 0},
+                      "linked": inner.get("linked") or []})
+
+    @app.get("/r/feed/following")
+    def r_feed_following(request: Request, offset: int = 0, limit: int = 20):
+        """Posts by the accounts the signed-in viewer follows, newest first (the Feed page's Following tab)."""
+        address, _ = viewer_of(request)
+        posts, total, note = app.state.following_posts(address, max(0, int(offset)), max(1, min(int(limit), 50)))
+        return _json({"posts": posts, "total": total, "note": note})
+
+    def page_request(request: Request, kind: str, args: dict, what: str) -> Response:
+        """File a write the page asks for (follow, unfollow, publish a profile): the reader's arcade card asks, and their
+        browser builds and signs it (base.html pageSends)."""
+        address, page = viewer_of(request)
+        if not address:
+            return _json({"error": "sign in and open this page there to be asked"}, 403)
+        with lock:
+            now = time.time()
+            sweep(now)
+            waiting = [r for r in sends.values() if r["address"] == address and r["status"] == "pending"]
+            if len(waiting) >= 20 and not unlimited(address):
+                return _json({"error": "twenty requests are already waiting"}, 429)
+        page_row = None
+        if page:
+            code, page_row = v1.page(f"inscription/{page}")
+            page_row = page_row if code == 200 else None
+        rid = secrets.token_urlsafe(12)
+        home = chains.account_chain()
+        row = {"id": rid, "address": address, "network": home.network, "kind": kind, "coin": home.params.coin,
+               "op": what, "args": args, "to": "", "amount": "", "propertyid": None, "name": "", "label": "", "note": "",
+               "page": page, "creator": (page_row or {}).get("creator") or "", "to_address": "", "issuer": "",
+               "inscription": "", "made_by": "", "silent": False, "status": "pending", "txid": "", "error": "",
+               "created": time.time()}
+        with lock:
+            sends[rid] = row
+        return _json(told(row), 202)
+
+    @app.post("/r/follow")
+    def r_follow(request: Request, body: dict = Body(default={})):
+        """Ask the reader to follow {who} (on: false unfollows)."""
+        if not isinstance(body, dict):
+            return _json({"error": "send a JSON object"}, 400)
+        who = str(body.get("who") or "").strip()
+        if not who:
+            return _json({"error": "follow whom? Give an @name or an address"}, 400)
+        on = body.get("on", True) not in (False, "false", 0, "0")
+        return page_request(request, "follow", {"who": who[:120], "on": on}, "follow" if on else "unfollow")
+
+    @app.post("/r/profile/publish")
+    def r_profile_publish(request: Request, body: dict = Body(default={})):
+        """Ask the reader to publish their profile: any of pfp, bio, url (a field left out stays as it is)."""
+        if not isinstance(body, dict):
+            return _json({"error": "send a JSON object"}, 400)
+        fields = {k: str(body[k] or "")[:300] for k in ("pfp", "bio", "url") if k in body}
+        return page_request(request, "profile", fields, "publish your profile")
 
     # ---------------------------------------------------------------- every other page API read: V1.0's own
     @app.api_route("/r/{rest:path}", methods=["GET", "HEAD"])

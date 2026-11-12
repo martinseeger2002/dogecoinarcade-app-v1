@@ -746,6 +746,45 @@ async function swapTakeFor(ask, answer, wallet, held) {
 // /r/send/<id> sees the answer. Only on a page that frames one.
 let pageSendBusy = false;
 const pageSendSeen = new Set();
+// A follow, an unfollow or a profile a page asks for (apps.py /r/follow, /r/profile/publish): built for this account,
+// shown in the arcade's card, signed here.
+async function profileAskFor(ask, answer) {
+  const wallet = await import("/wallet.js");
+  const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+  const who = await arcadeRequester(ask.page);
+  const a = ask.args || {};
+  if (ask.kind === "follow") {
+    const on = a.on !== false;
+    const r = await fetch("/account/follow", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({who: a.who, on})});
+    const offer = await r.json();
+    if (!r.ok) throw new Error(offer.detail || "that cannot be built");
+    const shown = await wallet.checked(offer, held);
+    const ok = await arcadeAsk(`${who} asks you to ${on ? "follow" : "unfollow"} ${a.who}`,
+      `A follow is a small public record on the chain, kept for good; the newest of a follow and an unfollow counts. ` +
+      shown.says, on ? "Yes, follow" : "Yes, unfollow");
+    if (!ok) { await answer({status: "denied"}); return; }
+    const done = await wallet.confirm(held, offer);
+    await answer({status: "sent", txid: done.txid});
+    arcadeToast(on ? `Following ${a.who}. It counts when its block lands.` : `Unfollowed ${a.who}.`);
+    return;
+  }
+  const said = [];
+  if ("pfp" in a) said.push(a.pfp ? `picture: inscription ${String(a.pfp).slice(0, 12)}…` : "no picture");
+  if ("bio" in a) said.push(a.bio ? `line: "${a.bio}"` : "no line");
+  if ("url" in a) said.push(a.url ? `link: ${a.url}` : "no link");
+  const ok = await arcadeAsk(`${who} asks you to publish your profile`,
+    (said.length ? `New ${said.join(", ")}. ` : "") + "Whatever isn't named stays as it is. Your profile also names your " +
+    "address on every coin, so anybody can send you any of them. It is public on the chain and costs a small network fee.",
+    "Yes, publish it");
+  if (!ok) { await answer({status: "denied"}); return; }
+  const mail = await import("/messaging.js");
+  const me = await mail.identity(held.phrase);
+  const done = await mail.publishProfile(held, me, a);
+  await answer({status: "sent", txid: done.txid});
+  arcadeToast("Your profile is on its way to the chain.");
+}
+
 async function pageSends() {
   if (pageSendBusy || !ARCADE_ME || document.hidden
       || !document.querySelector("iframe.inscription-frame")) return;
@@ -763,6 +802,10 @@ async function pageSends() {
   try {
     if (!(await arcadeGameGate(ask.page))) {   // not allowed (a game's box off, or a page with no card) and said no
       await answer({status: "failed", error: ARCADE_GATE_SAYS});
+      return;
+    }
+    if (ask.kind === "follow" || ask.kind === "profile") {   // the Profiles app (2026-11-12)
+      await profileAskFor(ask, answer);
       return;
     }
     const wallet = await import("/wallet.js");
@@ -2867,7 +2910,23 @@ window.arcadeBlocked = (function () {
       const me = await mail.identity(keys.phrase);
       try { await mail.announce(keys, me, said.tag || said.name || ""); }
       catch (e) { try { sessionStorage.removeItem(LAST); } catch (x) {} }
+      return;
     }
+    // A published profile that names no address on some coins (2026-11-12: "old profiles missing coins get asked
+    // ONCE"): one card, publish again or not now. Publishing again keeps the picture, the line and the link.
+    let gap = null;
+    try { gap = await (await fetch("/account/profile/missing", {cache: "no-store"})).json(); } catch (e) { return; }
+    if (!gap || !(gap.missing || []).length || gap.skipped) return;
+    const names = gap.labels.join(", ");
+    const ok = await arcadeAsk("Update your profile so anyone can send you every coin",
+      `Your profile doesn't name your address on ${names} yet. Publishing it again adds them, so anybody can send you ` +
+      `any coin. It keeps your picture, your line and your link, and costs a small network fee.`,
+      "Update my profile", "Not now");
+    if (!ok) { fetch("/account/profile/skip", {method: "POST"}).catch(() => {}); return; }
+    const mail = await import("/messaging.js");
+    const me = await mail.identity(keys.phrase);
+    try { await mail.publishProfile(keys, me, {}); }
+    catch (e) { try { sessionStorage.removeItem(LAST); } catch (x) {} }
   });
 })().catch(() => {});
 </script>
