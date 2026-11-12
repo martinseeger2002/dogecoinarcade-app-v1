@@ -1957,6 +1957,28 @@ def register(app, st, chains):
             return True
         return not int(far.get("confirmations") or 0)
 
+    def ord_quote_one(network: str, size: int, kind: str, payer: str = "") -> dict:
+        """What one ord of `size` bytes costs on `network`, before it starts: the network's fees (commit and reveals),
+        the coin it sits on (postage, stays the owner's), and the operator's fee on a mainnet. For a page's read
+        (/r/ord-quote, the Token Minter, 2026-11-12) as well as /account/ord/quote."""
+        from arcade import ord_inscribe as oi
+        chain = ord_chain(network)
+        if chain is None:
+            raise ValueError("this arcade does not run that chain, or ords are not inscribed on it")
+        key = bytes.fromhex("02" + "11" * 32)
+        to = b58check_encode(chain.params.pubkeyhash_version, hash160(key))
+        commit = fundinglib.price(1, [(oi.POSTAGE, b"\xa9\x14" + b"\x00" * 20 + b"\x87")],
+                                  fees.rate_for(chain.params, fees.MIN_FEE_PER_KB), change=True, params=chain.params)
+        p = oi.plan(chain.network, chain.params, kind, b"\x00" * int(size), key, to)
+        _out, fee_said = operator_fee(chain, payer, sum(p.fees))
+        operator = int((fee_said or {}).get("value") or 0)
+        network_fees = commit + sum(p.fees)
+        return {"chain": chain.network, "label": chain.label, "txs": p.reveals + 1, "network_fees": network_fees,
+                "postage": oi.POSTAGE, "operator_fee": operator, "total": network_fees + oi.POSTAGE + operator,
+                "mainnet": bool(chain.is_mainnet)}
+
+    app.state.ord_quote = ord_quote_one
+
     @app.post("/account/ord/quote")
     def account_ord_quote(request: Request, payload: Any = Body(None)):
         """What a collection of ords costs before it starts: `{chain, files: [{size, content_type}]}`."""

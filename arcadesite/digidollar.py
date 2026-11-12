@@ -1,4 +1,4 @@
-"""DigiDollar in the Wallet, on Arcade V1.0 (Martin 2026-11-12: "I'm missing ... digi dollar and test DD").
+"""DigiDollar in the Wallet, on Arcade V1.0.
 
 The original's routes, with V1.0 as the index:
 

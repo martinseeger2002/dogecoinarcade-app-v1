@@ -1,4 +1,4 @@
-"""The operator's page, /admin, and its Marketplace tab (docs/MARKETPLACE-PLAN.md, 4): what this website lets its
+"""The operator's page, /admin, and its Marketplace tab: what this website lets its
 visitors trade across chains, and the operator's fee.
 
     GET  /admin                     the operator's page (the signed-in account must be the `operator` setting)
@@ -12,7 +12,7 @@ Settings (settings.json, the original's format), all off by default:
     trade_cut           the operator's fee, percent (the original's name), on this site's side of a trade
     trade_cut_to        {chain: address} where it is paid; empty = the operator account's own address there
 
-The fee is this site's side only (Martin 2026-11-11): a maker's fee goes to the maker's website's operator, a taker's
+The fee is this site's side only: a maker's fee goes to the maker's website's operator, a taker's
 fee to the taker's website's operator.
 """
 from __future__ import annotations
@@ -99,8 +99,9 @@ def register(app, st, chains):
                 except Exception:                           # noqa: BLE001 -- any bad text is the same answer
                     version, h160 = None, b""
                 p = nets[n].params
-                if len(h160) != 20 or version not in (p.pubkeyhash_version, p.scripthash_version):
-                    return JSONResponse({"detail": f"{to} is not a {nets[n].label} address"}, status_code=400)
+                if len(h160) != 20 or version != p.pubkeyhash_version:
+                    return JSONResponse({"detail": f"{to} is not an ordinary {nets[n].label} address (a fee is paid to "
+                                                   "a key's address, not a script's)"}, status_code=400)
                 pay_to[n] = to
         st.set_setting("market_taker", bool(said.get("market_taker")))
         st.set_setting("market_maker", bool(said.get("market_maker")))

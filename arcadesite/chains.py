@@ -51,7 +51,7 @@ class Chains:
     def account_chains(self) -> list[Chain]:
         """Tag chain first, then each chain V1.0 has installed with its Addresses index, or borrows from arcades that
         share it (V1.0 answers coins, sends and Core calls of a borrowed chain from its lenders, as the original's
-        Wallet showed borrowed chains: Martin 2026-11-12, "I'm missing a bunch of coin networks"). Asked every 5 minutes."""
+        Wallet showed borrowed chains). Asked every 5 minutes."""
         if self._kept and time.time() - self._kept[0] < 300:
             return self._kept[1]
         keys = set()

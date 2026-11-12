@@ -1,5 +1,4 @@
-"""Sending one ord inscription (a Doginal, a Pepinal, ...) from the website's wallet (2026-11-12, Martin: "start on ORD
-transfers now. Do the website first").
+"""Sending one ord inscription (a Doginal, a Pepinal, ...) from the website's wallet.
 
     POST /account/doginal/send   {chain, txid, vout, inscription, to, from?, pubkey?}  -> an offer to sign
 
@@ -64,22 +63,33 @@ def exactly_this(ins: dict, outputs: list, txid: str, vout: int, inscription: st
 
 def build_send(v1, chain, address: str, coin: dict, to: str, what: str) -> fundinglib.Unsigned:
     """The inscribed coin first, whole to `to`; clean coins pay the fee; change last (creator.note_send's shape)."""
+    return build_first(v1, chain, address, coin,
+                       [(int(coin["value"]), txbuild.p2pkh_script(to, getattr(chain, "params", None)))], what)
+
+
+def build_first(v1, chain, address: str, coin: dict, paid: list, what: str) -> fundinglib.Unsigned:
+    """The inscribed coin as input 0 and `paid` as the outputs, the first carrying the coin's whole value (the
+    inscription stays at its first unit): clean coins pay the rest and the fee; change last. A send, or a swap's lock of
+    an inscription (its coin and the reserve beside it: swaptake.py)."""
+    if int(paid[0][0]) != int(coin["value"]):
+        raise fundinglib.FundingError("the inscribed coin goes whole as the first output")
     params = chain.params
     db = CoinDB(v1, chain)
-    paid = [(int(coin["value"]), txbuild.p2pkh_script(to, getattr(chain, "params", None)))]
+    paid = list(paid)
     keep_out = {(coin["txid"], int(coin["vout"]))}
     rate = fees.rate_for(params, fees.MIN_FEE_PER_KB)
     net = getattr(params, "name", None)
+    more = sum(int(v) for v, _ in paid[1:])               # what the outputs after the first need beyond the coin
     fee = fundinglib.price(2, paid, rate, change=True, params=params)
-    fees_in = fundinglib.choose(db, address, fee, exclude=keep_out, network=net)
+    fees_in = fundinglib.choose(db, address, more + fee, exclude=keep_out, network=net)
     fee = fundinglib.price(1 + len(fees_in), paid, rate, change=True, params=params)
-    if sum(c["value"] for c in fees_in) < fee:
-        fees_in = fundinglib.choose(db, address, fee, exclude=keep_out, network=net)
+    if sum(c["value"] for c in fees_in) < more + fee:
+        fees_in = fundinglib.choose(db, address, more + fee, exclude=keep_out, network=net)
         fee = fundinglib.price(1 + len(fees_in), paid, rate, change=True, params=params)
     if any((c["txid"], int(c["vout"])) == (coin["txid"], int(coin["vout"])) for c in fees_in):
         raise fundinglib.FundingError("the inscribed coin cannot pay its own fee")
     chosen = [dict(coin, vout=int(coin["vout"]), address=address)] + fees_in
-    change = sum(c["value"] for c in fees_in) - fee
+    change = sum(c["value"] for c in fees_in) - more - fee
     outputs = list(paid)
     if change >= fees.dust_limit(params):
         outputs.append((change, txbuild.p2pkh_script(address, getattr(chain, "params", None))))
