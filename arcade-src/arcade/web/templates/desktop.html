@@ -939,7 +939,6 @@ html[data-skin="dogefeedx"], html[data-skin="dogefeedx"] body {
   var byKey = {};
   TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, glyph: glyphOf(t.href)}; });
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', href: '/apps', img: STORE_ICON};
-  byKey.helper = {key: 'helper', kind: 'helper', name: 'Helper'};
   byKey.display = {key: 'display', kind: 'display', name: UB ? 'Background' : 'Display Properties',
                    glyph: ['#008080', '#fff', 'M3 4h18v12H3zM8 20h8M12 16v4M6 13l4-4 3 3 2-2 3 3']};
   APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
@@ -1138,7 +1137,7 @@ html[data-skin="dogefeedx"], html[data-skin="dogefeedx"] body {
   }
   
   function onDesk() {
-    var keys = TABS.map(function (t) { return t.key; }).concat(['store', 'helper']);
+    var keys = TABS.map(function (t) { return t.key; }).concat(['store']);
     // DogeFeedX: dock apps do NOT appear as desktop icons (Billy's design rule, 2026-11-03)
     // Desktop shows only items not in the dock (files, folders, inscriptions, etc.)
     // Do NOT add DFX_DOCK_APPS to keys - they are in the dock only
@@ -2740,7 +2739,7 @@ html[data-skin="dogefeedx"], html[data-skin="dogefeedx"] body {
       {title: 'Programs', rows: progs},
       {title: 'Pages', rows: TABS.map(function (t) { return {k: t.key, name: t.name, it: byKey[t.key]}; })},
       {title: 'Wallets', rows: COINS.map(function (c) { var k = 'coin:' + c.net; return {k: k, name: byKey[k].name, it: byKey[k]}; })},
-      {title: 'Utilities', rows: UTILS.concat([{k: 'helper', name: 'Helper', it: byKey.helper}])}
+      {title: 'Utilities', rows: UTILS}
     ]);
     return sections;
   }

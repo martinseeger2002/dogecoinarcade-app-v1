@@ -63,9 +63,6 @@
    who-you-are-talking-to line too). */
 html.inshell body > header{display:none !important}
 html.inshell body:not(.fullscreen){padding-top:18px}
-/* No robot helper over an app opened from the home screen (2026-10-24); on its pages it stays in the corner, as it
-   always was (2026-10-25: "it should just be visible like it used to be in the lower right hand corner of the PWA pages"). */
-html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{display:none !important}
 /* Back to the home screen, the App Store's own link (2026-10-24: "all of the pages should have a back to home
    link like the App Store does"). */
 /* A window of the Desktop View: its title bar says what it is, so the page starts at its top. */
@@ -3166,7 +3163,6 @@ if (typeof ARCADE_SIGNED !== "undefined" && (ARCADE_SIGNED || ARCADE_ME)) {
   }).catch(() => {});
 }
 </script>
-{% include "_helper.html" %}
 <script nonce="{{ csp_nonce }}">
 /* RINGING IN AN OPEN PAGE (2026-10-31: "If I have the arcade desktop open in my browser and somebody is trying to get a hold
    of me, I want them to be able to call me and my arcade start ringing"). Every page of a signed-in account checks in
