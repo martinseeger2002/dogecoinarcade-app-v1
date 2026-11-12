@@ -1082,7 +1082,13 @@ function drawHead() {
     : c.network === "bel" ? "Bellinals" : c.network === "lky" ? "Luckinals" : c.network === "wjk" ? "Wojakinals" : c.network === "dgb" ? "DigiByte ordinals and DigiAssets" : c.network === "dgbtest" ? "DigiAssets" : c.network === "flop" ? "Flopinals" : "inscriptions";
   // An imported wallet's own (2026-10-22): its number is what it can send; what is held is said beside it.
   const held1 = w ? (w.status || {}) : c;
-  if (held1.inscribed) bits.push(["out", `${coinsOf(held1.inscribed)} held in ${inscWord}`]);
+  // An amount of coin, not a count of inscriptions (2026-11-11: "7.037 held in Doginals" beside 2,640 Doginals read as
+  // a mismatch): the unit, how many coins carry inscriptions, and that token inscriptions count too.
+  if (held1.inscribed) {
+    const n = Number(held1.inscribed_n || 0);
+    bits.push(["out", `${coinsOf(held1.inscribed)} ${COIN()} held on ${n ? n.toLocaleString() + " " : ""}`
+      + `coin${n === 1 ? "" : "s"} carrying ${inscWord} or token inscriptions`]);
+  }
   if (w && held1.unchecked) bits.push(["out", `${coinsOf(held1.unchecked)} in ${Number(held1.unchecked_n || 0).toLocaleString()} `
     + `small coins protected until checked`]);
   if (asset && asset.dd) {
@@ -1130,7 +1136,7 @@ function drawHead() {
     loadKind(c, k).catch(() => {});
   }
   if (w) {
-    const held = bits.filter(([, text]) => / held in |protected until checked/.test(text));
+    const held = bits.filter(([, text]) => / held (in|on) |protected until checked/.test(text));
     bits.length = 0;
     bits.push(...held);
     sub.textContent = (w.kind === "wif" ? "Imported from a private key." : "Imported from a seed phrase.")
