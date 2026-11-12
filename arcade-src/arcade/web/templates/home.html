@@ -270,6 +270,9 @@ body.fullscreen #arc-bot { display: none !important; }
 (function () {
   var TABS = {{ tabs|tojson }};
   var APPS = {{ apps|tojson }};
+  // The operator's default apps (2026-11-12: the Arcade Explorer): on every home screen, each put on a saved one once
+  // per browser (taken off, it stays off).
+  var DEFAULTS = {{ (default_apps or [])|tojson }}, DEFAULTS_LS = 'arcade.home.defaults';
   var OPERATOR = {{ 'true' if operator_view else 'false' }};
   var SAVE_LS = 'arcade.homeapps';
   var STORE_ICON = '/apps/store-icon.png';
@@ -293,7 +296,7 @@ body.fullscreen #arc-bot { display: none !important; }
   var byKey = {};
   TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, badge: t.badge, glyph: glyphOf(t.href)}; });
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', img: STORE_ICON};
-  APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
+  APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.icon || a.cover, app: a}; });   // its icon, else its card picture
 
   var $ = function (id) { return document.getElementById(id); };
   var home = $('home');
@@ -342,7 +345,8 @@ body.fullscreen #arc-bot { display: none !important; }
   function newId() { return 'f' + Math.random().toString(36).slice(2, 9); }
   function seed(starred) {
     return [TABS.filter(function (t) { return !outOfGrid(t.key); }).map(function (t) { return t.key; })
-      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
+      .concat(['store']).concat(DEFAULTS.filter(function (k) { return byKey[k]; }))
+      .concat((starred || []).filter(function (k) { return byKey[k] && DEFAULTS.indexOf(k) < 0; }))];
   }
   // Older saves are one flat list (one page). Tabs a later release adds join the last page; the App Store is always there.
   function complete(said, savedDock) {
@@ -368,6 +372,14 @@ body.fullscreen #arc-bot { display: none !important; }
     if (!out.length) out = [[]];
     TABS.forEach(function (t) { if (!outOfGrid(t.key) && !seen[t.key]) out[out.length - 1].push(t.key); });
     if (!seen.store && !outOfGrid('store')) out[out.length - 1].push('store');
+    var given = [];
+    try { given = JSON.parse(localStorage.getItem(DEFAULTS_LS) || '[]') || []; } catch (e) {}
+    DEFAULTS.forEach(function (k) {
+      if (!byKey[k] || given.indexOf(k) >= 0) return;
+      if (!seen[k] && !outOfGrid(k)) out[out.length - 1].push(k);
+      given.push(k);
+    });
+    try { localStorage.setItem(DEFAULTS_LS, JSON.stringify(given)); } catch (e) {}
     return out;
   }
   function persist() {

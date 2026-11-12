@@ -26,6 +26,7 @@ most 60); the Doginal market link on a profile's wallet (no /exchange on this si
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import threading
@@ -973,6 +974,38 @@ def register(app, st, chains):
                       seats=st.accounts().seats)
 
     # ---------------------------------------------------------------- the PWA home screen and the Desktop View
+    #: The apps every home screen has (2026-11-12, the operator: "make the explorer app a default app"), by app key
+    #: (maker and name, every version): the Arcade Explorer, published by @strawberry. The site setting `default_apps`
+    #: (a list of keys) replaces it.
+    DEFAULT_APPS = ["app:nWKJgSeAZSmfRCxZnwVgtYyPNowQT5X1Gk:arcade-explorer"]
+
+    def default_apps() -> list[str]:
+        got = st.setting("default_apps", None)
+        return [k for k in got if isinstance(k, str)] if isinstance(got, list) else list(DEFAULT_APPS)
+
+    #: Each card's own icon (its JSON's "icon": an inscription id, square), read once per card: a card never changes.
+    #: Arcade V1.0's card list keeps the cover but not the icon, so it is read from the card inscription itself.
+    card_icons: dict[str, str] = {}
+
+    def icon_of(card_txid: str) -> str:
+        if not card_txid:
+            return ""
+        if card_txid not in card_icons:
+            got = ""
+            try:
+                code, row = v1.page(f"inscription/{card_txid}")
+                raw = (row or {}).get("rawjson") if code == 200 else None
+                said = json.loads(raw) if isinstance(raw, str) and raw else {}
+                inner = said.get("game") if isinstance(said.get("game"), dict) else said.get("app")
+                icon = str((inner or {}).get("icon") or "").strip().lower()
+                got = icon if re.fullmatch(r"[0-9a-f]{64}", icon) else ""
+            except (V1Error, ValueError, AttributeError):
+                return ""                                   # asked again next time
+            if len(card_icons) > 2048:
+                card_icons.clear()
+            card_icons[card_txid] = got
+        return card_icons[card_txid]
+
     def shelf_apps() -> list[dict]:
         from arcade import games as gameslib
 
@@ -994,6 +1027,7 @@ def register(app, st, chains):
                 "key": gameslib.app_key(creator, g.get("name") or ""), "name": str(g.get("name") or "")[:60],
                 "page": page, "card": it.get("txid"), "open": f"/inscriptions/{page}/full",
                 "cover": f"/content/{g['cover']}" if g.get("cover") else None,
+                "icon": f"/content/{icon_of(str(it.get('txid') or ''))}" if icon_of(str(it.get("txid") or "")) else None,
                 "genre": str(g.get("genre") or "")[:24].lower(), "mp": bool(g.get("multiplayer")), "tdeck": None,
                 "desc": str(g.get("description") or "")[:400],
                 "by": ("@" + who) if who else creator[:12] + "…", "address": creator,
@@ -1010,7 +1044,8 @@ def register(app, st, chains):
         (a phone's browser tab, ?tab=1, shows it to a visitor too)."""
         if signed_in(request) is None and request.query_params.get("tab") != "1":
             return RedirectResponse("/join?next=/home", status_code=303)
-        return render(request, "home.html", fullscreen=True, apps=shelf_apps(), operator_view=False)
+        return render(request, "home.html", fullscreen=True, apps=shelf_apps(), operator_view=False,
+                      default_apps=default_apps())
 
     @app.get("/desktop", response_class=HTMLResponse)
     def desktop_view(request: Request):

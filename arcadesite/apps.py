@@ -14,7 +14,7 @@ and its Referer). So:
     POST /r/follow, /r/profile/publish   the Profiles app (2026-11-12): asked in the reader's card, signed there
     /r/<anything else>    read from V1.0's page API, as it is
 
-On the pages host only /content/, /r/ and /site/ are served (the original's PAGES_DOOR).
+On the pages host only /content/, /r/, /site/ and /ord/ are served (the original's PAGES_DOOR).
 """
 from __future__ import annotations
 
@@ -163,6 +163,23 @@ def register(app, st, chains, template_dir: Path):
             body = body[:at] + VIEWER_SHIM.encode() + body[at:]
             headers["Cache-Control"] = "no-store"           # one viewer's ticket, not for a cache
         return Response(body, media_type=kind, headers=headers)
+
+    @app.get("/ord/{chain}/{piece}")
+    def ord_bytes(chain: str, piece: str):
+        """An ord inscription's bytes on one chain, as Arcade V1.0 serves them at /ord/<chain>/<id> (2026-11-12): the
+        Explorer's thumbnails ask for pictures as links there (img: "links"), on the pages host as on an arcade."""
+        if not re.fullmatch(r"[a-z]{2,10}", chain) or not re.fullmatch(r"[0-9a-fA-F]{64}(i[0-9]+)?", piece):
+            return Response("no such inscription\n", status_code=404, media_type="text/plain")
+        try:
+            r = v1.raw("GET", f"/ord/{chain_key(chain)}/{piece}", headers={"referer": ""})
+        except V1Error:
+            return Response("the arcade behind this site did not answer\n", status_code=503, media_type="text/plain")
+        keep = {k: v for k, v in r.headers.items()
+                if k.lower() in ("content-security-policy", "cache-control", "etag", "access-control-allow-origin")}
+        keep.setdefault("Content-Security-Policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+        keep["X-Content-Type-Options"] = "nosniff"
+        return Response(r.content, status_code=r.status_code,
+                        media_type=r.headers.get("content-type", "application/octet-stream"), headers=keep)
 
     # ---------------------------------------------------------------- the shims
     def shim(name: str):

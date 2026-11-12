@@ -284,6 +284,7 @@ PUBLIC_SHAPES = (
     # The Browser (meshweb.py, 2026-10-26): every name's site, read-only; /site serves a site's page sandboxed.
     re.compile(r"^/browser(?:/[^\s]{1,300})?$"),
     re.compile(r"^/site/[a-z0-9-]{1,24}/[^\s]{1,300}$"),
+    re.compile(r"^/ord/[a-z]{2,10}/[0-9a-fA-F]{64}(?:i[0-9]+)?$"),   # an ord inscription's bytes (Arcade V1.0 /ord/)
     re.compile(r"^/account/ring/[0-9a-f]{16}$"),       # the ring a tapped notification opened (signed in)
     # Every chain's coin icon (2026-10-18: Litecoin's two joined PEP's and DOGE's); the route serves only files there.
     re.compile(r"^/coin-[a-z0-9-]{2,24}\.png$"),
@@ -635,7 +636,8 @@ PUBLIC_POST_SHAPES = (
 #: in the sandbox has an opaque origin and sends no cookie, so this hostname
 #: is its whole key -- good for the content and the page API and nothing
 #: else, on a public instance exactly as it was through the tunnel.
-PAGES_DOOR = ("/content/", "/r/", "/site/")      # /site/: a site's page, sandboxed as /content is (meshweb.py)
+PAGES_DOOR = ("/content/", "/r/", "/site/", "/ord/")      # /site/: a site's page, sandboxed as /content is (meshweb.py);
+#: /ord/<chain>/<id>: an ord inscription's bytes, as Arcade V1.0 serves them to its explorer's thumbnails (2026-11-12)
 
 
 def public_path(path: str, method: str = "GET") -> bool:
