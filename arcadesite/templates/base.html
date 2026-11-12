@@ -1,0 +1,3164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+{#- No zoom when a field is tapped, on every page (2026-10-23: "when I'm on my iPhone PWA and I click into a text
+    input field it zoomed in. I don't like that"). iOS still lets a person pinch to zoom. #}
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1{% if fullscreen %},viewport-fit=cover{% endif %}">
+<title>{% block title %}{{ brand.name }}{% endblock %}</title>
+<script nonce="{{ csp_nonce }}">
+/* Inside the ARCADE Lite window (arcade/lite/templates/lite.html; 2026-11-04, SadFrog: "one cohesive application"): a page
+   in one of its tabs is drawn without its own bar, and a link that belongs in another of the window's tabs opens there.
+   On any arcade, not only one whose look is ArcadeCore: a person may wear ArcadeCore on an arcade that opens in another
+   look, and its Admin and the rest then wear the window's look and theme too (2026-11-08, SadFrog: "i had pepecoin arcade
+   admin style inside core theme selected - like it was not updated with the rest"). */
+(function () {
+  var win = null;
+  try { if (window.parent !== window && window.parent.liteWindow) win = window.parent.liteWindow; } catch (e) {}
+  {%- if edition_lite and window_tab %}
+  // A page that is one of the window's tabs (Admin), opened on its own: open it in the window instead, under the
+  // window's menus (2026-11-05, SadFrog: "it should be cohesive as the admin operator").
+  if (!win && window.parent === window) { location.replace('/#{{ window_tab }}'); return; }
+  {%- endif %}
+  if (!win) return;
+  document.documentElement.classList.add('in-window');
+  {%- if not edition_lite %}
+  // the window's look (scoped to body[data-lite], set as the body opens, below); the caller's theme is every page's
+  document.write('<link rel="stylesheet" href="/lite/pages.css">');
+  {%- endif %}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a || (a.target && a.target !== '_self') || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    var u = new URL(a.getAttribute('href'), location.href);
+    if (u.origin !== location.origin) return;
+    // a page that is one of the window's own dialogs (the console, Build, API keys, theme and tabs) opens it there
+    if (win.dialog && win.dialog(u.pathname, u.hash.slice(1))) { e.preventDefault(); return; }
+    var home = u.pathname === '/' || u.pathname === '/lite';
+    var tab = home ? (u.hash.slice(1) || 'overview') : win.route(u.pathname);
+    if (tab && tab !== win.route(location.pathname)) {
+      e.preventDefault();
+      win.open(tab, home || /^\/module\//.test(u.pathname) ? undefined : u.pathname + u.search + u.hash);
+    }
+  });
+})();
+</script><style>.in-window body>header{display:none}</style>
+<link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="{{ brand.light_bg }}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="{{ brand.dark_bg }}" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arcade">
+{#- The iPhone's status bar behind the clock and battery (2026-10-24: "showing up white, even though my PWA is
+    black"): the installed app reads this when it starts, so the theme showing in this browser -- picked, or the phone's
+    own on Auto -- is kept in a cookie (base.html, LIGHT OR DARK) and dark gets a black bar. -#}
+<meta name="apple-mobile-web-app-status-bar-style" content="{{ 'black' if request and request.cookies.get('arcade_theme') == 'dark' else 'default' }}">
+<style>
+/* The one rule that must hold before the shared stylesheet arrives (2026-10-20: the rest moved to /base.css, kept by
+   the browser): without it, anything marked hidden would flash into view while the page loads. */
+[hidden]{display:none !important}
+/* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip.
+   Only the site's own strip (body > header): a page's own headers stay (2026-10-30: "header" hid the Messenger's
+   who-you-are-talking-to line too). */
+html.inshell body > header{display:none !important}
+html.inshell body:not(.fullscreen){padding-top:18px}
+/* No robot helper over an app opened from the home screen (2026-10-24); on its pages it stays in the corner, as it
+   always was (2026-10-25: "it should just be visible like it used to be in the lower right hand corner of the PWA pages"). */
+html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{display:none !important}
+/* Back to the home screen, the App Store's own link (2026-10-24: "all of the pages should have a back to home
+   link like the App Store does"). */
+/* A window of the Desktop View: its title bar says what it is, so the page starts at its top. */
+html.indesk body:not(.fullscreen){padding-top:0}
+.inshell-home{display:inline-block;background:none !important;border:0;box-shadow:none !important;color:var(--accent);
+  padding:8px 8px 8px 0;margin:0 0 6px;font:inherit;font-weight:650;font-size:1rem;cursor:pointer}
+</style>
+{#- THE HOME SCREEN (PWA only, home.html; 2026-10-24). The installed app lives on /home: opened anywhere else (its
+    start page, a notification, a link) it goes there and opens that page in a window. A page inside one of its windows
+    hides its tabs, and an app link or Home goes back to the home screen instead of a new browser tab. A browser tab is
+    never sent there: it already has tabs of its own. -#}
+<script nonce="{{ csp_nonce }}">
+/* LIGHT OR DARK (2026-10-24: "the arcade a dark mode, light mode"): the device's own unless this browser picked
+   one (me.html; the footer); kept here, so every page and every window of the home screen follows at once. */
+(function () {
+  var KEY = 'arcade.theme', root = document.documentElement;
+  function apply(t) {
+    if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t); else root.removeAttribute('data-theme');
+    var metas = document.querySelectorAll('meta[name=theme-color]');
+    for (var i = 0; i < metas.length; i++) {
+      var m = metas[i], own = m.getAttribute('data-own') || m.getAttribute('content');
+      m.setAttribute('data-own', own);
+      m.setAttribute('content', t === 'light' ? '{{ brand.light_bg }}' : t === 'dark' ? '{{ brand.dark_bg }}' : own);
+    }
+  }
+  function read() { try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; } }
+  // What is showing, for the server: the iPhone's status bar is drawn from it the next time the app starts.
+  function keep(t) {
+    var dark = t === 'dark' || (t !== 'light' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    var want = 'arcade_theme=' + (dark ? 'dark' : 'light');
+    if (document.cookie.indexOf(want) < 0) document.cookie = want + '; path=/; max-age=31536000; samesite=lax';
+  }
+  apply(read());
+  keep(read());
+  if (window.matchMedia) {
+    var mq = matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', function () { keep(read()); });
+  }
+  window.addEventListener('storage', function (e) { if (e.key === KEY) apply(read()); });
+  window.arcadeTheme = function (t) {
+    if (t === undefined) return read();
+    try { if (t === 'auto') localStorage.removeItem(KEY); else localStorage.setItem(KEY, t); } catch (e) {}
+    keep(t);
+    apply(t);
+    return t;
+  };
+})();
+(function () {
+  var shell = null, desk = false;
+  try {
+    var top = window.top !== window && window.top.location.pathname;
+    if (top === '/home' || top === '/desktop') { shell = window.top; desk = top === '/desktop'; }
+  } catch (e) {}
+  if (shell) {
+    document.documentElement.classList.add('inshell');
+    // In a window of the Desktop View (desktop.html): the window's own title bar closes it, so no Home link.
+    if (desk) {
+      document.documentElement.classList.add('indesk');
+      // ... in the desktop's own look (2026-10-28: "all apps internally should be styled windows 98 as well"; Themes
+      // in me.html picks the look).
+      var skin = shell.document.documentElement.getAttribute('data-skin') || 'w98';
+      document.documentElement.setAttribute('data-skin', skin);
+      var look = document.createElement('link');
+      look.rel = 'stylesheet'; look.href = skin === 'ubuntu' ? '/deskubuntu.css' : skin === 'dogefeedx' ? '/deskdogefeedx.css' : '/desk98.css';
+      document.head.appendChild(look);
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      if (desk) return;
+      if (document.body.classList.contains('fullscreen')) return;     // an app: the pull-down bar is its way home
+      var home = document.createElement('button');
+      home.type = 'button'; home.className = 'inshell-home'; home.textContent = '\u2039 Home';
+      home.addEventListener('click', function () { if (shell.arcadeShell) shell.arcadeShell.leave(window); });
+      var main = document.querySelector('main') || document.body;
+      main.insertBefore(home, main.firstChild);
+    });
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('a[href]');
+      if (!a || e.defaultPrevented || !shell.arcadeShell) return;
+      var u; try { u = new URL(a.getAttribute('href'), location.href); } catch (err) { return; }
+      if (u.origin !== location.origin) return;
+      if (/^\/inscriptions\/[^/]+\/full$/.test(u.pathname)) {
+        e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search, a.title || a.textContent.trim().slice(0, 40));
+      } else if (u.pathname === '/home' || u.pathname === '/desktop' || (!desk && u.pathname === '/apps' && !u.search && !u.hash)) {
+        e.preventDefault(); shell.arcadeShell.home();
+      } else if (a.target === '_blank') {
+        e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search + u.hash, a.title || a.textContent.trim().slice(0, 40));
+      }
+    }, true);
+    return;
+  }
+  var installed = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  // THE LOOK this browser wears on a computer (arcade/modules.py LOOKS): its reader's pick (Switch Theme in the desktop,
+  // View in the ArcadeCore window, Themes on the account's page), else the arcade's own. "web" is the website, chosen.
+  var wear = '{{ look if look is defined else desk_default }}';
+  try { wear = localStorage.getItem('arcade.deskview') || wear; } catch (e) {}
+  if (wear === '1') wear = 'w98';
+  // ARCADECORE (once ARCADE Lite; 2026-11-07): the arcade opened in a tab -- its front page, or a bookmark the server
+  // sent on from there -- goes to the ArcadeCore window. Any other page opened in a tab stays that page, such as
+  // File -> Backup from the window: wearing ArcadeCore never sends a page anywhere by itself.
+  if (wear === 'core') {
+    var arrived = null;
+    try { arrived = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+    if (!installed && window.top === window && window.innerWidth > 640 && (location.pathname === '/' ||
+        (arrived && arrived.redirectCount > 0 && !document.referrer)) &&
+        !/^\/(admin|join|restore|signin|offline|clone|home|desktop)(\/|$)/.test(location.pathname)) {
+      location.replace('/lite');
+    }
+    return;
+  }
+  {%- if modules_on is defined and 'desktop' not in modules_on %}
+  // The Desktop View and the home screen are switched off here (arcade/modules.py): every page stays the website.
+  return;
+  {%- endif %}
+  // THE DESKTOP VIEW (desktop.html; 2026-10-28), on a computer's browser only: while its switch is on, a page opened in
+  // a tab of its own goes to the desktop and opens there in a window (on by default, in Ubuntu's look). Never the Admin pages, the sign-in pages, a phone
+  // or the installed app.
+  if (!installed && window.top === window && location.pathname !== '/desktop' && window.innerWidth > 640 &&
+      !/^\/(admin|join|restore|signin|offline|clone|home)(\/|$)/.test(location.pathname)) {
+    if (/^(w98|ubuntu|dogefeedx)$/.test(wear)) {
+      var page = location.pathname + location.search + location.hash;
+      location.replace(page === '/' ? '/desktop' : '/desktop#open=' + encodeURIComponent(page));
+      return;
+    }
+  }
+  // A PHONE'S BROWSER gets the installed app's home screen too (2026-10-29: "if they are viewing on a mobile the website
+  // make it look like the PWA by default"), until its reader picks Website under Themes (me.html; arcade.phoneview).
+  // ?tab=1 tells /home it is a browser tab, so a visitor not signed in sees it instead of the sign-in page.
+  if (!installed && window.top === window && window.innerWidth <= 640 &&
+      !/^\/(admin|join|restore|signin|offline|clone|home|desktop)(\/|$)/.test(location.pathname)) {
+    var phoneOn = false;
+    try { phoneOn = (localStorage.getItem('arcade.phoneview') || '{{ phone_default }}') === 'home'; } catch (e) {}
+    if (phoneOn) {
+      var at = location.pathname + location.search + location.hash, how = null;
+      try { how = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+      location.replace(at === '/' || (how && how.redirectCount > 0) ? '/home?tab=1' : '/home?tab=1#open=' + encodeURIComponent(at));
+      return;
+    }
+  }
+  if (!installed || window.top !== window || location.pathname === '/home') return;
+  if (/^\/(join|restore|signin|offline|clone)(\/|$)/.test(location.pathname)) return;
+  // Opening the app goes straight to the apps (2026-10-24: "The PWA should open directly to the apps"): its start
+  // page, or wherever the server sent it from there (an account's / goes to the Feed). A link to one page -- a
+  // notification, a shared link -- opens that page in a window over them.
+  var here = location.pathname + location.search + location.hash, nav = null;
+  try { nav = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+  var landed = here === '/' || (nav && nav.redirectCount > 0);
+  location.replace(landed ? '/home' : '/home#open=' + encodeURIComponent(here));
+})();
+</script>
+<link rel="stylesheet" href="/base.css">
+{% if preload_wallet %}{# The wallet's whole module graph at once (2026-10-26: "take a look at the creators tab as to
+   why it takes so long to load"): wallet.js imports signin.js and coins.js, which import the vendored secp256k1 and
+   ripemd160, which import their helpers -- five round trips in a row before a page could ask for its own data, 0.2 to
+   0.9 s each through the public tunnel. Listed here they come in one. #}
+<link rel="modulepreload" href="/wallet.js"><link rel="modulepreload" href="/signin.js"><link rel="modulepreload" href="/coins.js">
+<link rel="modulepreload" href="/vendor/noble-secp256k1.js"><link rel="modulepreload" href="/vendor/hashes/ripemd160.js">
+<link rel="modulepreload" href="/vendor/hashes/_md.js"><link rel="modulepreload" href="/vendor/hashes/utils.js">
+<link rel="modulepreload" href="/vendor/hashes/_assert.js"><link rel="modulepreload" href="/vendor/hashes/crypto.js">
+{% endif %}
+{% if brand.css %}<style>/* this node's face (arcade/web/brand.py) */{{ brand.css | safe }}</style>{% endif %}
+{% if edition_lite %}<link rel="stylesheet" href="/lite/pages.css">{% endif %}{# ARCADE Lite's window look (arcade/lite) #}
+{#- The theme this caller wears (arcade/packages.py; /look, or Settings -> Theme… in ArcadeCore), in every look: its
+    colours, font and corners as the website's own variables here, as the window's there; empty while they wear the
+    arcade's own look (2026-11-08, SadFrog: "when you change the theme, thats it everything is styled differently").
+    Carried in the page, as /lite/theme.css says it; a pick redraws it in place (_themes.html). #}
+<style id="arcade-theme">{{ (theme_css if theme_css is defined else '')|safe }}</style>
+<script nonce="{{ csp_nonce }}">
+/* A PREVIEW OF HTML BEING WRITTEN (a .mesh site, a website, a mintpad; 2026-11-09, security review). A srcdoc frame
+   takes the page's own script policy with it, so under the enforced policy nothing in a draft would run. The frame
+   opens /preview-frame instead, which is sandboxed like an inscription and has a policy of its own, and is handed the
+   draft by message; it draws each one again without a trip to the node. */
+window.arcadePreview = function (frame, html) {
+  frame.arcadeWant = html;
+  if (frame.arcadeReady) { frame.contentWindow.postMessage({arcadePreview: html}, '*'); return; }
+  if (frame.arcadeLoading) return;
+  frame.arcadeLoading = true;
+  frame.addEventListener('load', function () {
+    frame.arcadeReady = true;
+    frame.contentWindow.postMessage({arcadePreview: frame.arcadeWant}, '*');
+  }, {once: true});
+  frame.src = '/preview-frame';
+};
+</script>
+</head>
+{# Every page is live. The counter lives on the body rather than in an
+   element each page has to remember to add: eight templates had one and the
+   rest sat stale until somebody pressed reload (the operator, D-142). #}
+<body{% if embed %} class="embed"{% elif fullscreen %} class="fullscreen"{% endif %}{% if edition_lite %} data-lite{% endif %} data-generation="{{ state.generation }}">
+{% if not edition_lite %}<script nonce="{{ csp_nonce }}">if (document.documentElement.classList.contains('in-window')) document.body.setAttribute('data-lite', '');</script>{% endif %}
+{% if not embed %}
+<header><div class="bar">
+  <span class="brand">{% if edition_lite %}<a href="/">{{ 'ArcadeCore' if brand.name == 'ARCADE' else brand.name ~ ' · ArcadeCore' }}</a>{% else %}{{ brand.name }}{% endif %}</span>
+  {%- if edition_lite %}
+  {#- ARCADE Lite: the window's own tabs, so every page is one window (arcade/lite/templates/lite.html opens /#<tab>) #}
+  <nav>
+  {%- set lite_nav = [('/', 'Overview'), ('/#send', 'Send'), ('/#receive', 'Receive'), ('/#transactions', 'Transactions'),
+                      ('/#addresses', 'Address book')]
+                     + ([('/#messages', 'Messages')] if 'messages' in modules_on else [])
+                     + ([('/#apps', 'Apps')] if 'apps' in modules_on else []) + [('/docs', 'Help')] %}
+  {%- if '/admin' in nav|map(attribute=0)|list %}{% set lite_nav = lite_nav + [('/admin', 'Admin')] %}{% endif %}
+  {%- for href, label in lite_nav %}
+    <a class="{{ 'on' if path == href or (href != '/' and '#' not in href and path.startswith(href + '/')) else '' }}" href="{{ href }}">{{ label }}</a>
+  {%- endfor %}
+  </nav>
+  {%- else %}
+  <nav>
+  {%- for href, label, chain, built in nav %}
+    {%- if built %}
+    {%- set waiting = {'/approvals': approvals_waiting, '/messages': unread_messages,
+                       '/me/notifications': notif_count, '/notifications': notif_count, '/me/messages': mail_count,
+                       '/feed': unread_board, '/exchange': offers_waiting}.get(href) %}
+    <a class="{{ 'on' if path == href or (href == '/create' and (path in ('/nfts', '/tokens', '/mintpad/new') or path.startswith('/tokens/'))) else '' }}"{% if nav_modules is defined and href in nav_modules %} data-module="{{ nav_modules[href] }}"{% endif %} href="{{ href }}">{{ label
+      }}{% if waiting %}<span class="nav-count">{{ waiting if waiting < 100 else '99+' }}</span>{% endif %}</a>
+    {%- else %}
+    <a class="off" href="{{ href }}" title="not built yet">{{ label }}</a>
+    {%- endif %}
+  {%- endfor %}
+  </nav>
+  {%- if tabs_kept is defined and not tabs_kept %}
+  {#- Your tabs (/look, _yourtabs.html): a visitor's choice is kept in this browser, and hides the same tabs here. #}
+  <script nonce="{{ csp_nonce }}">(function () {
+    var hid = []; try { hid = JSON.parse(localStorage.getItem('lite_tabs_hidden') || '[]'); } catch (e) {}
+    hid.forEach(function (id) {
+      document.querySelectorAll('header nav a[data-module="' + String(id).replace(/[^\w-]/g, '') + '"]')
+        .forEach(function (a) { a.hidden = true; a.style.display = 'none'; });
+    });
+  })();</script>
+  {%- endif %}
+  {%- endif %}
+</div></header>
+{% if stranger_here and not embed and not fullscreen and path not in ('/', '/join', '/restore', '/join/keys') %}
+{# A visitor: everything here can be read, and nothing can be done until they
+   sign in (a tester, 2026-09-26: no sign-in hint on most public pages). #}
+{# 2026-10-19: with nobody signed in, the top card asks for a name and a password, and making an account is
+   a link to the sign-up page. An account made on another arcade signs in here the same way: this arcade finds it
+   by itself (wallet.signIn, /signin/<name>). #}
+<form class="unlockbar signbar" id="signbar" autocomplete="on">
+  <span class="signbar-name"><span class="signbar-at">@</span>
+  <input type="text" id="signbar-tag" autocomplete="username" autocapitalize="off"
+         spellcheck="false" placeholder="name" aria-label="Your name"></span>
+  <input type="password" id="signbar-pw" autocomplete="current-password"
+         placeholder="password" aria-label="Your password">
+  <button type="submit" class="btn small" id="signbar-go">Sign in</button>
+  <a class="signbar-new" href="/join?next={{ path|urlencode }}#make">Create a new account</a>
+  <span class="signbar-said" id="signbar-said" role="status" hidden></span>
+</form>
+<script type="module" nonce="{{ csp_nonce }}">
+  const $ = (id) => document.getElementById(id);
+  $("signbar").addEventListener("submit", async (event) => {
+    // Never a real submit: the password stays in this tab. Its boxes have no names, so even with no script running
+    // a submit carries nothing.
+    event.preventDefault();
+    const go = $("signbar-go"), said = $("signbar-said");
+    const tag = $("signbar-tag").value.trim().replace(/^@/, ""), pw = $("signbar-pw").value;
+    if (!tag || !pw) { said.textContent = "your name and password"; said.hidden = false; return; }
+    go.disabled = true; go.textContent = "Opening your wallet\u2026"; said.hidden = true;
+    try {
+      const wallet = await import("/wallet.js");
+      await wallet.signIn(tag, pw, ARCADE_CHAIN);
+      location.reload();
+    } catch (e) {
+      go.disabled = false; go.textContent = "Sign in";
+      said.textContent = String(e.message || e); said.hidden = false;
+    }
+  });
+</script>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+// A box for finding somebody else must never start with your own name in it
+// (2026-09-27: the address book's "add somebody" box came pre-filled
+// with his username). That is the browser's password AutoFill: every page has
+// the unlock form's password field, so Safari fills "the username" into the
+// first text box it finds. Marked boxes are cleared of your own name until
+// you type in them yourself.
+(function(){
+  function mine(v){
+    var me = (typeof ARCADE_ME === 'string' ? ARCADE_ME : '').toLowerCase();
+    v = String(v || '').trim().replace(/^@/, '').toLowerCase();
+    return !!me && v === me;
+  }
+  function sweep(){
+    document.querySelectorAll('input[data-not-me]').forEach(function(box){
+      if (!box.dataset.typed && mine(box.value)) box.value = '';
+    });
+  }
+  document.addEventListener('keydown', function(e){
+    if (e.target && e.target.matches && e.target.matches('input[data-not-me]'))
+      e.target.dataset.typed = '1';
+  }, true);
+  document.addEventListener('focusin', sweep);
+  window.addEventListener('pageshow', function(){ sweep(); setTimeout(sweep, 400); setTimeout(sweep, 1500); });
+})();
+</script>
+{% if not embed %}
+<script type="module" nonce="{{ csp_nonce }}">
+// A mintpad inscription asks the page it is framed in to buy one listing
+// (arcade/mintpad.py account_page): the sandbox holds no key and cannot reach
+// the wallet. Only a frame of an inscription on THIS page may ask, one at a
+// time, and nothing is bought without the ordinary Buy card, whose price and
+// seller are read off the transaction's own bytes, never off the page.
+let minting = false;
+// A TOKEN mintpad (mintpad.account_token_page) asks to take one lot of its
+// seller's standing order: the same Buy as the pair page's, signed here.
+async function takeFor(source, m) {
+  const answer = (body) => source.postMessage({arcade: "take", seq: m.seq, ...body}, "*");
+  answer({heard: true});
+  if (!ARCADE_ME) {
+    answer({error: "Sign in or join first, then mint."});
+    arcadeSignIn("Minting needs your wallet.");
+    return;
+  }
+  if (minting) { answer({error: "One mint at a time."}); return; }
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    const asked = await fetch("/account/order/take", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({order: String(m.order || ""), units: String(parseInt(m.units, 10) || 0),
+                            chain: ARCADE_CHAIN.network})});
+    const terms = await asked.json();
+    if (!asked.ok) throw new Error(terms.detail || "that cannot be minted");
+    const shown = await wallet.checked(terms, held);
+    const who = terms.maker_tag ? "@" + terms.maker_tag : "the seller";
+    const unit = terms.coins === "1" ? "coin" : "coins";
+    const ok = await arcadeAsk(`Mint ${terms.amount} ${terms.name} for ${terms.coins} ${unit}?`,
+      `${terms.coins} ${unit} ${terms.coins === "1" ? "goes" : "go"} to ${who} at the price on their order, and the tokens come to `
+      + `you when the block lands. Network fee ${shown.coinsOf(shown.fee)}.`,
+      `Mint for ${terms.coins} ${unit}`);
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const out = await wallet.confirm(held, terms);
+    answer({ok: true, txid: out.txid || ""});
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+}
+// Pressing a heart or a dislike shows at once, before the unlock and the
+// signature (2026-09-28): the button flips to its pressed look, its
+// form now says the opposite (like -> unlike), and the button stays shut until
+// the page's own handler is done. undo() puts all of it back if that fails.
+window.arcadePress = function (form, doing) {
+  const pairs = {like: ["unlike", "liked"], unlike: ["like", "liked"],
+                 dislike: ["undislike", "disliked"], undislike: ["dislike", "disliked"]};
+  const pair = pairs[doing];
+  const button = form && form.querySelector("button[type=submit]");
+  if (!pair || !button) return null;
+  const was = {action: form.getAttribute("action"), html: button.innerHTML,
+               cls: button.className, pressed: button.getAttribute("aria-pressed")};
+  const on = doing === "like" || doing === "dislike";
+  const n = Math.max(0, Number(button.dataset.count || 0) + (on ? 1 : -1));
+  button.classList.toggle(pair[1], on);
+  button.setAttribute("aria-pressed", on ? "true" : "false");
+  if (pair[1] === "liked") button.textContent = (on ? "\u2665 " : "\u2661 ") + n;
+  else button.textContent = "\u{1F44E}" + (n ? " " + n : "");
+  form.setAttribute("action", was.action.replace(/\/[a-z]+$/, "/" + pair[0]));
+  button.dataset.count = String(n);
+  return {undo() {
+    form.setAttribute("action", was.action);
+    button.innerHTML = was.html; button.className = was.cls;
+    button.setAttribute("aria-pressed", was.pressed || "false");
+    button.dataset.count = String(n + (on ? -1 : 1));
+  }};
+};
+// Buy orders that fill when their buyer is back (arcade/standing.py): the app,
+// once its wallet is open, takes what a sell order now offers them -- the buyer
+// asked for exactly this when they placed the order, so no second question.
+(async () => {
+  if (!ARCADE_ME) return;
+  try {
+    const wallet = await import("/wallet.js");
+    const said = await (await fetch("/account/standing/fillable", {cache: "no-store"})).json();
+    for (const f of (said.fills || [])) {
+      const CHAIN = {network: f.chain, version: f.version};
+      const held = await wallet.opened(CHAIN);
+      if (!held) return;                       // not unlocked: next time
+      const asked = await fetch("/account/order/take", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({order: f.order, units: String(f.units), standing: f.standing,
+                              chain: f.chain})});
+      const terms = await asked.json();
+      if (!asked.ok) continue;
+      await wallet.checked(terms, held);
+      await wallet.confirm(held, terms);
+      arcadeToast(`Your buy order filled: ${terms.amount} ${terms.name} for ${terms.coins} coins.`);
+    }
+  } catch (e) { /* a fill is a courtesy on page load; the order still stands */ }
+})();
+// A claim (2026-09-28): any inscribed page can hand over a hidden
+// listing's id and its phrase -- a puzzle's answer, a code it found, anything --
+// and the person looking gets the ordinary card for it. The page never signs
+// and never sees a key; the phrase only opens the listing on the node.
+//   parent.postMessage({arcade: "claim", seq, listing, secret}, "*")
+//   answers {arcade: "claim", seq, heard} then {ok, txid} or {error}
+async function claimFor(source, m, page = "", own = false) {
+  const answer = (body) => source.postMessage({arcade: "claim", seq: m.seq, ...body}, "*");
+  answer({heard: true});
+  if (!ARCADE_ME && !ARCADE_NODE_PLAYER) {
+    answer({error: "Sign in or join first, then claim."});
+    arcadeSignIn("Claiming this needs your wallet.");
+    return;
+  }
+  // One signature at a time; a game that claims as things happen queues here.
+  while (minting) await new Promise((r) => setTimeout(r, 200));
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    // The key, asked for only when this claim needs one: a pool that pays its
+    // own claims needs none, so it must not open the unlock sheet.
+    let held = await wallet.opened(ARCADE_CHAIN);
+    // A page may name no listing: its own bound pool is looked up by the
+    // inscription it is (2026-09-29), which also tells the node who asked.
+    let listing = String(m.listing || "");
+    if (!listing && (page || m.pool)) {
+      // A page may name the pool it pays from (several per page, token or NFT);
+      // otherwise its token pool, as before (2026-09-29).
+      const pool = m.pool
+        ? await (await fetch("/r/prizepool/" + encodeURIComponent(m.pool), {cache: "no-store"})).json()
+        : await (await fetch("/r/claimpool/" + page, {cache: "no-store"})).json();
+      if (m.pool) { pool.kind = "chain"; pool.pool = pool.txid; }
+      if (!pool.open) throw new Error("this page has nothing left to pay out");
+      if (pool.kind === "chain") {
+        // A pool on the chain (2026-09-29): its lots opened here with the
+        // phrase, one of the lots still free picked at random, and claimed
+        // through whichever node this is.
+        const lots = await wallet.openPrize(pool.pool, String(m.secret || ""));
+        const free = (pool.free || []).filter((n) => lots[n]);
+        if (!free.length) throw new Error("this page has nothing left to pay out");
+        const n = free[Math.floor(Math.random() * free.length)];
+        // A refereed pool pays only for a replay its judge passes: the page
+        // sends the run with the claim, and the referee sees it (2026-09-29).
+        const replay = m.replay && typeof m.replay === "object"
+          ? {seed: String(m.replay.seed || ""), inputs: m.replay.inputs} : null;
+        if (pool.fee === "pool") {
+          // A pool that pays its own claims (2026-10-04): no card, no key, no
+          // coins -- the referee signs the whole claim if the judge passes it,
+          // and it can only pay the wallet the seed was issued to.
+          const out = await wallet.takePrize(pool.pool, n, lots[n], String(m.secret || ""),
+                                             page, ARCADE_CHAIN.network, replay);
+          // Nothing was asked, so nothing is announced (2026-10-04, the operator: "Get rid
+          // of the transaction notifications"): the page is told, the wallet shows it.
+          answer({ok: true, txid: out.txid || "", piece: out.piece || ""});
+          return;
+        }
+        if (!ARCADE_ME) throw new Error("the node claims only prizes a pool pays for itself; "
+                                        + "sign in as a player for this one");
+        held = held || (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+        const offer = await wallet.offerPrize(pool.pool, n, lots[n], String(m.secret || ""),
+                                              page, ARCADE_CHAIN.network, replay);
+        const shown = await wallet.checked(offer, held);
+        const coins = String(Number(offer.price) / 1e8);
+        const unit = coins === "1" ? "coin" : "coins";
+        const seller = offer.seller_tag ? "@" + offer.seller_tag : "its owner";
+        const one = offer.kind === "nft";
+        // A game's own prize, said yes to without a card: a refereed pool bound
+        // to this very page, open as itself, for a few coins at most.
+        const silent = own && !!pool.referee && (!m.pool || pool.game === page)
+          && arcadeAutoSigns(page, shown, AUTO_CLAIM_MOST);
+        if (!silent && m.silent === true) throw new Error(ARCADE_SAY_SO);
+        const ok = silent || await arcadeAsk(`Claim ${offer.piece}?`,
+          `${seller} set ${one ? "it" : "these"} aside for whoever got here. `
+          + `${one ? "It costs" : "They cost"} ${coins} ${unit} to ${seller}`
+          + ` and a network fee of ${shown.coinsOf(shown.fee)}. The ${one ? "piece" : "tokens"} and the coins move `
+          + "in one transaction, or neither does."
+          + (pool.referee ? " The pool's referee checks your run before it pays." : ""),
+          `Claim ${one ? "it" : "them"} for ${coins} ${unit}`);
+        if (!ok) { answer({error: "Cancelled."}); return; }
+        const out = await wallet.claimPrize(held, offer);
+        answer({ok: true, txid: out.txid || "", piece: out.piece || offer.piece || ""});
+        if (!silent) arcadeToast(`You claimed ${offer.piece}. ${one ? "It's" : "They're"} yours when the block lands.`);
+        return;
+      }
+      listing = pool.listing;
+    }
+    if (!ARCADE_ME) throw new Error("the node claims only prizes a pool pays for itself; "
+                                    + "sign in as a player for this one");
+    held = held || await arcadeKeys(ARCADE_CHAIN);
+    const offer = await wallet.offerBuy(listing, ARCADE_CHAIN.network,
+                                        String(m.secret || ""), page);
+    const shown = await wallet.checked(offer, held);
+    const price = offer.price_text || `${Number(offer.price) / 1e8} coins`;
+    const seller = offer.seller_tag ? "@" + offer.seller_tag : "its owner";
+    const what = offer.piece || "this piece";
+    const lot = !!offer.lot;                     // tokens, not a piece (token claims)
+    if (m.silent === true) throw new Error(ARCADE_SAY_SO);
+    const ok = await arcadeAsk(`Claim ${what}?`,
+      `${seller} set ${lot ? "these" : "it"} aside for whoever got here. `
+      + `${lot ? "They cost" : "It costs"} ${price} to ${seller}`
+      + ` and a network fee of ${shown.coinsOf(shown.fee)}. The ${lot ? "tokens" : "piece"} and the payment move `
+      + "in one transaction, or neither does.", `Claim ${lot ? "them" : "it"} for ${price}`);
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const out = await wallet.buy(held, offer);
+    answer({ok: true, txid: out.txid || ""});
+    arcadeToast(`You claimed ${what}. ${lot ? "They're" : "It's"} yours when the block lands.`);
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+}
+// A page asks to inscribe a short text ord on a coin chain (2026-11-12: the PRC-20 / DRC-20 minter): one piece, its
+// commit and reveal from the account's own address on that chain (the Creator's ord inscriber, wallet.startOrd /
+// inscribeOrd), shown on a card with its exact text and every fee before anything is signed.
+//   parent.postMessage({arcade: "ord", seq, chain, text, contenttype, note}, "*")   chain: "doge", "main" or "test"
+//   answers {arcade: "ord", seq, heard} then {ok, inscription} or {error}
+const ORD_TEXT_MOST = 400;
+async function ordFor(source, m, page = "") {
+  const answer = (body) => source.postMessage({arcade: "ord", seq: m.seq, ...body}, "*");
+  answer({heard: true});
+  if (!ARCADE_ME) { answer({error: "Sign in or join first."}); return; }
+  while (minting) await new Promise((r) => setTimeout(r, 200));
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    if (!held) throw new Error("Unlock your wallet first.");
+    const text = String(m.text || "");
+    const bytes = new TextEncoder().encode(text);
+    if (!bytes.length) throw new Error("there is nothing to inscribe");
+    if (bytes.length > ORD_TEXT_MOST) throw new Error(`a page may inscribe up to ${ORD_TEXT_MOST} bytes of text this way`);
+    const type = String(m.contenttype || "text/plain;charset=utf-8");
+    if (!/^(text\/plain|application\/json)\b/.test(type)) throw new Error("a page may inscribe plain text or JSON this way");
+    let b64 = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    b64 = btoa(b64);
+    const first = await wallet.startOrd(held, {chain: String(m.chain || ""), content: b64, content_type: type, name: "a page's text"});
+    const k = first.costs, shown = await wallet.checked(first, held);
+    const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+    const who = await arcadeRequester(page);
+    const note = m.note ? ` The page says: "${String(m.note).slice(0, 200)}"` : "";
+    const label = `${who} asks to inscribe this on ${first.label || first.chain}, as yours: ${text}.${note} `
+      + `${(Number(k.postage) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} stays yours as its coin.`;
+    const ok = first.chain !== "test"
+      ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator: Number(k.operator_fee || 0),
+                                   fee: first.operator_fee || null,
+                                   total: network + Number(k.operator_fee || 0) + Number(k.postage), chain: first.chain})
+      : await arcadeAsk(`${who} asks to inscribe on ${first.label || first.chain}`,
+          `Test coins. Network fees about ${arcadeCoins(network / 1e8)}.${note}`, "Inscribe it", "Cancel", text);
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const id = await wallet.inscribeOrd(held, first, async () => b64, null);
+    answer({ok: true, inscription: id});
+    arcadeToast("Inscribed. It is on the chain when the block lands.");
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+}
+// A page asks to inscribe something for the person looking (2026-09-30:
+// "inscription requests ... game and data agnostic"): a score, a save, an
+// achievement. Optionally VERIFIED: the referee runs the run through its judge
+// and signs the verdict for this address over this content, and the signature
+// rides in the inscription's JSON as `attested`, which any node can check.
+//   parent.postMessage({arcade: "inscribe", seq, data, encoding, contenttype,
+//                       json, label, note,
+//                       verify: {judge, seed, inputs, params, referee}}, "*")
+//   answers {arcade: "inscribe", seq, heard} then {ok, txid, result} or {error}
+const INSCRIBE_MOST = 7000;
+async function inscribeFor(source, m, page = "", own = false) {
+  const answer = (body) => source.postMessage({arcade: "inscribe", seq: m.seq, ...body}, "*");
+  answer({heard: true});
+  if (!ARCADE_ME) { answer({error: "Sign in or join first."}); return; }
+  // One signature at a time; a game that saves as it goes queues here.
+  while (minting) await new Promise((r) => setTimeout(r, 200));
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    let bytes;
+    if (m.encoding === "base64") {
+      bytes = Uint8Array.from(atob(String(m.data || "")), (c) => c.charCodeAt(0));
+    } else {
+      bytes = new TextEncoder().encode(typeof m.data === "string" ? m.data
+                                       : JSON.stringify(m.data === undefined ? "" : m.data));
+    }
+    if (!bytes.length) throw new Error("there is nothing to inscribe");
+    if (bytes.length > INSCRIBE_MOST) {
+      throw new Error(`a page may inscribe up to ${INSCRIBE_MOST.toLocaleString()} bytes at a `
+                      + `time, and this is ${bytes.length.toLocaleString()}`);
+    }
+    const type = String(m.contenttype || (m.encoding === "base64" ? "application/octet-stream"
+                                                                  : "text/plain; charset=utf-8"));
+    const json = (m.json && typeof m.json === "object" && !Array.isArray(m.json)) ? {...m.json} : {};
+    delete json.attested;
+    if (m.verify && typeof m.verify === "object") {
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+      const r = await fetch("/account/referee/attest", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({judge: String(m.verify.judge || ""), seed: String(m.verify.seed || ""),
+                              inputs: m.verify.inputs, params: m.verify.params,
+                              referee: String(m.verify.referee || ""), content: hash,
+                              chain: ARCADE_CHAIN.network})});
+      const got = await r.json();
+      if (!r.ok) throw new Error(got.detail || "the referee would not verify it");
+      json.attested = got.attested;
+    }
+    let b64 = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const r = await fetch("/account/inscribe", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content: btoa(b64), content_type: type,
+                            json: Object.keys(json).length ? JSON.stringify(json) : "",
+                            chain: ARCADE_CHAIN.network})});
+    const offer = await r.json();
+    if (!r.ok) throw new Error(offer.detail || "this cannot be inscribed");
+    if (offer.part) throw new Error("that needs more than one transaction; a page may inscribe one");
+    const shown = await wallet.checked(offer, held);
+    const who = await arcadeRequester(page);       // from the chain, never the page's own label (issue #7)
+    // A game saving its own data, said yes to without a card (arcadeAutoSigns).
+    const auto = own && arcadeAutoSigns(page, shown, AUTO_INSCRIBE_MOST);
+    if (!auto && m.silent === true) throw new Error(ARCADE_SAY_SO);
+    const ok = auto || await arcadeAsk(`${who} asks to inscribe ${bytes.length.toLocaleString()} bytes`,
+      (m.note ? `The page says: "${String(m.note).slice(0, 200)}" ` : "")
+      + `${type}${json.attested ? ", with its result verified by the game's judge" : ""}. `
+      + "It goes on the chain for good, as yours. " + shown.says, "Inscribe it");
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const done = await wallet.confirm(held, offer);
+    answer({ok: true, txid: done.txid || "",
+            ...(json.attested ? {result: json.attested.result} : {})});
+    if (!auto) arcadeToast("Inscribed. It is on the chain when the block lands.");
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+}
+// A take across chains (arcade-site swaptake.py, docs/MARKETPLACE-PLAN.md 6): this tab makes the secret, locks this
+// account's coins, signs the refund first (the site sends it after the lock's time if the swap never finishes), waits
+// for the other side's lock, checks it and claims it. Nothing is signed that this tab did not check itself
+// (wallet.tradeSpend / tradePresign rebuild every digest from the lock's own script).
+async function swapTakeFor(ask, answer, wallet, held) {
+  const post = async (path, body) => {
+    const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || "refused");
+    return j;
+  };
+  const hx = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const un = (h) => new Uint8Array(String(h).match(/../g).map((x) => parseInt(x, 16)));
+  const q = await post("/account/swap/quote", {id: ask.id});
+  const who = await arcadeRequester(ask.page);
+  const hours = Math.max(1, Math.round((q.taker_time - Date.now() / 1000) / 3600));
+  const ok = await arcadeAsk(`${who} asks you to swap ${q.get.amount} ${q.get.coin} for ${q.give.amount} ${q.give.coin}`,
+    `You lock ${q.lock} ${q.get.coin} on ${q.get.chain} by script: the amount and the 0.01 its spend costs. The other ` +
+    `side locks ${q.give.amount} ${q.give.coin} on ${q.give.chain}, and then you claim it. Keep this tab open for a few ` +
+    `minutes. If the swap doesn't finish, your coins come back to you after about ${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund ` +
+    `first, and this site sends it.`, "Yes, swap");
+  if (!ok) { await answer({status: "denied"}); return; }
+  const coins = await import("/coins.js");
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  const hash = await coins.sha256Of(secret);
+  const redeem = coins.htlcRedeem(hash, un(q.maker_key), un(q.my_key), q.taker_time);
+  try { localStorage.setItem("arcade-swap:" + ask.id, hx(secret)); } catch (e) { /* kept in this tab only */ }
+  const where = await post("/account/swap/lock", {id: ask.id, hash: hx(hash), redeem: hx(redeem)});
+  const offer = await wallet.offerSend(where.address, where.amount, where.network);
+  await wallet.checked(offer, held);
+  const sent = await wallet.confirm(held, offer);
+  const lk = await post("/account/swap/locked", {id: ask.id, txid: sent.txid});
+  await wallet.tradePresign(held, {chain: lk.network, redeem: lk.redeem, txid: sent.txid, vout: lk.vout, kind: "refund",
+                                   leg: {kind: "coin", amount: q.lock}});
+  arcadeToast("Swap started. Keep this tab open for a few minutes.");
+  let said = "";
+  for (let i = 0; i < 480; i++) {
+    const st = await post("/account/swap/step", {id: ask.id}).catch((e) => ({step: "", say: e.message}));
+    if (st.say && st.say !== said) { said = st.say; arcadeToast(st.say); }
+    if (st.step === "claimable") {
+      const done = await wallet.tradeSpend(held, {chain: st.network, redeem: st.redeem, txid: st.txid, vout: st.vout,
+                                                  kind: "claim", secret: hx(secret), leg: st.leg});
+      await post("/account/swap/done", {id: ask.id, txid: done.txid});
+      await answer({status: "sent", txid: done.txid});
+      arcadeToast(`Swapped: ${q.give.amount} ${q.give.coin} is yours when its block lands.`);
+      return;
+    }
+    if (st.step === "failed") { await answer({status: "failed", error: st.say}); return; }
+    await new Promise((z) => setTimeout(z, 15000));
+  }
+  await answer({status: "failed", error: "the swap did not finish while this tab was open; your refund comes back after its time"});
+}
+
+// A page asked this account to send (2026-09-29: "load some plasma from my
+// wallet to the game"): the node holds the question, this page shows it on
+// the account's own card, the browser signs, and the page's polling of
+// /r/send/<id> sees the answer. Only on a page that frames one.
+let pageSendBusy = false;
+const pageSendSeen = new Set();
+async function pageSends() {
+  if (pageSendBusy || !ARCADE_ME || document.hidden
+      || !document.querySelector("iframe.inscription-frame")) return;
+  let said;
+  try { said = await (await fetch("/account/pagesends", {cache: "no-store"})).json(); }
+  catch (e) { return; }
+  // Only the framed page's own questions (2026-10-26, issue #7): a question another game filed for this account
+  // waits for that game's own page, and is never shown over a different one.
+  const ask = (said.requests || []).find((r) => !pageSendSeen.has(r.id) && arcadeFramed(r.page));
+  if (!ask) return;
+  pageSendSeen.add(ask.id);
+  pageSendBusy = true;
+  const answer = (body) => fetch("/account/pagesends/answer", {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: ask.id, ...body})});
+  try {
+    if (!(await arcadeGameGate(ask.page))) {   // not allowed (a game's box off, or a page with no card) and said no
+      await answer({status: "failed", error: ARCADE_GATE_SAYS});
+      return;
+    }
+    const wallet = await import("/wallet.js");
+    // Coins may be asked for on another chain the account holds (2026-11-07, ask.chain): built, shown and signed there.
+    const payChain = (ask.kind === "coins" && ask.chain) || said.chain;
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);   // a key on every chain
+    let offer;
+    if (ask.kind === "token") {
+      const r = await fetch("/account/token/send", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({property_id: ask.propertyid, to: ask.to, amount: ask.amount,
+                              chain: said.chain})});
+      offer = await r.json();
+      if (!r.ok) throw new Error(offer.detail || "that cannot be sent");
+    } else if (ask.kind === "inscription") {
+      const r = await fetch("/account/nft/send", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({piece: ask.inscription, to: ask.to, chain: said.chain})});
+      offer = await r.json();
+      if (!r.ok) throw new Error(offer.detail || "that cannot be sent");
+    } else if (ask.kind === "market" && ask.op === "swap_take") {
+      await swapTakeFor(ask, answer, wallet, held);   // a take across chains, step by step (swaptake.py)
+      return;
+    } else if (ask.kind === "market") {
+      // A market page's order, cancel or take (Swap; arcade-site apps.py): built for this account, signed here.
+      const r = await fetch("/account/market/build", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: ask.id})});
+      offer = await r.json();
+      if (!r.ok) throw new Error(offer.detail || "that cannot be built");
+    } else {
+      offer = await wallet.offerSend(ask.to, ask.amount, payChain);
+    }
+    const shown = await wallet.checked(offer, held);
+    if (ask.kind === "market") {
+      const who = await arcadeRequester(ask.page);
+      if (ask.silent === true) { await answer({status: "failed", error: ARCADE_SAY_SO}); return; }
+      const ok = await arcadeAsk(`${who} asks you to ${offer.what}`, shown.says, "Yes, sign it");
+      if (!ok) { await answer({status: "denied"}); return; }
+      const done = await wallet.confirm(held, offer);
+      await answer({status: "sent", txid: done.txid});
+      arcadeToast("Sent. It counts when its block lands.");
+      return;
+    }
+    const what = ask.kind === "token" ? `${ask.amount} ${ask.name}`
+      : ask.kind === "inscription" ? (ask.name || "an inscription") : `${ask.amount} ${ask.coin || "coins"}`;
+    const who = await arcadeRequester(ask.page);   // from the chain, never the page's own label (issue #7)
+    // The creator allowance (2026-10-04): a game's own asset going back to the
+    // game -- a token the page's creator issued, or a piece it inscribed, sent
+    // to that creator -- needs no card, from a page open as itself, within the
+    // budget (arcadeAutoSigns). Coins, and anybody else's things, always ask.
+    const frame = ask.page && [...document.querySelectorAll("iframe.inscription-frame")]
+      .find((f) => (f.getAttribute("src") || "").includes("/content/" + ask.page));
+    const gameOwn = !!ask.creator && ask.to_address === ask.creator
+      && ((ask.kind === "token" && ask.issuer === ask.creator)
+          || (ask.kind === "inscription" && ask.made_by === ask.creator));
+    const silent = !!frame && !frame.classList.contains("postmedia") && gameOwn
+      && arcadeAutoSigns(ask.page, shown, AUTO_SEND_MOST);
+    if (!silent && ask.silent === true) {           // the page never raises a card
+      await answer({status: "failed", error: ARCADE_SAY_SO});
+      return;
+    }
+    const ok = silent || await arcadeAsk(`${who} asks you to send ${what}`,
+      (ask.note ? `The page says: "${ask.note}" ` : "") + `To ${ask.to}. ${shown.says}`, "Yes, send it");
+    if (!ok) { await answer({status: "denied"}); return; }
+    const done = await wallet.confirm(held, offer);
+    await answer({status: "sent", txid: done.txid});
+    if (!silent) arcadeToast(`Sent ${what}. It counts when its block lands.`);
+  } catch (err) {
+    await answer({status: "failed", error: String(err.message || err)});
+    if (ask.silent !== true) arcadeToast(String(err.message || err));   // a silent page hears it itself
+  } finally { pageSendBusy = false; }
+}
+setInterval(pageSends, 2500);
+
+window.addEventListener("message", async (e) => {
+  const m = e.data || {};
+  const frame = [...document.querySelectorAll("iframe.inscription-frame")]
+    .find((f) => f.contentWindow === e.source);
+  if (!frame) return;
+  // A page in a post says how tall it is, and gets that much room.
+  if (m.arcade === "size" && frame.classList.contains("postmedia")) {
+    const h = Math.round(Number(m.height) || 0);
+    if (h > 0) frame.style.height = Math.max(160, Math.min(h + 4, 1400)) + "px";
+    return;
+  }
+  // The page as itself (the viewer, or full screen), not a frame in somebody's post.
+  const pageId = (/\/content\/([0-9a-f]{64})/.exec(frame.getAttribute("src") || "") || [])[1] || "";
+  const own = !!pageId && !frame.classList.contains("postmedia");
+  // Every one of these reaches the wallet: a game whose card's Wallet access is off, or a page with no card, is asked
+  // first (arcadeGameGate; 2026-10-26, issue #7).
+  if (["take", "inscribe", "claim", "mint", "ord"].includes(m.arcade) && typeof m.seq === "number"
+      && !(await arcadeGameGate(pageId))) {
+    e.source.postMessage({arcade: m.arcade, seq: m.seq, error: ARCADE_GATE_SAYS}, "*");
+    return;
+  }
+  if (m.arcade === "take" && typeof m.seq === "number") { takeFor(e.source, m); return; }
+  if (m.arcade === "inscribe" && typeof m.seq === "number") { inscribeFor(e.source, m, pageId, own); return; }
+  if (m.arcade === "ord" && typeof m.seq === "number") { ordFor(e.source, m, pageId); return; }
+  // A seed for one run at a refereed pool (2026-09-29): the game plays from it,
+  // and sends it back with its moves when it claims. Issued to the wallet that
+  // is looking, for that pool, once.
+  //   parent.postMessage({arcade: "seed", seq, pool}, "*")
+  //   answers {arcade: "seed", seq, seed, expires} or {error}
+  if (m.arcade === "seed" && typeof m.seq === "number") {
+    const answer = (body) => e.source.postMessage({arcade: "seed", seq: m.seq, ...body}, "*");
+    if (!ARCADE_ME && !ARCADE_NODE_PLAYER) {
+      answer({error: "Sign in or join first."});
+      arcadeSignIn("Playing for a prize needs your wallet.");
+      return;
+    }
+    try {
+      if (m.judge) {
+        // A run that is only to be recorded (2026-09-30): its seed is bound to
+        // the judge that will score it, from this node's referee or the one named.
+        const r = await fetch("/account/referee/seed", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({judge: String(m.judge), referee: String(m.referee || ""),
+                                chain: ARCADE_CHAIN.network})});
+        const got = await r.json();
+        if (!r.ok) throw new Error(got.detail || "no seed");
+        answer({seed: got.seed, expires: got.expires});
+        return;
+      }
+      let key = String(m.pool || "");
+      const game = m.game === true || m.pool === "*";
+      if (game) {
+        // A seed for the whole game: this page's inscription (2026-09-30).
+        const said = /\/content\/([0-9a-f]{64})/.exec(frame.getAttribute("src") || "");
+        if (!said) throw new Error("this page is not an inscription");
+        const r = await fetch("/account/referee/seed", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          // A SESSION seed (2026-10-04): paid many times, each claim bringing the
+          // whole record so far, by the game's pools that take one.
+          body: JSON.stringify({game: said[1], chain: ARCADE_CHAIN.network,
+                                ...(m.session === true ? {session: true} : {})})});
+        const got = await r.json();
+        if (!r.ok) throw new Error(got.detail || "no seed");
+        answer({seed: got.seed, expires: got.expires, pools: got.pools || []});
+        return;
+      }
+      if (!key) {
+        const said = /\/content\/([0-9a-f]{64})/.exec(frame.getAttribute("src") || "");
+        const own = said ? await (await fetch("/r/claimpool/" + said[1], {cache: "no-store"})).json() : {};
+        key = String(own.pool || "");
+      }
+      if (!key) throw new Error("this pool has no referee");
+      const wallet = await import("/wallet.js");
+      const got = await wallet.refereeSeed(key, ARCADE_CHAIN.network);
+      answer({seed: got.seed, expires: got.expires});
+    } catch (err) { answer({error: String(err.message || err)}); }
+    return;
+  }
+  if (m.arcade === "claim" && typeof m.seq === "number") {
+    const said = /\/content\/([0-9a-f]{64})/.exec(frame.getAttribute("src") || "");
+    claimFor(e.source, m, said ? said[1] : "", own); return;
+  }
+  if (m.arcade !== "mint" || typeof m.seq !== "number") return;
+  const answer = (body) => e.source.postMessage({arcade: "mint", seq: m.seq, ...body}, "*");
+  // Heard at once: the card below waits for a person, and a pad that heard
+  // nothing for a few seconds used to give up and say it was opened bare.
+  answer({heard: true});
+  if (!ARCADE_ME) {
+    answer({error: "Sign in or join first, then mint."});
+    arcadeSignIn("Minting needs your wallet.");
+    return;
+  }
+  if (minting) { answer({error: "One mint at a time."}); return; }
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    const offer = await wallet.offerBuy(String(m.listing || ""), ARCADE_CHAIN.network);
+    const shown = await wallet.checked(offer, held);
+    // Coins or a token (2026-09-29): said as the node reads it off the sale.
+    const price = offer.price_text || `${Number(offer.price) / 1e8} coins`;
+    const seller = offer.seller_tag ? "@" + offer.seller_tag : "the seller";
+    const ok = await arcadeAsk(`Mint for ${price}?`,
+      `${price} to ${seller} for one piece from this mintpad`
+      + " (a random one: you see which when it lands)"
+      + `. Network fee ${shown.coinsOf(shown.fee)}. The piece and the payment move in `
+      + "one transaction, or neither does.", `Mint for ${price}`);
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const out = await wallet.buy(held, offer);
+    answer({ok: true, txid: out.txid || ""});
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+});
+</script>
+{% endif %}
+{% if not embed %}
+<script type="module" nonce="{{ csp_nonce }}">
+// Share a piece to the feed, with something said about it (2026-09-27).
+// Any [data-share-nft] button on any page: one sheet with the piece, an
+// optional note, and Post. The post is an ordinary one, signed in this tab,
+// whose text ends in the piece's /content/<id>, which the feed draws.
+const LIMIT = 2000;
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest && event.target.closest("[data-share-nft]");
+  if (!button) return;
+  event.preventDefault();
+  const txid = button.dataset.shareNft, name = button.dataset.piece || "this piece";
+  if (!ARCADE_ME) {
+    location.href = "/join?next=" + encodeURIComponent(location.pathname + location.search);
+    return;
+  }
+  const ref = "/content/" + txid;
+  const room = LIMIT - ref.length - 2;
+  const back = document.createElement("div");
+  back.className = "askcard-back";
+  const card = document.createElement("form");
+  card.className = "panel askcard sharecard";
+  card.setAttribute("role", "dialog");
+  const h = document.createElement("h3");
+  h.textContent = "Share " + name + " to the feed";
+  card.append(h);
+  if ((button.dataset.kind || "").startsWith("image/")) {
+    const img = document.createElement("img");
+    img.src = ref; img.alt = ""; img.className = "sharepic";
+    card.append(img);
+  }
+  const words = document.createElement("textarea");
+  words.rows = 3; words.maxLength = room;
+  words.placeholder = "Say something about it (optional)";
+  words.setAttribute("aria-label", "Say something about it");
+  const count = document.createElement("div");
+  count.className = "muted"; count.style.fontSize = ".78rem";
+  const counted = () => { count.textContent = `${words.value.length} / ${room}`; };
+  words.oninput = counted; counted();
+  const note = document.createElement("p");
+  note.className = "muted"; note.style.fontSize = ".82rem";
+  note.textContent = "A post is one small transaction, signed in this browser. "
+    + ((button.dataset.kind || "") === "text/html" ? "The page is shown under your words."
+                                                  : "The piece is shown under your words.");
+  const row = document.createElement("div");
+  row.className = "row";
+  const post = document.createElement("button");
+  post.type = "submit"; post.textContent = "Post";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.className = "ghost"; cancel.textContent = "Cancel";
+  const said = document.createElement("p");
+  said.className = "msg err"; said.hidden = true;
+  row.append(post, cancel);
+  card.append(words, count, note, said, row);
+  back.append(card);
+  document.body.append(back);
+  const close = () => back.remove();
+  cancel.onclick = close;
+  back.onclick = (e) => { if (e.target === back) close(); };
+  words.focus();
+  card.onsubmit = async (e) => {
+    e.preventDefault();
+    post.disabled = true; said.hidden = true;
+    post.textContent = "Posting…";
+    try {
+      const wallet = await import("/wallet.js");
+      const keys = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+      const text = (words.value.trim() ? words.value.trim() + "\n\n" : "") + ref;
+      await wallet.post(keys, text);
+      close();
+      arcadeToast(`Shared ${name} to the feed. It shows there when its block lands, `
+        + "usually within a minute or two.");
+    } catch (err) {
+      post.disabled = false; post.textContent = "Post";
+      said.textContent = String(err.message || err); said.hidden = false;
+    }
+  };
+});
+</script>
+<style>
+.sharecard textarea{width:100%;margin:8px 0 2px;font:inherit}
+.sharecard .sharepic{display:block;max-width:100%;max-height:40vh;margin:6px auto 4px;
+  border-radius:10px;image-rendering:auto}
+</style>
+{% endif %}
+{% if account_here and not embed %}
+<script type="module" nonce="{{ csp_nonce }}">
+// "Take it back": an accepted offer binds until the coins it was signed over
+// are spent (2026-09-27, "Always binding"), so taking it back is one
+// small transaction back to yourself, signed here like any other.
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest && event.target.closest("[data-takeback]");
+  if (!button) return;
+  event.preventDefault();
+  const w = await import("/wallet.js");
+  try {
+    const keys = (await w.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    const asked = await fetch("/account/answer/withdraw", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({piece: button.dataset.piece, chain: ARCADE_CHAIN.network})});
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that acceptance cannot be taken back");
+    if (offer.done) { arcadeToast("That acceptance was already void."); location.reload(); return; }
+    const shown = await w.checked(offer, keys);
+    const who = button.dataset.buyer || "the buyer";
+    const ok = await arcadeAsk("Take back your acceptance?",
+      `${who} will no longer be able to complete this trade. An acceptance is a `
+      + "signature, and the way to take one back is to spend the coins it was signed "
+      + "over, back to yourself: one small transaction, "
+      + `${shown.coinsOf(shown.fee)} in fees.`
+      + (offer.all_coins ? " This acceptance is from before its coins were recorded, "
+         + "so all your coins move back to you. That also ends your open listings "
+         + "and offers." : ""), "Take it back");
+    if (!ok) return;
+    button.disabled = true;
+    const sent = await w.confirm(keys, offer);
+    await fetch("/account/answer/withdrawn", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({answer: offer.answer, txid: sent.txid || "",
+                            chain: ARCADE_CHAIN.network})});
+    arcadeToast(`Taken back. ${who} can no longer complete it.`);
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    button.disabled = false;
+    arcadeToast(String(e.message || e));
+  }
+});
+</script>
+<script type="module" nonce="{{ csp_nonce }}">
+// Accepted offers finish themselves (2026-09-26: "when it is accepted, it
+// should just automatically be signed and sent"). An offer is a message, so the
+// seller's answer is half a trade -- their signature over the piece -- and the
+// payment half needs this account's key. Whenever the wallet is open on any page,
+// this signs and sends every accepted offer, once. Guarded at both ends: the node
+// refuses an answer whose price is not the one this account offered (_leg_answered),
+// and wallet.fill re-reads the transaction's own bytes before signing
+// (coins.verifyOffer). At most once a minute, and one tab at a time.
+(async () => {
+  const LOCK = "arcade.autofill", DONE = "arcade.autofill.done";
+  const now = Date.now();
+  try {
+    if (now - Number(localStorage.getItem(LOCK) || 0) < 60e3) return;
+    localStorage.setItem(LOCK, String(now));
+  } catch (e) { return; }
+  const w = await import("/wallet.js");
+  const keys = await w.opened(ARCADE_CHAIN);
+  if (!keys) { try { localStorage.removeItem(LOCK); } catch (e) {} return; }
+  let done = {};
+  try { done = JSON.parse(localStorage.getItem(DONE) || "{}") || {}; } catch (e) {}
+  const answers = await w.answersToMe(keys);
+  const legs = {};
+  for (const [offer, a] of Object.entries(answers || {})) {
+    if (a && a.ok && a.leg && !done[offer]) legs[offer] = a.leg;
+  }
+  if (!Object.keys(legs).length) return;
+  // Only those that can still complete: not spent, not moved, not already sent.
+  let stale = {};
+  try {
+    const r = await fetch("/account/fill/check", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain: ARCADE_CHAIN.network, legs})});
+    if (r.ok) stale = (await r.json()).legs || {};
+  } catch (e) { return; }
+  for (const [offer, leg] of Object.entries(legs)) {
+    if (stale[offer]) { done[offer] = "gone"; continue; }
+    try {
+      const order = await w.offerFill(leg, ARCADE_CHAIN.network);
+      const out = await w.fill(keys, leg, order);
+      done[offer] = out.txid || "sent";
+      const who = order.seller_tag ? "@" + order.seller_tag : "the holder";
+      arcadeToast(`${who} accepted your offer. The trade is signed and sent: `
+        + "it's yours when its block lands.");
+    } catch (e) {
+      // A trade already on its way, or coins spent since: remembered, not retried
+      // every minute. Anything else is tried again next time.
+      if (/waiting for its block|already|no longer|spent/i.test(String(e.message || e))) {
+        done[offer] = "skipped";
+      }
+    }
+  }
+  try { localStorage.setItem(DONE, JSON.stringify(done)); } catch (e) {}
+})().catch(() => {});
+</script>
+{% endif %}
+{% if account_here %}{# Every page of a signed-in browser counts what is done and locks the wallet after the minutes
+   chosen on /me with nothing done (wallet.js idleLockMinutes, 2026-11-09, security review); loading it is enough. #}
+<script type="module" nonce="{{ csp_nonce }}">import("/wallet.js").catch(() => {});</script>
+{% endif %}
+{% if account_here and account_name and not embed and not fullscreen and path not in ('/me', '/join', '/restore') %}
+{# Signed in, wallet locked in this browser: one bar, every page. #}
+<div id="unlockbar" class="unlockbar" hidden>
+  <span id="unlockbar-said">Your wallet is locked.</span>
+  <button type="button" class="small" id="unlockbar-go">Unlock</button>
+</div>
+<script nonce="{{ csp_nonce }}">
+// Shown the moment the page draws when this tab holds no open wallet (2026-10-20: "it takes about three
+// seconds before the unlock button even appears ... The unlock button should appear as soon as the page opens").
+// The wait was wallet.js loading, then asking the other tabs for an open wallet (0.4 s, then 1.5 s more); the
+// module below still asks, and hides the bar if another tab hands one over.
+(function () {
+  var open = null, bar = document.getElementById("unlockbar");
+  try { open = sessionStorage.getItem("arcade-open-wallet"); } catch (e) {}
+  if (!bar) return;
+  if (!open) bar.hidden = false;
+  document.getElementById("unlockbar-go").onclick = async function () {
+    var opened = await arcadeUnlockSheet("");
+    // Drawn again, so everything on the page that needs the key has it.
+    if (opened) location.reload();
+  };
+})();
+</script>
+<script type="module" nonce="{{ csp_nonce }}">
+  const w = await import("/wallet.js");
+  const keys = await w.opened(ARCADE_CHAIN);
+  const bar = document.getElementById("unlockbar");
+  if (bar) bar.hidden = !!keys;
+</script>
+{% endif %}
+{% if not stranger_here and not embed and not fullscreen and path != '/restore' %}
+{# A password from before the 12-character floor (2026-10-25, issue #12, SadFrog: "existing short-password users are
+   asked to change"). Asked, not forced: wallet.js noteShort marks this tab when a sign-in used one, and this bar says
+   so on every page until a new password is set or "Not now" is pressed (for this tab; the next sign-in asks again).
+   Only "shorter than twelve" is kept, never the password. Read straight from sessionStorage, so it shows as the page
+   draws; the key names are wallet.js SHORT_PASSWORD and SHORT_DISMISSED. #}
+<div id="shortpwbar" class="unlockbar shortpwbar" role="alert" hidden>
+  <span id="shortpw-said"></span>
+  <a class="btn small" id="shortpw-go" href="/restore">Set a new password</a>
+  <button type="button" class="small" id="shortpw-later">Not now</button>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var who = "", bar = document.getElementById("shortpwbar");
+  try { who = sessionStorage.getItem("arcade-short-password") || ""; } catch (e) {}
+  if (!bar || !who) return;
+  var go = document.getElementById("shortpw-go");
+  if (who === "operator") {
+    {% if operator_here %}
+    document.getElementById("shortpw-said").textContent = "This node's password is shorter than 12 characters. "
+      + "Anybody who tries it from outside gets more chances than a longer one would give them. Choose a new one in "
+      + "Admin, at the node machine (Operator & remote access).";
+    go.textContent = "Open Admin";
+    go.href = "/admin";
+    {% else %}
+    return;                // only the operator's own pages say where that is changed
+    {% endif %}
+  } else {
+    document.getElementById("shortpw-said").textContent = "Your password is shorter than 12 characters. Anybody "
+      + "can take your encrypted wallet from this node and guess at it offline, and a short password falls quickly. "
+      + "Choose a new one with your twelve words.";
+    go.href = "/restore?next=" + encodeURIComponent(location.pathname + location.search);
+  }
+  bar.hidden = false;
+  document.getElementById("shortpw-later").onclick = function () {
+    try {
+      sessionStorage.removeItem("arcade-short-password");
+      sessionStorage.setItem("arcade-short-password-not-now", "1");
+    } catch (e) {}
+    bar.hidden = true;
+  };
+})();
+</script>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var h = document.querySelector('header');
+  if (!h) return;
+  function measure() { document.documentElement.style.setProperty('--head-h', h.offsetHeight + 'px'); }
+  measure();
+  window.addEventListener('resize', measure);
+  window.addEventListener('load', measure);
+})();
+</script>
+{# The "Practice round" banner is gone: there is no launch reset (2026-09-28). #}
+{% endif %}
+<main>
+{% if state.is_stale %}
+<div class="msg err stale">
+  <strong>This interface is out of date and must be restarted.</strong>
+  It is running <code>{{ state.running_version }}</code> while
+  <code>{{ state.installed_version }}</code> is installed. Pages are drawn from
+  the new version but acted on by the old one, so <strong>some buttons will do
+  nothing at all</strong> rather than reporting an error. Restart
+  {{ brand.name }} to use what is installed.
+</div>
+{% endif %}
+{% if notice %}<div class="msg {{ notice_kind }}">{{ notice }}</div>{% endif %}
+{% if approvals_waiting and not embed and not path.startswith('/approvals') %}
+<div class="msg info" id="approvals-banner">
+  <strong>{{ approvals_waiting }} send{{ '' if approvals_waiting == 1 else 's' }} waiting for your approval.</strong> A page or a program asked; nothing goes
+  out until you say so. <a href="/approvals">Look at {{ 'it' if approvals_waiting == 1 else 'them' }}</a>
+</div>
+{% endif %}
+{% block body %}{% endblock %}
+</main>
+
+<script nonce="{{ csp_nonce }}">
+// Formatting for the two figures every composer quotes: a file's size and what
+// it will cost in dust. Defined once here because both composers quote both,
+// and both got them wrong in the same way.
+//
+// `(bytes/1024).toFixed(0) + " KB"` showed a 102-byte file as "0 KB", and
+// `toLocaleString(undefined, {maximumFractionDigits: 0})` showed its 0.03 of
+// dust as "0". That second one is the worse of the two: a 900-byte file really
+// costs 0.16 and displayed as "about 0 in dust", so ANY cost under half a coin
+// read as free. a test machine met the 102-byte case; the rest of the range was the same
+// bug with a less obvious face.
+// --- looking at a picture ------------------------------------------------------
+// Clicking one used to download it. That is the rarer thing to want and the
+// more annoying to undo -- a folder full of files you only meant to look at --
+// so a click opens it and the saving stays one deliberate press away.
+function arcadeOpenImage(src, name, saveHref){
+  var box = document.getElementById('lightbox');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'lightbox';
+    box.className = 'lightbox';
+    box.innerHTML =
+      '<div class="lightbox-stage"><img alt="" draggable="false"></div>' +
+      '<div class="lightbox-bar">' +
+        '<span class="lightbox-name"></span>' +
+        '<span class="lightbox-zoom">' +
+          '<button type="button" class="lightbox-out" title="Zoom out">&minus;</button>' +
+          '<button type="button" class="lightbox-in" title="Zoom in">+</button>' +
+        '</span>' +
+        '<a class="lightbox-save" download>Save</a>' +
+        '<button type="button" class="lightbox-close" title="Close">Close</button>' +
+      '</div>';
+    document.body.appendChild(box);
+    // Anywhere but the picture itself closes it, which is what every phone
+    // does and what a finger expects.
+    box.addEventListener('click', function (event) {
+      if (event.target === box || event.target.className === 'lightbox-stage' ||
+          event.target.className === 'lightbox-close')
+        arcadeCloseImage();
+    });
+    arcadeZoomable(box);
+  }
+  box._zoom.reset();
+  box.querySelector('img').src = src;
+  box.querySelector('.lightbox-name').textContent = name || '';
+  var save = box.querySelector('.lightbox-save');
+  save.href = saveHref || src;
+  save.setAttribute('download', name || '');
+  box.classList.add('on');
+  document.body.style.overflow = 'hidden';
+  document.addEventListener('keydown', arcadeLightboxKey);
+}
+
+function arcadeCloseImage(){
+  var box = document.getElementById('lightbox');
+  if (!box) return;
+  box.classList.remove('on');
+  if (box._zoom) box._zoom.reset();
+  box.querySelector('img').src = '';        // stop it holding the bytes
+  document.body.style.overflow = '';
+  document.removeEventListener('keydown', arcadeLightboxKey);
+}
+
+function arcadeLightboxKey(event){
+  if (event.key === 'Escape') arcadeCloseImage();
+  var box = document.getElementById('lightbox');
+  if (!box || !box._zoom) return;
+  if (event.key === '+' || event.key === '=') box._zoom.by(1.5);
+  if (event.key === '-') box._zoom.by(1 / 1.5);
+  if (event.key === '0') box._zoom.reset();
+}
+
+// The viewer's own zoom. A picture opened here used to be a page of its own, and
+// the phone's pinch zoomed it; inside the viewer a pinch zoomed the page behind
+// instead (2026-09-25). So the viewer zooms itself: pinch or wheel around
+// the point under the fingers, drag to look around, double-tap to go in and out,
+// and + / - for anybody with neither a trackpad nor two fingers free.
+function arcadeZoomable(box){
+  var stage = box.querySelector('.lightbox-stage');
+  var img = box.querySelector('img');
+  var MAX = 8;
+  var z = {s: 1, x: 0, y: 0};
+  var points = {};            // pointerId -> {x, y}
+  var pinch = null, drag = null, lastTap = 0, moved = false;
+
+  function clamp() {
+    if (z.s <= 1) { z.s = 1; z.x = 0; z.y = 0; return; }
+    // Keep some of the picture on screen: never pan it wholly out of view.
+    var w = img.offsetWidth * z.s, h = img.offsetHeight * z.s;
+    var sw = stage.clientWidth, sh = stage.clientHeight;
+    var bx = img.offsetLeft, by = img.offsetTop;
+    var minX = Math.min(0, sw - bx - w), maxX = Math.max(0, -bx);
+    var minY = Math.min(0, sh - by - h), maxY = Math.max(0, -by);
+    z.x = Math.min(maxX, Math.max(minX, z.x));
+    z.y = Math.min(maxY, Math.max(minY, z.y));
+  }
+  function draw() {
+    clamp();
+    img.style.transform = 'translate(' + z.x + 'px,' + z.y + 'px) scale(' + z.s + ')';
+    box.classList.toggle('zoomed', z.s > 1);
+  }
+  // Zoom to `s`, keeping the point (cx, cy) -- in page pixels -- where it is.
+  function zoomAt(s, cx, cy) {
+    s = Math.min(MAX, Math.max(1, s));
+    var r = img.getBoundingClientRect();
+    var px = (cx - r.left) / z.s, py = (cy - r.top) / z.s;   // point in the picture
+    z.x += (cx - r.left) - px * s;
+    z.y += (cy - r.top) - py * s;
+    z.s = s;
+    draw();
+  }
+  function centre() {
+    var r = stage.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  }
+  box._zoom = {
+    reset: function () { z = {s: 1, x: 0, y: 0}; points = {}; pinch = drag = null; draw(); },
+    by: function (f) { var c = centre(); zoomAt(z.s * f, c[0], c[1]); }
+  };
+  box.querySelector('.lightbox-in').onclick = function () { box._zoom.by(1.5); };
+  box.querySelector('.lightbox-out').onclick = function () { box._zoom.by(1 / 1.5); };
+
+  stage.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomAt(z.s * Math.exp(-e.deltaY * 0.002), e.clientX, e.clientY);
+  }, {passive: false});
+
+  img.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    img.setPointerCapture(e.pointerId);
+    points[e.pointerId] = {x: e.clientX, y: e.clientY};
+    var ids = Object.keys(points);
+    moved = false;
+    if (ids.length === 2) {
+      var a = points[ids[0]], b = points[ids[1]];
+      pinch = {d: Math.hypot(a.x - b.x, a.y - b.y) || 1, s: z.s};
+      drag = null;
+    } else if (ids.length === 1) {
+      drag = {x: e.clientX, y: e.clientY, zx: z.x, zy: z.y};
+    }
+  });
+  img.addEventListener('pointermove', function (e) {
+    if (!points[e.pointerId]) return;
+    points[e.pointerId] = {x: e.clientX, y: e.clientY};
+    var ids = Object.keys(points);
+    if (pinch && ids.length >= 2) {
+      var a = points[ids[0]], b = points[ids[1]];
+      zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d,
+             (a.x + b.x) / 2, (a.y + b.y) / 2);
+      moved = true;
+    } else if (drag && z.s > 1) {
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 4) moved = true;
+      z.x = drag.zx + e.clientX - drag.x;
+      z.y = drag.zy + e.clientY - drag.y;
+      draw();
+    }
+  });
+  function up(e) {
+    if (!points[e.pointerId]) return;
+    delete points[e.pointerId];
+    var left = Object.keys(points);
+    if (left.length < 2) pinch = null;
+    if (left.length === 1) {            // one finger lifted from a pinch: pan with the other
+      var p = points[left[0]];
+      drag = {x: p.x, y: p.y, zx: z.x, zy: z.y};
+      return;
+    }
+    drag = null;
+    if (left.length || moved || e.type === 'pointercancel') return;
+    // A tap: two in quick succession go in (to where they landed) or back out.
+    var now = Date.now();
+    if (now - lastTap < 320) {
+      lastTap = 0;
+      if (z.s > 1) box._zoom.reset(); else zoomAt(2.5, e.clientX, e.clientY);
+    } else {
+      lastTap = now;
+    }
+  }
+  img.addEventListener('pointerup', up);
+  img.addEventListener('pointercancel', up);
+  // A mouse has no second finger: a double-click does what a double-tap does.
+  img.addEventListener('dblclick', function (e) { e.preventDefault(); });
+}
+
+// The page you are on, brought into view: a strip that scrolls is only honest
+// if the thing it is showing you is the thing you are looking at.
+(function () {
+  function show() {
+    var here = document.querySelector('nav a.on');
+    if (here && here.scrollIntoView)
+      here.scrollIntoView({block: 'nearest', inline: 'center'});
+  }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+
+function arcadeSize(bytes){
+  if (bytes < 1024) return bytes.toLocaleString() + ' bytes';
+  if (bytes < 10 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return Math.round(bytes / 1024).toLocaleString() + ' KB';
+}
+
+function arcadeCoins(coins){
+  // Enough digits that a real cost never reads as nothing. Two decimals is the
+  // dust granularity (0.01 per output), so nothing smaller can arise.
+  if (coins < 10) return coins.toFixed(2);
+  if (coins < 1000) return coins.toFixed(1);
+  return Math.round(coins).toLocaleString();
+}
+
+// What a file will cost, all in. The two chips used to quote the dust alone and
+// add "on top of the fee", which split one number into two and left neither of
+// them being the answer. A Class B transaction is about 0.01 per KB, and a
+// chunk is roughly 9 KB on the wire, so the fee is near enough 0.09 each --
+// small beside the dust for a large file, and not small for a small one.
+// --- how big a picture goes on the chain --------------------------------------
+// A picture is the most expensive thing this can send: every 60 bytes buys an
+// output that can never be spent again, so a phone photo straight from the
+// camera is several coins and several blocks. Re-encoding it here, before it is
+// uploaded, is the difference between a 3 MB send and an 80 KB one -- and it
+// happens in the browser, so nothing is uploaded twice and the wallet needs no
+// image library of its own.
+var ARCADE_SIZES = [
+  {key: 'large',  label: 'Large',  max: 0,    quality: 1,    hint: 'as it is'},
+  {key: 'medium', label: 'Medium', max: 1280, quality: 0.72, hint: 'fits any screen'},
+  {key: 'small',  label: 'Small',  max: 640,  quality: 0.6,  hint: 'cheapest'}
+];
+
+function arcadeIsImage(file){
+  return !!file && /^image\//.test(file.type) && !/svg/.test(file.type);
+}
+
+// Can this browser put a file back into a file input? Without it the original
+// cannot be restored after a smaller one has been chosen, so the choice is not
+// offered at all rather than offered and then unable to undo itself.
+function arcadeCanSwapFiles(){
+  try { return typeof DataTransfer !== 'undefined' && !!new DataTransfer().items; }
+  catch (e) { return false; }
+}
+
+function arcadePutFile(input, file){
+  var dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+}
+
+// Re-encode to at most `max` on the long side. JPEG, because it is the one
+// format every phone and every browser agrees on -- unless the picture has
+// transparency, which JPEG cannot carry: a game's sprites came out as white
+// boxes (2026-09-29, the shared sprite library), so a see-through picture is
+// re-encoded as PNG and keeps it. `type` in the answer says which it became.
+function arcadeShrink(file, max, quality){
+  return new Promise(function(resolve){
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function(){
+      var w = img.naturalWidth, h = img.naturalHeight;
+      var scale = max ? Math.min(1, max / Math.max(w, h)) : 1;
+      var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = cw; canvas.height = ch;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, cw, ch);
+      var clear = false;
+      if (!/jpe?g/.test(file.type)) {
+        try {
+          var px = ctx.getImageData(0, 0, cw, ch).data;
+          for (var i = 3; i < px.length; i += 4) { if (px[i] < 255) { clear = true; break; } }
+        } catch (e) { clear = true; }       // cannot look: keep what might be there
+      }
+      if (!clear) {                          // opaque: JPEG, on white as before
+        ctx.globalCompositeOperation = 'destination-over';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, cw, ch);
+      }
+      var type = clear ? 'image/png' : 'image/jpeg';
+      canvas.toBlob(function(blob){
+        URL.revokeObjectURL(url);
+        resolve(blob ? {blob: blob, width: cw, height: ch, type: type} : null);
+      }, type, quality);
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
+function arcadeJpegName(name, type){
+  return name.replace(/\.[^.\/]+$/, '') + (type === 'image/png' ? '.png' : '.jpg');
+}
+
+// Work out all three, then let the caller draw them. Every one is measured
+// rather than estimated: the number under each button is what that choice
+// actually costs, and a smaller setting that came out bigger than the original
+// (which happens with an already-small picture) is dropped instead of offered.
+function arcadeOfferSizes(file, onReady){
+  var results = [{key: 'large', label: 'Large', hint: 'as it is', file: file,
+                  bytes: file.size, width: 0, height: 0}];
+  var pending = ARCADE_SIZES.slice(1).map(function(spec){
+    return arcadeShrink(file, spec.max, spec.quality).then(function(out){
+      if (!out || out.blob.size >= file.size) return null;
+      // Not offered when it would crush the short side: a tall or wide
+      // picture shrunk by its long side came out a sliver (2026-09-29).
+      if (Math.min(out.width, out.height) < 200) return null;
+      return {key: spec.key, label: spec.label, hint: spec.hint,
+              file: new File([out.blob], arcadeJpegName(file.name, out.type),
+                             {type: out.type}),
+              bytes: out.blob.size, width: out.width, height: out.height};
+    });
+  });
+  return Promise.all(pending).then(function(rest){
+    rest.forEach(function(r){ if (r) results.push(r); });
+    onReady(results);
+    return results;
+  });
+}
+
+// A yes/no card on the page instead of the browser's own dialog. Found filming
+// the tutorial, 2026-09-25: window.confirm looked foreign, and its one run-on
+// sentence read badly. Resolves true for the first button, false otherwise —
+// including a click outside it, which is a no that somebody meant.
+// A game's own play, without a card (the operator, 2026-10-04: "If it's test
+// net, all signing can be done automatically", narrowed the same day so that a
+// stranger's page cannot empty a wallet that holds names, NFTs and tokens).
+// Where ARCADE_AUTOSIGN is on (the test chain, unless the operator's
+// `page_autosign` setting says otherwise), two things a page asks for go
+// through unasked, and only while the page is open as itself, not framed in a
+// post:
+//   * a claim from a REFEREED prize pool bound to that page (the referee's
+//     verdict is the gate), costing at most AUTO_CLAIM_MOST;
+//   * the page inscribing its own data, costing at most AUTO_INSCRIBE_MOST.
+// And the creator allowance: the page sending a token its creator issued, or
+// a piece its creator inscribed, back to that creator (AUTO_SEND_MOST).
+// A page has AUTO_PAGE_MOST per tab; past it the cards come back. Other sends, buys
+// and mints always show their card. The cost is what leaves the wallet, read
+// from the parsed transaction (wallet.checked), never from the node's summary.
+var ARCADE_AUTOSIGN = {{ state.setting("page_autosign", state.messaging.network == "test")|tojson }};
+var AUTO_CLAIM_MOST = 5000000;          // 0.05 coins: a lot's price and its fee
+var AUTO_INSCRIBE_MOST = 200000000;     // 2 coins: a 7 KB save, its fee and data outputs
+var AUTO_PAGE_MOST = 2000000000;        // 20 coins a page, per tab
+var AUTO_SEND_MOST = 5000000;           // 0.05 coins: a game's asset back to it, fee and dust
+// A page that asks with {silent: true} never raises a card: what the rules above
+// do not let through fails with this, and the page decides what to do about it.
+var ARCADE_SAY_SO = "this needs the player's say-so";
+var arcadeAutoSpent = new Map();
+function arcadeAutoSigns(page, shown, most){
+  if (!ARCADE_AUTOSIGN || !page || !shown) return false;
+  const leaving = shown.pays.filter((p) => !p.mine).reduce((n, p) => n + p.value, 0) + shown.fee;
+  const spent = arcadeAutoSpent.get(page) || 0;
+  if (leaving > most || spent + leaving > AUTO_PAGE_MOST) return false;
+  arcadeAutoSpent.set(page, spent + leaving);
+  return true;
+}
+// `nope` names the other button (2026-10-21: a page adding a contact asks "Add" / "No"); "Cancel" when left out.
+// `verbatim`: words shown exactly as they are, line by line (2026-10-26, issue #5: "show the exact text and require
+// a click for anything unusual" -- wallet.js askToSign).
+function arcadeAsk(title, detail, yes = "Yes", nope = "Cancel", verbatim = ""){
+  return new Promise(function(answer){
+    var back = document.createElement('div');
+    back.className = 'askcard-back';
+    var card = document.createElement('div');
+    card.className = 'panel askcard';
+    card.setAttribute('role', 'dialog');
+    var h = document.createElement('h3');
+    h.textContent = title;
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = detail;
+    var row = document.createElement('div');
+    row.className = 'row';
+    var ok = document.createElement('button');
+    ok.type = 'button'; ok.textContent = yes;
+    var no = document.createElement('button');
+    no.type = 'button'; no.className = 'ghost'; no.textContent = nope;
+    row.append(ok, no);
+    card.append(h, p);
+    if (verbatim) {
+      var pre = document.createElement('pre');
+      pre.className = 'mono';
+      pre.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:10px;border-radius:8px;max-height:40vh;overflow:auto';
+      pre.textContent = String(verbatim);
+      card.append(pre);
+    }
+    card.append(row);
+    back.append(card);
+    document.body.append(back);
+    var done = function(v){ back.remove(); answer(v); };
+    ok.onclick = function(){ done(true); };
+    no.onclick = function(){ done(false); };
+    back.onclick = function(e){ if (e.target === back) done(false); };
+    no.focus();
+    arcadeArm(ok);
+  });
+}
+// KEYS MEANT FOR THE GAME (2026-10-26, Arcade Hardening round 2, wave 3, issue #7; SadFrog: "all five"): a player
+// mashing Enter or Space in a game said yes to a card they never saw, because the yes had the focus. A card opens
+// with Cancel focused, and over a page that frames an inscription its yes works only after ARCADE_ARM_MS, so a press
+// or a tap meant for the game lands on nothing.
+var ARCADE_ARM_MS = 800;
+function arcadeArm(ok){
+  if (!document.querySelector('iframe.inscription-frame')) return;
+  ok.disabled = true;
+  ok.dataset.arming = '1';
+  setTimeout(function(){ ok.disabled = false; delete ok.dataset.arming; }, ARCADE_ARM_MS);
+}
+
+// Real PEP, said honestly, before anything on mainnet is signed (the operator,
+// 2026-10-09: "Just a prompt with what their fees and costs are going to be being
+// very honest"). wallet.js calls this for every mainnet transaction with its costs
+// read off the transaction's own bytes; a collection run calls it once with the
+// whole run's estimate (`costs.count`, `costs.estimate`). One button.
+function arcadeMainnetReview(costs){
+  // DOGE on Dogecoin, PEP on Pepecoin mainnet (2026-10-13), LTC on Litecoin (2026-10-18: it said
+  // "Real PEP" there): `costs.chain` says which.
+  var doge = costs.chain === 'doge', ltc = costs.chain === 'ltc';
+  // Bellscoin and Luckycoin too (2026-10-22): a real-coin review never says PEP for another chain's coins.
+  var more = {bel: ['bellscoin', 'BEL'], lky: ['luckycoin', 'LKY'], kot: ['kotia', 'KOT'], wjk: ['wojakcoin', 'WJK'], dgb: ['digibyte', 'DGB'], flop: ['flopcoin', 'FLOP']}[costs.chain];
+  var coin = doge ? ' DOGE' : ltc ? ' LTC' : more ? ' ' + more[1] : ' PEP';
+  var pep = function(sats){ return (Number(sats || 0) / 1e8).toLocaleString(undefined,
+    {minimumFractionDigits: 2, maximumFractionDigits: 8}) + coin; };
+  return new Promise(function(answer){
+    var back = document.createElement('div'); back.className = 'askcard-back';
+    var card = document.createElement('div'); card.className = 'panel askcard mainnet-review';
+    card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true');
+    var h = document.createElement('h3');
+    h.innerHTML = doge ? '<span class="tag dogecoin">dogecoin</span> Real DOGE'
+                : ltc ? '<span class="tag litecoin">litecoin</span> Real LTC'
+                : more ? '<span class="tag ' + more[0] + '">' + more[0] + '</span> Real ' + more[1]
+                       : '<span class="tag mainnet">Pepecoin main</span> Real PEP';
+    var what = document.createElement('p'); what.className = 'muted';
+    what.textContent = costs.label ? costs.label : costs.count
+      ? 'Inscribe ' + costs.count.toLocaleString() + ' pieces' + (costs.what ? ' of ' + costs.what : '')
+        + '. This is an estimate from the first piece; each one is read from its own transaction as it goes.'
+      : (costs.what || 'A mainnet transaction');
+    var rows = document.createElement('div'); rows.className = 'mr-rows';
+    var line = function(label, sats, strong){
+      if (!sats && !strong) return;
+      var r = document.createElement('div'); r.className = 'mr-row' + (strong ? ' total' : '');
+      var a = document.createElement('span'); a.textContent = label;
+      var b = document.createElement('span'); b.textContent = (costs.estimate ? 'about ' : '') + pep(sats);
+      r.append(a, b); rows.append(r);
+    };
+    line('Network fee', costs.network);
+    line('Coins written into the inscription or token outputs', costs.data);
+    line('Paid to others', costs.others);
+    // Each payment as the transaction's own bytes say it (wallet.js mainnetCosts), not the node's words.
+    (costs.to || []).forEach(function(p){
+      line('to ' + p.to, p.value);
+      if (p.value && rows.lastChild) rows.lastChild.firstChild.style.wordBreak = 'break-all';
+    });
+    if (costs.operator) {
+      // 0.5% with a minimum, or (permille 0, 2026-10-27) a flat amount per inscription set in Admin -> Fees.
+      var f = costs.fee || {}, how = [];
+      if (f.permille) how.push((f.permille / 10) + '%' + (f.minimum ? ', minimum ' + pep(f.minimum) : ''));
+      else if (f.permille === 0 && f.minimum) how.push('a flat ' + pep(f.minimum));
+      if (costs.count) how.push('a piece');
+      line('Operator fee' + (how.length ? ' (' + how.join(' ') + ')' : ''), costs.operator);
+    }
+    line(costs.count ? 'Total for the run' : costs.leg ? 'Set aside for the fee when it is taken'
+         : 'Total leaving your wallet', costs.total, true);
+    var warn = document.createElement('p'); warn.className = 'mr-warn';
+    warn.textContent = 'These are real coins on mainnet. Once sent this cannot be undone.';
+    var row = document.createElement('div'); row.className = 'row';
+    var ok = document.createElement('button'); ok.type = 'button'; ok.className = 'danger';
+    ok.textContent = costs.leg ? 'Sign the trade' : (costs.count ? 'Start: about ' : 'Pay ') + pep(costs.total);
+    var no = document.createElement('button'); no.type = 'button'; no.className = 'ghost'; no.textContent = 'Cancel';
+    row.append(ok, no);
+    card.append(h, what, rows, warn, row); back.append(card); document.body.append(back);
+    var done = function(v){ back.remove(); document.removeEventListener('keydown', esc); answer(v); };
+    var esc = function(e){ if (e.key === 'Escape') done(false); };
+    document.addEventListener('keydown', esc);
+    ok.onclick = function(){ done(true); };
+    no.onclick = function(){ done(false); };
+    back.onclick = function(e){ if (e.target === back) done(false); };
+    no.focus();
+    arcadeArm(ok);                                  // issue #7: not a key or a tap meant for the game
+  });
+}
+
+// One unlock, on every page (a tester / 2026-09-26: "you should be able
+// to unlock your wallet from each page", and "if you unlock on one page, it
+// should stay unlocked on all pages"). arcadeKeys(chain) is what an action asks
+// for when it needs the key: the open wallet if there is one (in this tab or any
+// other tab of this site), otherwise this sheet, and the action carries on once
+// the password opens it -- instead of sending somebody to their own page first.
+var ARCADE_ME = {{ (account_name or '')|tojson }};
+var ARCADE_LEAKED_URL = {{ leaked_url()|tojson }};
+// Signed in at all -- with or without a wallet kept here under a name. An account
+// signed in by its twelve words (/join/keys) has a session but no ARCADE_ME, and
+// was told to sign in again and again (2026-10-08).
+var ARCADE_SIGNED = {{ (account_here or False)|tojson }};
+// The node itself is the player (2026-10-05): its own machine, or its operator
+// signed in from outside, with the node's view. Games' seeds and the claims a pool
+// pays for itself work for it with no sign-in; the server says which address.
+var ARCADE_NODE_PLAYER = {{ ((not public) and (operator_here or false))|tojson }};
+var ARCADE_CHAIN = {network: {{ state.messaging.network|tojson }},
+                    version: {{ state.messaging.params.pubkeyhash_version }}};
+// `required` (the PWA, 2026-10-27: "when the PWA opens the first thing that should open is the unlock wallet
+// pop-up, and the PWA should not be usable until the Wallet is unlocked"): no Cancel, and nothing behind it answers
+// until the password opens the wallet; only a way to restore a forgotten one.
+function arcadeUnlockSheet(why, required){
+  return new Promise(function(answer){
+    var back = document.createElement('div');
+    back.className = 'askcard-back';
+    var card = document.createElement('form');
+    card.className = 'panel askcard';
+    card.setAttribute('role', 'dialog');
+    var h = document.createElement('h3');
+    h.textContent = 'Unlock your wallet';
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = (why ? why + ' ' : '') + 'Your password opens it in this browser; it '
+      + 'stays open on every page until you close your last arcade tab.';
+    var user = document.createElement('input');
+    user.type = 'text'; user.name = 'username'; user.autocomplete = 'username';
+    user.value = ARCADE_ME; user.hidden = true;
+    var pw = document.createElement('input');
+    pw.type = 'password'; pw.autocomplete = 'current-password';
+    pw.placeholder = 'password'; pw.setAttribute('aria-label', 'Password');
+    pw.style.width = '100%'; pw.style.boxSizing = 'border-box';
+    var err = document.createElement('p');
+    err.className = 'msg err'; err.hidden = true;
+    var row = document.createElement('div');
+    row.className = 'row'; row.style.marginTop = '10px';
+    var ok = document.createElement('button');
+    ok.type = 'submit'; ok.textContent = 'Unlock';
+    var no = document.createElement('button');
+    no.type = 'button'; no.className = 'ghost'; no.textContent = 'Cancel';
+    if (required) {
+      row.append(ok);
+      var lost = document.createElement('a');
+      lost.href = '/restore'; lost.className = 'muted'; lost.style.marginLeft = 'auto';
+      lost.textContent = 'Forgot your password?';
+      row.append(lost);
+      back.classList.add('askcard-required');
+      back.style.zIndex = '2147483646';
+    } else {
+      row.append(ok, no);
+    }
+    card.append(h, p, user, pw, err, row);
+    back.append(card);
+    document.body.append(back);
+    var done = function(v){ back.remove(); answer(v); };
+    no.onclick = function(){ done(null); };
+    back.onclick = function(e){ if (e.target === back && !required) done(null); };
+    if (required) {
+      back.addEventListener('keydown', function(e){ if (e.key === 'Escape') e.preventDefault(); });
+    }
+    card.onsubmit = function(e){
+      e.preventDefault();
+      ok.disabled = true; ok.textContent = 'Unlocking\u2026'; err.hidden = true;
+      import('/wallet.js').then(function(w){
+        return w.unlockHere(ARCADE_ME, pw.value, ARCADE_CHAIN).then(function(){
+          return w.opened(ARCADE_CHAIN);
+        });
+      }).then(function(keys){
+        document.dispatchEvent(new CustomEvent('arcade:unlocked'));
+        var bar = document.getElementById('unlockbar'); if (bar) bar.hidden = true;
+        done(keys);
+      }, function(x){
+        ok.disabled = false; ok.textContent = 'Unlock';
+        err.textContent = String((x && x.message) || x || 'that did not open it');
+        err.hidden = false; pw.focus();
+      });
+    };
+    pw.focus();
+  });
+}
+// The "show me" wall (2026-09-26). A tap reveals that one; the setting on
+// /me ("Show sensitive content") reveals them all, for this browser.
+function arcadeReveal(wall){
+  var t = wall.querySelector('template');
+  if (t) wall.replaceWith(t.content.cloneNode(true));
+}
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('.sens-btn');
+  var wall = b && b.closest('.sens-wall');
+  if (!wall) return;               // a page's own wall answers its own taps
+  e.preventDefault(); e.stopPropagation();
+  arcadeReveal(wall);
+}, true);
+{% if operator_here %}
+// "Not sensitive": the operator clears a post the screening covered, for
+// everybody on this arcade (2026-09-28). An admin write, so from
+// outside it needs the admin password's session like the Admin page does.
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('.sens-clear');
+  if (!b) return;
+  e.preventDefault();
+  b.disabled = true; b.textContent = 'Clearing…';
+  fetch('/admin/api/unflag', {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'x-arcade-admin': '1'},
+    body: JSON.stringify({txid: b.dataset.txid})})
+  .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return [r, j]; }); })
+  .then(function(rj){
+    var r = rj[0], j = rj[1];
+    if (r.ok) {
+      var cover = b.closest('details.covered'), text = cover && cover.querySelector('.posttext');
+      if (cover && text) { text.style.margin = '10px 0 0'; cover.replaceWith(text); }
+      arcadeToast('Cleared. Nobody on this arcade sees it covered now.');
+      return;
+    }
+    b.disabled = false; b.textContent = 'Not sensitive';
+    arcadeToast(r.status === 401 ? 'Enter the admin password on the Admin page first, then try again.'
+                                 : (j.detail || 'That did not work.'));
+  })
+  .catch(function(){ b.disabled = false; b.textContent = 'Not sensitive'; arcadeToast('That did not work.'); });
+});
+{% endif %}
+function arcadeShowSensitive(){
+  try { return localStorage.getItem('arcade.showSensitive') === 'yes'; } catch (e) { return false; }
+}
+document.addEventListener('DOMContentLoaded', function(){
+  if (arcadeShowSensitive()) document.querySelectorAll('.sens-wall').forEach(arcadeReveal);
+});
+
+function arcadeToast(text){
+  var t = document.createElement('div');
+  t.className = 'panel arcadetoast';
+  t.setAttribute('role', 'status');
+  t.textContent = text;
+  var x = document.createElement('button');
+  x.type = 'button'; x.className = 'ghost small'; x.textContent = 'OK';
+  x.onclick = function(){ t.remove(); };
+  // Anywhere on it closes it, not only the small OK (2026-10-17: "The OK button does not work").
+  t.onclick = function(e){ if (!e.target.closest('a')) t.remove(); };
+  t.style.cursor = 'pointer';
+  t.append(x);
+  document.body.append(t);
+  setTimeout(function(){ t.remove(); }, 15000);
+}
+// Nobody signed in, and a page needs the wallet (2026-09-30: "If they need to
+// log into their Wallet, you should be able to pop up a login pop-up"): a card
+// that takes them to sign in and straight back to where they were -- the game
+// in full screen included. Answers false either way: the page's request ends
+// here, and the person comes back to try it again signed in.
+// One card, one sheet at a time (2026-10-08: "Sometimes when I open a game
+// in Dogecoin arcade, I have to login two or three times"): a game asks for a
+// seed, a take and a key as it starts, and each caller that found no open wallet
+// drew its own sign-in card or password sheet on top of the last. Callers that
+// arrive while one is open now wait for it and share its answer.
+var _arcadeSignInOpen = null, _arcadeUnlockOpen = null;
+function arcadeSignIn(why){
+  if (_arcadeSignInOpen) return _arcadeSignInOpen;
+  _arcadeSignInOpen = (async function(){
+    // signed in by its words, no wallet kept here: the words open it, and only on the
+    // words page -- the name-and-password one has nothing to unlock
+    var words = ARCADE_SIGNED && !ARCADE_ME;
+    var go = await arcadeAsk(words ? 'Open your wallet' : 'Sign in to continue',
+      (why || 'This needs your wallet.') + (words
+        ? ' This account signs in with its words: type them once and this tab keeps the wallet open.'
+        : ' Sign in or join, and you come straight back here.'),
+      words ? 'Open it' : 'Sign in');
+    if (go) location.href = (words ? '/join/keys?next=' : '/join?next=') + encodeURIComponent(location.pathname + location.search);
+    return false;
+  })().finally(function(){ _arcadeSignInOpen = null; });
+  return _arcadeSignInOpen;
+}
+
+// Callers that ask at once share the looking as well as the sheet: each lookup asks
+// the other tabs and waits up to ~2 s for none to answer, so two callers' waits
+// ended on separate timers, and a sheet closed between them was cleared before the
+// second caller came to it -- which then drew a sheet of its own.
+// WALLET ACCESS, PER GAME (2026-10-18: "somebody can make a clone of Ashvale ... spelt slightly different
+// with two L's ... it could drain their wallet. Each game card should have an allow Wallet access switch with the
+// warning to verify the publisher's @handle"). Off for every game until the player turns it on, on the game's card
+// or when the game first asks; kept in this browser, per game page. Without it a game can still be played and
+// join rooms as you (that signature proves who you are and moves nothing), but it cannot ask your wallet to
+// trade, pay, put things in escrow or sign.
+var ARCADE_ACCESS = 'arcade.wallet.allow:';
+function arcadeGameAllowed(id){ try { return localStorage.getItem(ARCADE_ACCESS + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGameAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_ACCESS + id, 'yes'); else localStorage.removeItem(ARCADE_ACCESS + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:access', {detail: {id: id, on: !!on}}));
+}
+function arcadeAccessWords(game, publisher, address){
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. Check that this is the app’s real publisher before you allow it: '
+    + 'anybody can publish a copy of an app under a lookalike name, and an app with wallet access can ask your wallet '
+    + 'to trade, pay and sign. You can turn it off again on the app’s card, or under Game access in your account.';
+}
+function arcadeAccessAsk(id, game, publisher, address){
+  return arcadeAsk('Allow this app to use your wallet?', arcadeAccessWords(game, publisher, address), 'Allow wallet access')
+    .then(function(yes){ if (yes) arcadeGameAllow(id, true); return !!yes; });
+}
+// THE GATE (2026-10-20: a player "can't play a game that uses Wallet controls unless they check the wallet
+// check box on the game card"). Every bridge a page reaches the wallet through -- the doors' trades, escrow, shops
+// and signing (_page_doors), and this page's take, inscribe, claim, mint and page sends -- asks arcadeGameGate
+// first. A page that is a game (a card, or the page a card's Play opens: /games/<id>/access) and whose card's box is
+// not ticked is STOPPED there: its frame emptied, a word in its place pointing to the card, and nothing asked. The
+// browser then remembers the game uses the wallet, so Play on its card and the game's own page hold it until the
+// box is ticked (as they do from the start for a card that says "wallet": true). A page that is not a game -- a
+// shop, a mintpad -- has no card to tick and keeps the ask (arcadeAccessAsk).
+// ASKED IN THE GAME (2026-10-23, SadFrog: "the wallet access option doesn't have to happen in the game card, it can
+// happen in the game"): a game whose box is off is no longer stopped. When it first reaches for the wallet -- or asks
+// outright, arcade.access.wallet() (the 'access' door) -- the same card the box shows comes up over the game, here on
+// the viewer where the game cannot draw: its name, its @publisher and address, the lookalike warning. Yes ticks its
+// card's box (kept under the page Play opens, as the box is); No refuses that one action and the game plays on, and
+// this tab does not ask again unprompted (the game may still ask outright, when the player chooses). The card's box
+// stays the place to see and change it, and /me/access lists every game allowed.
+var ARCADE_USES = 'arcade.wallet.uses:';
+var ARCADE_GATE_SAYS = 'Wallet access is off for this app: the player did not allow it. It can ask again (arcade.access.wallet()).';
+var ARCADE_ACCESS_NO = 'arcade.wallet.no:', _arcadeAccessAsking = {};
+var ARCADE_GAMES = '/games', _arcadeGames = {};
+function arcadeGameOf(page){
+  if (!page) return Promise.resolve({game: false});
+  if (!_arcadeGames[page]) {
+    _arcadeGames[page] = fetch(ARCADE_GAMES + '/' + page + '/access', {cache: 'no-store'})
+      .then(function(r){ return r.ok ? r.json() : {game: false}; })
+      .catch(function(){ delete _arcadeGames[page]; return {game: false, unknown: true}; });
+  }
+  return _arcadeGames[page];
+}
+function arcadeGameUses(id){ try { return localStorage.getItem(ARCADE_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGameUsed(id){ try { localStorage.setItem(ARCADE_USES + id, 'yes'); } catch (e) {} }
+// Ticked on its card: the card's box is kept under the page Play opens.
+function arcadeGameOn(page, g){ return arcadeGameAllowed(page) || !!(g && g.opens && arcadeGameAllowed(g.opens)); }
+// Whether this game should not start here: its card's box is off and it says, or was seen, to use the wallet.
+function arcadeGameHeld(page, g){
+  return !!(g && g.game) && !arcadeGameOn(page, g)
+    && (g.wallet || arcadeGameUses(page) || !!(g.opens && arcadeGameUses(g.opens)));
+}
+function arcadeGameStop(page, g){
+  document.querySelectorAll('iframe.inscription-frame').forEach(function(f){
+    if ((f.getAttribute('src') || '').indexOf('/content/' + page) < 0 || f.dataset.gated) return;
+    f.dataset.gated = '1';
+    f.setAttribute('src', 'about:blank');
+    f.hidden = true;
+    var box = document.createElement('div');
+    box.className = 'panel gamegate';
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'max-width:560px;margin:24px auto;padding:18px;text-align:center';
+    var h = document.createElement('h3'); h.style.marginTop = '0';
+    h.textContent = '\u{1F512} ' + ((g && g.name) || 'This app') + ' uses your wallet';
+    var p = document.createElement('p');
+    p.textContent = 'To open it, turn on Wallet access on its card. '
+      + arcadeAccessWords(g && g.name, g && g.publisher, g && g.address);
+    var a = document.createElement('a'); a.className = 'btn';
+    a.href = '/apps#game-' + ((g && g.card) || page); a.textContent = 'Open its card';
+    box.append(h, p, a);
+    f.after(box);
+  });
+}
+// Ask, in the game, for wallet access (ASKED IN THE GAME above). One card per game page at a time: a second ask while
+// one is open waits for the same answer. `prompted`: the player asked for it in the game (arcade.access.wallet()), so
+// an earlier No in this tab does not stand in the way.
+function arcadeGameAskAccess(page, g, prompted){
+  var key = (g && g.opens) || page;
+  if (_arcadeAccessAsking[key]) return _arcadeAccessAsking[key];
+  var saidNo = false;
+  try { saidNo = sessionStorage.getItem(ARCADE_ACCESS_NO + key) === 'yes'; } catch (e) {}
+  if (saidNo && !prompted) return Promise.resolve(false);
+  _arcadeAccessAsking[key] = arcadeAccessAsk(key, g && g.name, g && g.publisher, g && g.address).then(function(yes){
+    delete _arcadeAccessAsking[key];
+    try { if (yes) sessionStorage.removeItem(ARCADE_ACCESS_NO + key); else sessionStorage.setItem(ARCADE_ACCESS_NO + key, 'yes'); } catch (e) {}
+    return yes;
+  }, function(){ delete _arcadeAccessAsking[key]; return false; });
+  return _arcadeAccessAsking[key];
+}
+// true: the page may go on to the wallet. false: it is a game whose box is off and the player said no (or said no
+// before in this tab): this one action is refused, and the game keeps running.
+// A PAGE WITH NO CARD ASKS TOO (2026-10-26, Arcade Hardening round 2, wave 3, issue #7; SadFrog: "all five"): a page
+// that is no game -- a shop, a mintpad, a page the node could not look up -- used to go straight to the wallet,
+// so a hostile page only had to be one with no card. Now it is untrusted until the player says yes on the same card,
+// naming who inscribed it; yes is kept for that page as a game's box is. A frame the arcade cannot tell the
+// inscription of is asked every time.
+function arcadeGameGate(page){
+  if (!page) return arcadeAsk('Allow this page to use your wallet?', 'The arcade cannot tell which inscription this '
+    + 'page is, so it cannot say who published it. Only allow it if you trust it: a page with wallet access can ask '
+    + 'your wallet to trade, pay and sign. You are asked again every time.', 'Allow this once');
+  if (arcadeGameAllowed(page)) return Promise.resolve(true);
+  return arcadeGameOf(page).then(function(g){
+    if (g.game && arcadeGameOn(page, g)) return true;
+    if (g.game) {
+      arcadeGameUsed(page);
+      if (g.opens) arcadeGameUsed(g.opens);
+    }
+    return arcadeGameAskAccess(page, g, false);
+  });
+}
+// Whether this page frames that inscription (its frame's address names it): a send request is shown only over the
+// game that filed it (2026-10-26, issue #7).
+function arcadeFramed(page){
+  if (!page) return false;
+  return [].some.call(document.querySelectorAll('iframe.inscription-frame'), function(f){
+    return ((/\/content\/([0-9a-f]{64})/.exec(f.getAttribute('src') || '') || [])[1]) === page;
+  });
+}
+// WHO IS ASKING (2026-10-26, issue #7): a card over a game names the page that asks as the arcade knows it from the
+// chain -- its card's name and its publisher's @tag -- never words the page sent with the ask (a page could call
+// itself "Your wallet", or another game). Resolves the words, e.g. '“Ghost Fleet” (published by @maker)'.
+function arcadeRequester(page){
+  return arcadeGameOf(page).then(function(g){
+    g = g || {};
+    var by = g.publisher || (g.address ? g.address : '');
+    var name = g.game && g.name ? '“' + g.name + '”' : !page ? 'An unknown page'
+      : g.unknown ? 'A page the arcade could not look up' : 'A page with no app card';
+    return name + (by ? ' (published by ' + by + ')' : ' (publisher unknown)');
+  });
+}
+// CAMERA & MICROPHONE, PER GAME (2026-10-22: "Our user can allow an app camera and microphone in the same way
+// that they allow an app Wallet access on the game card", for a video-call card). A sandboxed game cannot open the
+// camera itself (no origin, so getUserMedia refuses it): this page, the viewer, opens it, sends it to the players the
+// game names and draws the video over the game's frame (_page_doors, room.media). Only while the card's switch is
+// on; off, the game is told 'off' and the viewer says, over the frame, where to turn it on. Kept in this browser,
+// per game page, like Wallet access.
+var ARCADE_MEDIA = 'arcade.media.allow:', ARCADE_MEDIA_USES = 'arcade.media.uses:';
+function arcadeMediaAllowed(id){ try { return localStorage.getItem(ARCADE_MEDIA + id) === 'yes'; } catch (e) { return false; } }
+function arcadeMediaAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_MEDIA + id, 'yes'); else localStorage.removeItem(ARCADE_MEDIA + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:media', {detail: {id: id, on: !!on}}));
+}
+function arcadeMediaUses(id){ try { return localStorage.getItem(ARCADE_MEDIA_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeMediaUsed(id){ try { localStorage.setItem(ARCADE_MEDIA_USES + id, 'yes'); } catch (e) {} }
+function arcadeMediaWords(game, publisher, address){
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. Check that this is the app’s real publisher before you allow it: '
+    + 'anybody can publish a copy of an app under a lookalike name, and an app with camera and microphone access can '
+    + 'send your picture and sound to the players it chooses. The arcade always shows when they are on, with a Stop '
+    + 'button. You can turn it off again on the app’s card.';
+}
+function arcadeMediaAsk(id, game, publisher, address){
+  return arcadeAsk('Allow this app to use your camera and microphone?', arcadeMediaWords(game, publisher, address),
+                   'Allow camera & microphone')
+    .then(function(yes){ if (yes) arcadeMediaAllow(id, true); return !!yes; });
+}
+// CONTACTS, PER APP (2026-10-23: "Allow access to Contacts should be another box on the card"). The same key
+// the one-time ask kept ('yes' / 'no', arcade.contacts.allow:<page>), so a player who said yes stays allowed; a 'no'
+// is now only the switch being off, turned on again on the card.
+var ARCADE_CONTACTS = 'arcade.contacts.allow:', ARCADE_CONTACTS_USES = 'arcade.contacts.uses:';
+function arcadeContactsAllowed(id){ try { return localStorage.getItem(ARCADE_CONTACTS + id) === 'yes'; } catch (e) { return false; } }
+function arcadeContactsAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_CONTACTS + id, 'yes'); else localStorage.removeItem(ARCADE_CONTACTS + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:contacts', {detail: {id: id, on: !!on}}));
+}
+function arcadeContactsUses(id){ try { return localStorage.getItem(ARCADE_CONTACTS_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeContactsUsed(id){ try { localStorage.setItem(ARCADE_CONTACTS_USES + id, 'yes'); } catch (e) {} }
+function arcadeContactsOn(page, g){ return arcadeContactsAllowed(page) || !!(g && g.opens && arcadeContactsAllowed(g.opens)); }
+function arcadeContactsAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app see your contacts?',
+    '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. It will get the names and addresses in your address book, and '
+    + 'nothing else of it. An app can send what it gets to its own server: only allow an app you trust, after '
+    + 'checking its publisher. You can turn it off again on the app’s card.', 'Allow contacts')
+    .then(function(yes){ if (yes) arcadeContactsAllow(id, true); return !!yes; });
+}
+
+// GROUP CHATS, PER APP (arcade.groups, 2026-10-31, for Riffs). Off until the player turns it on: it opens private chats.
+var ARCADE_GROUPS = 'arcade.groups.allow:', ARCADE_GROUPS_USES = 'arcade.groups.uses:';
+function arcadeGroupsAllowed(id){ try { return localStorage.getItem(ARCADE_GROUPS + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGroupsAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_GROUPS + id, 'yes'); else localStorage.removeItem(ARCADE_GROUPS + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:groups', {detail: {id: id, on: !!on}}));
+}
+function arcadeGroupsUses(id){ try { return localStorage.getItem(ARCADE_GROUPS_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGroupsUsed(id){ try { localStorage.setItem(ARCADE_GROUPS_USES + id, 'yes'); } catch (e) {} }
+function arcadeGroupsOn(page, g){ return arcadeGroupsAllowed(page) || !!(g && g.opens && arcadeGroupsAllowed(g.opens)); }
+function arcadeGroupsAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app open your group chats?',
+    '\u201c' + (game || 'This app') + '\u201d is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. It will read your group chats, post in them as you, and see the names in '
+    + 'your address book, to choose who to add. Each post is a '
+    + 'small test-chain transaction from your wallet and can never be erased. An app can send what it reads to its own '
+    + 'server: only allow an app you trust, after checking its publisher. You can turn it off again on the app\u2019s card.',
+    'Allow group chats')
+    .then(function(yes){ if (yes) arcadeGroupsAllow(id, true); return !!yes; });
+}
+
+// Ticked on its card (the box is kept under the page Play opens, as Wallet access is).
+function arcadeMediaOn(page, g){ return arcadeMediaAllowed(page) || !!(g && g.opens && arcadeMediaAllowed(g.opens)); }
+
+// PICTURES IN THE APP, PER APP (2026-11-02, for Spatial World: live cameras and shared screens on screens in a 3D
+// world). With it on, the app itself gets the pictures of the players in its rooms (room.media.frames), so it can draw
+// them where it likes -- and could keep them. Off until the player turns it on; the card must say "pictures": true.
+// The sound stays in the viewer. The on-air pill says while pictures are going to the app.
+var ARCADE_PICTURES = 'arcade.pictures.allow:', ARCADE_PICTURES_USES = 'arcade.pictures.uses:';
+function arcadePicturesAllowed(id){ try { return localStorage.getItem(ARCADE_PICTURES + id) === 'yes'; } catch (e) { return false; } }
+function arcadePicturesAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_PICTURES + id, 'yes'); else localStorage.removeItem(ARCADE_PICTURES + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:pictures', {detail: {id: id, on: !!on}}));
+}
+function arcadePicturesUses(id){ try { return localStorage.getItem(ARCADE_PICTURES_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadePicturesUsed(id){ try { localStorage.setItem(ARCADE_PICTURES_USES + id, 'yes'); } catch (e) {} }
+function arcadePicturesOn(page, g){ return arcadePicturesAllowed(page) || !!(g && g.opens && arcadePicturesAllowed(g.opens)); }
+function arcadePicturesAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app show the pictures itself?',
+    '\u201c' + (game || 'This app') + '\u201d is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. It will get the live pictures of the cameras and shared screens in its '
+    + 'rooms, yours too, to draw them where it likes. An app that gets them could also keep them or send them to its own '
+    + 'server: only allow an app you trust, after checking its publisher. The arcade shows while it gets them. You can '
+    + 'turn it off again on the app\u2019s card.', 'Allow pictures in the app')
+    .then(function(yes){ if (yes) arcadePicturesAllow(id, true); return !!yes; });
+}
+
+// NOTIFICATIONS, PER APP (arcade/ring.py; 2026-10-23: call "at any time, even if the application is not open
+// through push notifications ... just like the Wallet access and camera and microphone access switches"; who may
+// ring: "My contacts only"). Kept per ACCOUNT on its node (every phone of the account rings), not in this browser.
+// Turning one on wakes this device's push (the Messenger's), and hands the node the addresses in this browser's
+// address book: only they can ring. The book is handed over again whenever it may have changed (arcadeRingBook).
+var ARCADE_RING_ON = 'arcade.ring.on', ARCADE_RING_BOOK = 'arcade.ring.book';
+function _arcadeB64(s){
+  var pad = '='.repeat((4 - s.length % 4) % 4), raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  var out = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+function _arcadeJson(path, body){
+  return fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
+                      body: JSON.stringify(body)}).then(function(r){ return r.json().then(function(j){ j._ok = r.ok; return j; }); });
+}
+// This device can be woken: asks the browser, subscribes, tells the node. Resolves '' or why not.
+function arcadePushOn(){
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    return Promise.resolve(ios ? 'On an iPhone: Share \u2192 Add to Home Screen, open the arcade from there, then turn this on.'
+                               : 'This browser cannot show notifications.');
+  }
+  return fetch('/push/key', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(info){
+    if (!info.enabled) return 'This arcade does not send notifications.';
+    return Notification.requestPermission().then(function(answer){
+      if (answer !== 'granted') return 'Notifications are blocked for this site in the browser\u2019s settings.';
+      return navigator.serviceWorker.ready.then(function(reg){
+        return reg.pushManager.getSubscription().then(function(sub){
+          return sub || reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: _arcadeB64(info.key)});
+        });
+      }).then(function(sub){ return _arcadeJson('/account/push/subscribe', sub.toJSON()); })
+        .then(function(j){ return j._ok ? '' : (j.detail || 'Could not turn notifications on here.'); });
+    });
+  }).catch(function(){ return 'Could not turn notifications on here.'; });
+}
+// Hand the node who may ring: the addresses in this browser's address book, when they changed.
+function arcadeRingBook(force){
+  try { if (!force && localStorage.getItem(ARCADE_RING_ON) !== 'yes') return Promise.resolve(); } catch (e) { return Promise.resolve(); }
+  return import('/messaging.js').then(function(mail){ return mail.book(); }).then(function(all){
+    var allow = (all || []).map(function(c){ return c && c.address; }).filter(Boolean).sort();
+    var said = allow.join(',');
+    try { if (!force && localStorage.getItem(ARCADE_RING_BOOK) === said) return; } catch (e) {}
+    return _arcadeJson('/account/ring/allow', {allow: allow}).then(function(j){
+      if (j._ok) try { localStorage.setItem(ARCADE_RING_BOOK, said); } catch (e) {}
+    });
+  }).catch(function(){});
+}
+function arcadeRingWords(game, publisher, address){
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. With this on, the people in your address book can ring you in it '
+    + 'when it is closed: your phone shows a notification. Nobody else can. Check that this is the app’s real '
+    + 'publisher first. You can turn it off again on the app’s card.';
+}
+// The card's switch, turned on: asked, then this device woken and the book handed over. Resolves '' or why not.
+function arcadeRingAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app ring you?', arcadeRingWords(game, publisher, address), 'Allow notifications')
+    .then(function(yes){
+      if (!yes) return 'no';
+      return arcadePushOn().then(function(why){
+        if (why) return why;
+        return _arcadeJson('/account/ring/apps', {app: id, on: true}).then(function(j){
+          if (!j._ok) return j.detail || 'Could not turn it on.';
+          try { localStorage.setItem(ARCADE_RING_ON, 'yes'); } catch (e) {}
+          return arcadeRingBook(true).then(function(){ return ''; });
+        });
+      });
+    });
+}
+function arcadeRingOff(id){ return _arcadeJson('/account/ring/apps', {app: id, on: false}); }
+// Notifications on for an app, the first time included. '' when on, else what went wrong in the reader's words.
+function arcadeRingOn(id){
+  return arcadePushOn().then(function(why){
+    if (why) return why;
+    return _arcadeJson('/account/ring/apps', {app: id, on: true}).then(function(j){
+      if (!j._ok) return j.detail || 'Notifications could not be turned on.';
+      try { localStorage.setItem(ARCADE_RING_ON, 'yes'); } catch (e) {}
+      return arcadeRingBook(true).then(function(){ return ''; });
+    });
+  });
+}
+// ONE APP'S PERMISSIONS, in one place (2026-11-01, the operator: "once the app is installed ... you have to delete the app and
+// then reinstall it"): what the sheets, the app's Permissions window and Remove from arcade all change. ids: the page the
+// app opens first, then its card: a switch may have been set under either (arcadeGameOn reads both), so off clears all.
+// Notifications are kept by the node, so they are read with /account/ring/apps, not here.
+var ARCADE_PERM_KINDS = ['wallet', 'contacts', 'groups', 'media', 'pictures', 'notify'];
+var ARCADE_PERM_DOORS = {
+  wallet: [arcadeGameAllowed, arcadeGameAllow], contacts: [arcadeContactsAllowed, arcadeContactsAllow],
+  groups: [arcadeGroupsAllowed, arcadeGroupsAllow], media: [arcadeMediaAllowed, arcadeMediaAllow],
+  pictures: [arcadePicturesAllowed, arcadePicturesAllow]
+};
+function arcadeAppPerm(kind, ids){ var d = ARCADE_PERM_DOORS[kind]; return !!d && ids.some(function(id){ return d[0](id); }); }
+function arcadeAppPermSet(kind, ids, on){
+  if (kind === 'notify') {
+    if (on) return arcadeRingOn(ids[0]);
+    return Promise.all(ids.map(arcadeRingOff)).then(function(){ return ''; }, function(){ return ''; });
+  }
+  var d = ARCADE_PERM_DOORS[kind];
+  if (d) { if (on) d[1](ids[0], true); else ids.forEach(function(id){ d[1](id, false); }); }
+  return Promise.resolve('');
+}
+// The book may have changed since it was last handed over (the Address book, a game's arcade.contacts.add): once
+// a page has settled, and only where an app was switched on in this browser.
+document.addEventListener('DOMContentLoaded', function(){
+  setTimeout(function(){ if (typeof ARCADE_SIGNED !== 'undefined' && ARCADE_SIGNED) arcadeRingBook(false); }, 4000);
+});
+
+// Whether the wallet is open in this browser now (the card shows it beside the switch).
+function arcadeWalletOpen(){
+  return import('/wallet.js').then(function(w){ return w.opened(ARCADE_CHAIN); }).then(function(k){ return !!k; }).catch(function(){ return false; });
+}
+
+async function arcadeKeys(chain, why){
+  var w = await import('/wallet.js');
+  if (!_arcadeUnlockOpen) {
+    _arcadeUnlockOpen = (async function(){
+      var keys = await w.opened(chain || ARCADE_CHAIN);
+      if (keys) return {keys: keys, chain: chain || ARCADE_CHAIN};
+      if (!ARCADE_ME) return {signIn: true};
+      return {opened: await arcadeUnlockSheet(why || 'This needs your key.')};
+    })().finally(function(){ _arcadeUnlockOpen = null; });
+  }
+  var got = await _arcadeUnlockOpen;
+  if (got.keys) return got.chain === (chain || ARCADE_CHAIN) ? got.keys : await w.opened(chain || ARCADE_CHAIN);
+  if (got.signIn) {
+    arcadeSignIn(why);
+    throw new Error('Sign in first: this action needs your wallet.');
+  }
+  if (!got.opened) throw new Error('Unlock your wallet to do that.');
+  return chain ? await w.opened(chain) : got.opened;
+}
+
+// A message list that follows what is written into it only while the reader is at its bottom (SadFrog, 2026-10-24: a
+// renter "cannot scroll up to see what it typed before; it keeps locked in on the active typing of the model"). Scrolling
+// up -- wheel, touch, keys -- stops following at once; scrolling back to the bottom resumes it. Returns toBottom(force):
+// call it after each change; force (the reader's own message, a redraw) jumps down and follows again. The Exchange's
+// LLM chat and the corner helper both use it.
+function arcadeFollow(list){
+  // Judged by which way the view moved, since text keeps landing between a scroll and its event: a move up is the
+  // reader leaving; a move down (or our own jump) that ends near the bottom -- within 120 px, for the text that landed
+  // meanwhile -- is following again, but not within 400 ms of the reader reaching up: a browser scrolls on the wheel
+  // before the page hears of it, so a piece of text may already have pulled the view back down by then.
+  // A drop that comes with the list getting SHORTER is not the reader: a placeholder ("Thinking...") replaced by
+  // the first words, or a code block closing, pulls scrollTop down with nobody touching it (Claude's review, 2026-10-25).
+  var follow = true, last = 0, lastHeight = 0, leftAt = 0, touchY = null;
+  function leave(){ follow = false; leftAt = Date.now(); }
+  list.addEventListener('scroll', function(){
+    if (list.scrollTop < last - 2 && list.scrollHeight >= lastHeight) leave();
+    else if (list.scrollHeight - list.scrollTop - list.clientHeight < 120 && Date.now() - leftAt > 400) follow = true;
+    last = list.scrollTop; lastHeight = list.scrollHeight;
+  }, {passive: true});
+  list.addEventListener('wheel', function(e){ if (e.deltaY < 0) leave(); }, {passive: true});
+  // A finger dragging DOWN shows older text (the reader leaving); dragging up, or an iOS bounce at the bottom, does not.
+  list.addEventListener('touchstart', function(e){ touchY = e.touches.length ? e.touches[0].clientY : null; }, {passive: true});
+  list.addEventListener('touchmove', function(e){
+    if (touchY !== null && e.touches.length && e.touches[0].clientY - touchY > 6) leave();
+  }, {passive: true});
+  list.addEventListener('keydown', function(e){ if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') leave(); });
+  return function toBottom(force){
+    if (force) { follow = true; leftAt = 0; }
+    if (follow) { list.scrollTop = list.scrollHeight; last = list.scrollTop; lastHeight = list.scrollHeight; }
+  };
+}
+
+// Every field has a name a screen reader can say (a tester, 2026-09-26: 78
+// inputs across the site had only a placeholder). One pass after the page is
+// drawn and after each in-place redraw: a field with no <label>, no aria-label
+// and no aria-labelledby is named by its placeholder, or its name.
+function arcadeLabel(root){
+  (root || document).querySelectorAll('input:not([type=hidden]),textarea,select').forEach(function(el){
+    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return;
+    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
+    if (el.closest('label')) return;
+    var name = el.getAttribute('placeholder') || el.getAttribute('title') || el.name;
+    if (name) el.setAttribute('aria-label', name);
+  });
+}
+// Every time the server writes, in the reader's own time zone (the operator,
+// 2026-09-27). The server sends <time class="lt" datetime="…Z"> in UTC; this says
+// it the way the reader's clock does. Run on load and after every in-place
+// refresh (the MutationObserver below), so a refreshed page is local too.
+function arcadeLocalTimes(root){
+  (root || document).querySelectorAll('time.lt[datetime]:not([data-done])').forEach(function(t){
+    var at = new Date(t.getAttribute('datetime'));
+    if (isNaN(at)) return;
+    var style = t.getAttribute('data-lt');
+    var opts = style === 'time' ? {hour: 'numeric', minute: '2-digit'}
+             : style === 'day' ? {weekday: 'short', hour: 'numeric', minute: '2-digit'}
+             : {year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'};
+    try { t.textContent = at.toLocaleString(undefined, opts); } catch (e) { return; }
+    t.title = at.toLocaleString(undefined, {dateStyle: 'full', timeStyle: 'long'});
+    t.setAttribute('data-done', '1');
+  });
+}
+document.addEventListener('DOMContentLoaded', function(){
+  arcadeLocalTimes();
+  arcadeLabel();
+  try { new MutationObserver(function(){ arcadeLabel(); arcadeLocalTimes(); })
+          .observe(document.body, {childList: true, subtree: true}); } catch (e) {}
+});
+
+// The whole picker, shared by both composers: remember what was chosen, offer
+// the three sizes, and swap the file in the input so the form carries whichever
+// one is selected. `drawText` is the one part each composer does its own way.
+var arcadeAttach = {original: null, choices: null, chosen: null};
+
+function arcadePick(input, drawText){
+  var file = input.files && input.files[0];
+  var sizes = document.getElementById('picked-sizes');
+  if (!file) {
+    arcadeAttach = {original: null, choices: null, chosen: null};
+    if (sizes) { sizes.innerHTML = ''; sizes.hidden = true; }
+    drawText(null);
+    return;
+  }
+  // A change event means the person chose a file; a swap of our own does not
+  // raise one, so anything arriving here is a new pick.
+  arcadeAttach = {original: file, choices: null, chosen: null};
+  drawText(file);
+  if (!sizes || !arcadeIsImage(file)) return;
+  if (!arcadeCanSwapFiles()) return;        // cannot undo a choice; do not offer
+
+  sizes.hidden = false;
+  sizes.innerHTML = '<span class="muted">measuring sizes…</span>';
+  arcadeOfferSizes(file, function(results){
+    if (arcadeAttach.original !== file) return;       // superseded by a new pick
+    arcadeAttach.choices = results;
+    // A picture that already fits in one piece goes as it is: a re-encode
+    // saves a few hundred bytes and no transaction (2026-09-29).
+    // Medium when it was offered, and otherwise the picture as it is: never
+    // Small by default, which silently shrank a 256x1960 map to 84x640
+    // (2026-09-29). Small is still there to choose.
+    var preferred = (arcadeFileCost(file.size).chunks <= 1 ? results[0] : null)
+                 || results.filter(function(r){ return r.key === 'medium'; })[0]
+                 || results[0];
+    arcadeChoose(input, preferred.key, drawText);
+  });
+}
+
+function arcadeChoose(input, key, drawText){
+  var choices = arcadeAttach.choices || [];
+  var choice = choices.filter(function(r){ return r.key === key; })[0];
+  if (!choice) return;
+  arcadeAttach.chosen = key;
+  arcadePutFile(input, choice.file);
+  drawText(choice.file, choice);
+
+  var sizes = document.getElementById('picked-sizes');
+  if (!sizes) return;
+  sizes.innerHTML = '';
+  choices.forEach(function(r){
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost small size' + (r.key === key ? ' on' : '');
+    var cost = arcadeFileCost(r.bytes);
+    // The piece count beside the bytes and the coins. Kilobytes are not what a
+    // person is deciding between: what one size saves is transactions, each
+    // one with a fee in front of it and one block in front of the whole file,
+    // and 74 KB says nothing of it.
+    button.innerHTML = '<strong>' + r.label + '</strong> ' +
+      (r.width ? r.width + '&times;' + r.height + ' · ' : '') +
+      arcadeSize(r.bytes) + ' · ' + arcadeCoins(cost.coins) +
+      (arcadeAttach.original && r.file.type !== arcadeAttach.original.type
+        ? ' · as ' + (r.file.type === 'image/png' ? 'PNG' : 'JPEG') : '') +
+      (cost.chunks > 1 ? ' · ' + cost.chunks.toLocaleString() + ' pieces' : '');
+    button.title = r.hint;
+    button.addEventListener('click', function(){
+      arcadeChoose(input, r.key, drawText);
+    });
+    sizes.appendChild(button);
+  });
+}
+
+function arcadeFileCost(bytes){
+  var perChunk = 7628, perOutput = 60, dustEach = 0.01, feePerChunk = 0.09;
+  var chunks = Math.ceil(bytes / perChunk);
+  var outputs = Math.ceil(bytes / perOutput) + chunks;
+  return {chunks: chunks, outputs: outputs,
+          coins: outputs * dustEach + chunks * feePerChunk};
+}
+
+// Show what a new block brought, IN PLACE. The page is never reloaded by itself.
+//
+// History: this used to be location.reload() on every block (~once a minute), which shut
+// open sections, jumped the scroll, blinked the page and ate what was about to be typed
+// (2026-09-25: "the page shouldn't be auto reloading; the page components
+// should"). A first in-place version (branch live-updates, 2026-09-23, never merged)
+// merged the fresh page straight into the open one -- which also overwrote whatever the
+// page had drawn for itself in the browser: balances, "on its way", a reply box the
+// reader opened, the older posts they had scrolled into.
+//
+// So this one is THREE-WAY. It keeps the server's previous copy of the page (`base`) and,
+// on a change, applies to the open document only what the SERVER changed between that copy
+// and the new one. Anything the server did not change -- including every part the page
+// drew itself and every section a person opened -- is left exactly as it is. The page's
+// own components hear `arcade:changed` and redraw their browser-side parts themselves.
+(function () {
+  var el = document.getElementById('live');       // where a short notice can go
+  var known = parseInt(
+    (document.body && document.body.dataset.generation) ||
+    (el && el.dataset.generation) || '0', 10);
+  var base = null;          // the server's copy of this page as of `known`
+  var fetching = false;
+
+  function frozen() {
+    // Moments when nothing on the page may move at all. The wallet signing
+    // (templates/wallet_js.js), a trade being relayed (inscription_view.html), a file
+    // going up in pieces (_account_inscribe.html), an open confirmation: each of these
+    // once lost work to the old reload. Typing is NOT here: fields are protected one by
+    // one in dirty()/keep(), so a message can arrive while somebody writes one.
+    var d = document.body.dataset;
+    return !!(d.working || d.trading || d.inscribing || document.querySelector('.confirm'));
+  }
+
+  function dirty(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (!/^(TEXTAREA|INPUT|SELECT)$/.test(node.nodeName)) return false;
+    if (node === document.activeElement) return true;
+    if (node.type === 'checkbox' || node.type === 'radio') return node.checked !== node.defaultChecked;
+    if (node.type === 'hidden') return false;
+    return !!(node.value && node.value.trim());
+  }
+
+  function keep(node) {
+    // Never demolish a branch holding the caret, a half-written field or work in flight.
+    if (!node || node.nodeType !== 1) return false;
+    var a = document.activeElement;
+    if (a && a !== document.body && node.contains(a)) return true;
+    if (node.hasAttribute('data-working') || (node.classList && node.classList.contains('confirm'))) return true;
+    if (dirty(node)) return true;
+    var f = node.querySelectorAll('textarea, input, select');
+    for (var i = 0; i < f.length; i++) if (dirty(f[i])) return true;
+    return false;
+  }
+
+  function key(n) {
+    // What a child is, for lining two lists up: an id if it has one, else the first id
+    // inside it (a feed card carries reply-<txid>), else its tag. Text is keyed by text.
+    if (n.nodeType === 3) return '#t' + n.nodeValue.trim();
+    if (n.nodeType !== 1) return '#' + n.nodeType;
+    if (n.id) return n.nodeName + '#' + n.id;
+    if (n.getAttribute('data-key')) return n.nodeName + '@' + n.getAttribute('data-key');
+    var inner = n.querySelector && n.querySelector('[id]');
+    return n.nodeName + '>' + (inner ? inner.id : '');
+  }
+
+  function attrs(live, was, now) {
+    var i, at, n;
+    for (i = 0; i < now.attributes.length; i++) {
+      at = now.attributes[i]; n = at.name;
+      if (was.getAttribute(n) !== at.value && live.getAttribute(n) === was.getAttribute(n)) live.setAttribute(n, at.value);
+    }
+    for (i = 0; i < was.attributes.length; i++) {
+      n = was.attributes[i].name;
+      if (!now.hasAttribute(n) && live.getAttribute(n) === was.getAttribute(n)) live.removeAttribute(n);
+    }
+  }
+
+  function apply(live, was, now) {
+    if (!live || !was || !now) return;
+    if (was.nodeType === 3 || was.nodeType === 8) {
+      // Text the server changed, where the page has not drawn over it.
+      if (was.nodeValue !== now.nodeValue && live.nodeType === was.nodeType &&
+          live.nodeValue === was.nodeValue) live.nodeValue = now.nodeValue;
+      return;
+    }
+    if (was.nodeType !== 1 || was.isEqualNode(now)) return;   // the server changed nothing here
+    if (live.nodeType !== 1 || live.nodeName !== was.nodeName) return;   // reshaped by the page
+    if (live.hasAttribute('data-client')) return;   // drawn in the browser; it redraws itself
+    if (live.nodeName === 'SCRIPT' || live.nodeName === 'STYLE') return;
+    if (was.nodeName !== now.nodeName || (was.id || '') !== (now.id || '')) {
+      if (!keep(live)) live.parentNode.replaceChild(document.importNode(now, true), live);
+      return;
+    }
+    if (dirty(live)) return;
+    attrs(live, was, now);
+    var W = Array.prototype.slice.call(was.childNodes),
+        N = Array.prototype.slice.call(now.childNodes),
+        L = Array.prototype.slice.call(live.childNodes), i, j = 0, M = [];
+    // Line the open page's children up with the server's old ones by what they are, not
+    // where they are: the page adds its own (a floating note, the picture viewer) and those
+    // are simply stepped over. A server child the page has removed maps to nothing.
+    for (i = 0; i < W.length; i++) {
+      var k = key(W[i]), found = -1;
+      for (var t = j; t < L.length; t++) if (key(L[t]) === k) { found = t; break; }
+      if (found >= 0) { M[i] = L[found]; j = found + 1; } else M[i] = null;
+    }
+    // Text the page redrew no longer matches the server's old words, so it lined up
+    // with nothing, and the server's new words were then ADDED beside it: a like
+    // drawn at once as "♥ 1" became "♥ 1 ♥ 1" when its block landed
+    // (2026-09-28: "still seeing the double heart bug"). An unmatched
+    // server text takes the page's unmatched text in the same gap, so it is replaced.
+    var used = new Set(M.filter(Boolean));
+    for (i = 0; i < W.length; i++) {
+      if (M[i] || W[i].nodeType !== 3) continue;
+      var lo = 0, hi = L.length;
+      for (t = i - 1; t >= 0; t--) if (M[t]) { lo = L.indexOf(M[t]) + 1; break; }
+      for (t = i + 1; t < W.length; t++) if (M[t]) { hi = L.indexOf(M[t]); break; }
+      for (t = lo; t < hi; t++) if (L[t].nodeType === 3 && !used.has(L[t])) {
+        M[i] = L[t]; used.add(L[t]); break;
+      }
+    }
+    if (W.length === N.length) {
+      var same = true;
+      for (i = 0; i < W.length; i++) if (key(W[i]) !== key(N[i])) { same = false; break; }
+      if (same) { for (i = 0; i < W.length; i++) if (M[i]) apply(M[i], W[i], N[i]); return; }
+    }
+    // The server added or removed children: keep the common head and tail, swap the middle.
+    var p = 0, s = 0;
+    while (p < W.length && p < N.length && key(W[p]) === key(N[p])) p++;
+    while (s < W.length - p && s < N.length - p &&
+           key(W[W.length - 1 - s]) === key(N[N.length - 1 - s])) s++;
+    for (i = p; i < W.length - s; i++) if (M[i] && keep(M[i])) return;   // a draft sits in what would go
+    for (i = 0; i < p; i++) if (M[i]) apply(M[i], W[i], N[i]);
+    for (i = 0; i < s; i++) {
+      var w = W.length - 1 - i;
+      if (M[w]) apply(M[w], W[w], N[N.length - 1 - i]);
+    }
+    // The old middle goes first: a head child's next sibling may be in it, and
+    // inserting before a node just taken out throws.
+    for (i = p; i < W.length - s; i++) if (M[i] && M[i].parentNode === live) live.removeChild(M[i]);
+    // Where the new middle goes: before the first surviving tail child, else after the
+    // last head child, else at the end.
+    var after = null;
+    for (i = W.length - s; i < W.length; i++) if (M[i]) { after = M[i]; break; }
+    if (!after) { for (i = p - 1; i >= 0; i--) if (M[i]) { after = M[i].nextSibling; break; } }
+    for (i = p; i < N.length - s; i++) live.insertBefore(document.importNode(N[i], true), after);
+  }
+
+  function version(doc) {
+    var f = doc.querySelector('footer.version');
+    return f ? f.textContent.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function offer(text) {
+    // Only the feed's "New posts are in" now (far down it, where moving the ground would lose the reader's place).
+    if (document.getElementById('newposts')) return;
+    var u = document.createElement('a');
+    u.id = 'newposts'; u.href = location.pathname + location.search; u.textContent = text;
+    u.style.cssText = 'position:fixed;left:16px;right:16px;margin:0 auto;width:fit-content;' +
+      'bottom:18px;z-index:5;padding:10px 18px;border-radius:999px;' +
+      'background:var(--accent);color:var(--accent-fg);font-weight:600;' +
+      'box-shadow:0 4px 16px rgba(0,0,0,.22);text-decoration:none';
+    document.body.appendChild(u);
+  }
+
+  function page() {
+    return fetch(location.href, {cache: 'no-store', credentials: 'same-origin',
+                                 headers: {'X-Arcade-Live': '1'}})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (h) { return new DOMParser().parseFromString(h, 'text/html'); });
+  }
+
+  // A tab nobody is looking at does not poll, and a page is fetched again at most
+  // once every 15 s however often the node moves (2026-10-05: with a game settling
+  // all the time the counter moved every 15 s, and every open tab -- hidden ones
+  // too -- fetched its whole page again each time).
+  // A market page (data-live-fast, 2026-10-17: orders and fills "near instantaneous as possible")
+  // asks every 1.5 s and patches within 2 s; every other page keeps the gentler pace.
+  var FAST = !!document.querySelector('[data-live-fast]');
+  var lastPage = 0, PAGE_EVERY = FAST ? 2000 : 15000;
+  function poll() {
+    if (fetching || document.hidden) return;
+    fetch('/events', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.generation === known) {
+          if (!base) {           // take the baseline while nothing is happening
+            fetching = true;
+            return page().then(function (doc) {
+              if (parseInt(doc.body.dataset.generation || '0', 10) === known) base = doc;
+            }).finally(function () { fetching = false; });
+          }
+          return;
+        }
+        if (frozen()) { if (el) el.textContent = 'something new — it shows when this finishes'; return; }
+        if (Date.now() - lastPage < PAGE_EVERY) return;   // the next poll after the gap takes it
+        if (document.body.dataset.reading) {
+          // Far down the feed: the posts above are the server's first page, the rest were
+          // added by scrolling. Say what is new rather than move the ground.
+          offer('New posts are in — show them'); known = data.generation; return;
+        }
+        fetching = true; lastPage = Date.now();
+        return page().then(function (doc) {
+          // No "tap to refresh" bar (2026-10-21: "This button comes up too often and seemingly for no reason
+          // can we just remove it?"). New site code is taken at the next page opened; until then this page keeps
+          // patching itself only while the code is the same (a page of other code is not patched by position), and
+          // a page with no baseline yet just takes this one as it -- it used to offer the bar, which on a busy
+          // arcade, never quiet long enough to take a baseline, was nearly every change.
+          if (base && version(doc) !== version(base)) {
+            /* another version: left as it is until the next page */
+          } else if (base && document.body.dataset.selfRefreshing) {
+            // A page that draws itself from the browser (/me, messages, the
+            // wallet) redraws on arcade:changed below; patching its server HTML
+            // by position under it moved and dropped what it had drawn.
+            if (document.title !== doc.title) document.title = doc.title;
+          } else if (base) {
+            if (document.title !== doc.title) document.title = doc.title;
+            apply(document.body, base.body, doc.body);
+          }
+          base = doc;
+          known = parseInt(doc.body.dataset.generation || data.generation, 10) || data.generation;
+          if (el) el.textContent = '';
+          try { document.dispatchEvent(new CustomEvent('arcade:changed', {detail: {generation: known}})); } catch (e) {}
+        }).catch(function () { /* the node was away; the next poll tries again */ })
+          .finally(function () { fetching = false; });
+      })
+      .catch(function () { /* node or server momentarily away; try again */ });
+  }
+  setInterval(poll, FAST ? 1500 : 5000);
+  setTimeout(poll, 300);   // the baseline, as soon as the page is up
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+  // For a page that used to reload itself to show new state: ask for the same update.
+  window.arcadeLiveUpdate = function () { known = -1; poll(); };
+  window.arcadePatch = apply;   // for tests/test_live_update.py
+})();
+</script>
+<script nonce="{{ csp_nonce }}">
+// Content screening's covers on pictures (arcade/moderation.py). The /content
+// route already serves a sensitive picture blurred and an unchecked one as
+// "checking"; this labels them and lets the viewer lift a cover. Nothing here
+// runs unless this arcade screens.
+(function () {
+  function ids() {
+    var out = {};
+    document.querySelectorAll('img[src*="/content/"]').forEach(function (img) {
+      var m = img.getAttribute('src').match(/\/content\/([0-9a-f]{64})(?![^?]*reveal)/);
+      if (m && !img.dataset.screened) (out[m[1]] = out[m[1]] || []).push(img);
+    });
+    return out;
+  }
+  function label(img, text, onclick) {
+    var tag = document.createElement('button');
+    tag.type = 'button'; tag.className = 'screenlabel'; tag.textContent = text;
+    tag.onclick = function (e) { e.preventDefault(); e.stopPropagation(); onclick(tag); };
+    var box = img.parentNode;
+    if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+    box.appendChild(tag);
+    // On a thumbnail the pill is wider than the picture and spread across the
+    // ones beside it (a tester, 2026-10-01: a wallet's three NFTs, one of them
+    // covered by a label the width of all three). Where it does not fit, it
+    // becomes a small cover over that one picture instead. Asked again when a
+    // lazy picture arrives, since until then it may have no size at all.
+    function fit() {
+      if (!tag.isConnected) return;
+      tag.classList.remove('small');
+      tag.textContent = text;
+      tag.style.width = tag.style.height = tag.style.left = tag.style.top = '';
+      var w = img.getBoundingClientRect().width, h = img.getBoundingClientRect().height;
+      if (w > 24 && h > 24 && (tag.offsetWidth > w - 8 || tag.offsetHeight > h - 8)) {
+        tag.classList.add('small');
+        tag.textContent = 'Sensitive \u00b7 tap to show';
+        tag.style.width = w + 'px'; tag.style.height = h + 'px';
+        tag.style.left = img.offsetLeft + 'px'; tag.style.top = img.offsetTop + 'px';
+      }
+    }
+    fit();
+    // Whenever the picture's size changes: it arrives, it is swapped, the
+    // phone turns. Until it has a size, no label is drawn small for it.
+    if (window.ResizeObserver) {
+      var watch = new ResizeObserver(function () {
+        if (!tag.isConnected) { watch.disconnect(); return; }
+        fit();
+      });
+      watch.observe(img);
+    } else {
+      img.addEventListener('load', fit);
+    }
+    return tag;
+  }
+  var looks = 0;                          // rounds of asking again for pictures still being checked (at most 3)
+  function look() {
+    var found = ids(), keys = Object.keys(found);
+    if (!keys.length) return;
+    fetch('/moderation/verdicts?ids=' + keys.join(','), {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (said) {
+        if (!said.enabled) return;
+        var again = false;
+        keys.forEach(function (key) {
+          var verdict = said.verdicts[key];
+          found[key].forEach(function (img) {
+            if (verdict === 'sensitive' && arcadeShowSensitive()) {
+              img.dataset.screened = '1';             // their setting: shown as it is
+              img.src = '/content/' + key + '?reveal=1';
+            } else if (verdict === 'sensitive') {
+              img.dataset.screened = '1';
+              label(img, 'Sensitive \u2014 tap to show', function (tag) {
+                img.src = '/content/' + key + '?reveal=1'; tag.remove();
+              });
+            } else if (verdict === null || verdict === undefined) {
+              // Still being checked: ask the picture again, at most three times, waiting longer each time (2026-10-20:
+              // a picture whose check never finished was fetched anew every 4 s for as long as the page was open --
+              // 70 requests and 810 KB on the Exchange). The picture itself is already showing meanwhile.
+              var tries = Number(img.dataset.screenTries || 0);
+              if (tries < 3) {
+                again = true;
+                img.dataset.screenTries = String(tries + 1);
+                setTimeout(function () {
+                  img.src = '/content/' + key + '?t=' + Date.now();
+                }, 5000 * Math.pow(3, tries));
+              }
+            } else {
+              img.dataset.screened = '1'; // ok, or removed: the picture says so itself
+            }
+          });
+        });
+        if (again && (looks += 1) <= 3) setTimeout(look, 5000 * Math.pow(3, looks - 1));
+      })
+      .catch(function () {});
+  }
+  document.addEventListener('DOMContentLoaded', look);
+  if (document.readyState !== 'loading') look();
+  document.addEventListener('arcade:changed', function () { looks = 0; look(); });   // new pictures: a fresh budget
+  window.arcadeScreenLook = look;       // for pictures a page draws later
+})();
+</script>
+<style>
+.screenlabel{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;
+  padding:7px 12px;border-radius:999px;border:0;background:rgba(0,0,0,.72);color:#fff;
+  font:600 .8rem/1.2 inherit;cursor:pointer;box-shadow:none;white-space:nowrap}
+.screenlabel.small{transform:none;padding:3px;border-radius:8px;white-space:normal;
+  font-size:.6rem;line-height:1.15;display:flex;align-items:center;justify-content:center;
+  text-align:center;overflow:hidden;background:rgba(0,0,0,.6)}
+.unlockbar{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
+  padding:8px 16px;background:color-mix(in srgb,var(--accent) 14%,var(--panel));
+  border-bottom:1px solid var(--line);font-size:.9rem}
+.shortpwbar{background:color-mix(in srgb,var(--warn) 16%,var(--panel))}
+.shortpwbar span{max-width:60em}
+.signbar{margin:0}
+.signbar input{width:100%;box-sizing:border-box;margin:0;padding:6px 10px;font-size:16px}
+.signbar-name,.signbar #signbar-pw{flex:1 1 140px;max-width:220px}
+.signbar-name{position:relative;display:block}
+.signbar-name input{padding-left:28px}
+.signbar-at{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.signbar-new{font-size:.86rem}
+.signbar-said{flex-basis:100%;text-align:center;color:var(--bad);font-size:.86rem}
+.askcard input[type=password]{margin-top:6px}
+.sens-wall{display:inline}
+.sens-btn{font:inherit;font-size:.82em;padding:1px 8px;border-radius:999px;border:1px dashed var(--line);
+  background:transparent;color:var(--muted);cursor:pointer}
+.arcadetoast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:60;
+  max-width:min(92vw,480px);display:flex;gap:10px;align-items:center;
+  box-shadow:0 6px 24px rgba(0,0,0,.35)}
+a.mention{font-weight:600;text-decoration:none}a.mention:hover{text-decoration:underline}
+.fulllink{display:inline-block;font-size:.84rem;margin:6px 0 2px;font-weight:600}
+.bubble img.postmedia{display:block;max-width:100%;max-height:340px;height:auto;
+  border-radius:10px;margin:6px 0;cursor:zoom-in}
+details.covered>summary{cursor:pointer;color:var(--muted);font-size:.9rem;padding:8px 12px;
+  border:1px dashed var(--line);border-radius:10px;list-style:none}
+details.covered[open]>summary{margin-bottom:6px}
+</style>
+<script nonce="{{ csp_nonce }}">
+// Blocked people (2026-09-25): kept in this browser only, like the
+// address book, so this node never learns who anybody blocked. Pages read it to
+// hide what those people post and send; the address book lists and undoes it.
+window.arcadeBlocked = (function () {
+  var KEY = 'arcade.blocked';
+  function all() {
+    try { var v = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch (e) { return []; }
+  }
+  function save(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {}
+    try { document.dispatchEvent(new CustomEvent('arcade:blocked')); } catch (e) {}
+  }
+  return {
+    all: all,
+    has: function (address) {
+      address = String(address || '').toLowerCase();
+      return !!address && all().some(function (b) { return String(b.address).toLowerCase() === address; });
+    },
+    add: function (tag, address) {
+      if (!address) return;
+      var list = all().filter(function (b) { return b.address !== address; });
+      // A block after an unblock wins (the account's copy, messaging.js syncMailbox).
+      try { var g = JSON.parse(localStorage.getItem('arcade.blocked.gone') || '{}'); delete g[address];
+            localStorage.setItem('arcade.blocked.gone', JSON.stringify(g)); } catch (e) {}
+      list.push({tag: String(tag || '').replace(/^@/, ''), address: address, at: Date.now()});
+      save(list);
+    },
+    remove: function (address) {
+      // Remembered with a time, so another device's copy does not block them again.
+      try { var g = JSON.parse(localStorage.getItem('arcade.blocked.gone') || '{}'); g[address] = Date.now();
+            localStorage.setItem('arcade.blocked.gone', JSON.stringify(g)); } catch (e) {}
+      save(all().filter(function (b) { return b.address !== address; }));
+    }
+  };
+})();
+</script>
+{% if account_here and not embed and path not in ('/me', '/join') %}
+<script type="module" nonce="{{ csp_nonce }}">
+// Nobody can write to an account that has not published its messaging key, so
+// signup publishes it straight after claiming the name. When that fails -- no
+// coins yet, the first transaction still settling -- /me used to be the only
+// page that tried again, and somebody who never opened it stayed unreachable
+// (2026-09-26: "message keys should automatically be posted when an
+// account is created"; 9 of 43 names had none). So every page checks, quietly,
+// at most once every ten minutes per tab, and only with the wallet open here.
+(async () => {
+  const LAST = "arcade.keycheck";
+  try {
+    if (Date.now() - Number(sessionStorage.getItem(LAST) || 0) < 600e3) return;
+    sessionStorage.setItem(LAST, String(Date.now()));
+  } catch (e) { return; }
+  const CHAIN = {network: {{ state.messaging.network|tojson }},
+                 version: {{ state.messaging.params.pubkeyhash_version }}};
+  const wallet = await import("/wallet.js");
+  const keys = await wallet.opened(CHAIN);
+  if (!keys) return;
+  const said = await wallet.state();
+  const first = (said.chains || [])[0] || {};
+  const coins = Number(first.spendable ?? (Number(first.balance || 0) + Number(first.incoming || 0)));
+  if (!(coins > 0) || document.body.dataset.working) return;
+  // One spend at a time in this browser (wallet.spending): a swap proposed in the same
+  // second picked the same coin and the node refused one of them (2026-10-13).
+  await wallet.spending(async () => {
+    if (!said.tag && !said.claiming && said.name) {
+      try { await wallet.claim(keys); } catch (e) { return; }
+    }
+    if (!said.announced && !said.announcing) {
+      const mail = await import("/messaging.js");
+      const me = await mail.identity(keys.phrase);
+      try { await mail.announce(keys, me, said.tag || said.name || ""); }
+      catch (e) { try { sessionStorage.removeItem(LAST); } catch (x) {} }
+    }
+  });
+})().catch(() => {});
+</script>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+// The installable app (2026-09-25): register the service worker that keeps
+// an offline page and shows Messenger notifications. It caches no pages
+// (sw.js), so the live, in-place refresh above is untouched. Not in an embed:
+// a framed document is not an app. The revision is in the URL because
+// Cloudflare caches /sw.js for hours whatever the node says: a new release
+// is a new URL, so phones get it at once.
+{% if not embed %}
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js?v={{ state.running_version or "dev" }}', {scope: '/'}).catch(function () {});
+  });
+}
+{% endif %}
+</script>
+{% if not embed and not fullscreen %}
+<footer class="version">
+  {% if state.running_version %}running {{ state.running_version }}{% endif %}
+  {% if public %}
+  &middot; <a href="/clone">run your own</a>
+  {% else %}
+  &middot; <a href="/backup">back up your wallet</a>
+  {% endif %}
+  {% if terms_link %}&middot; <a href="/terms">terms of use</a>{% endif %}
+  &middot; <a href="#" id="theme-pick" title="Light, dark, or as this device is set">Theme: Auto</a>
+  {#- What ArcadeCore's menus open, in this look too (2026-11-08): its Settings -> Theme… and Your tabs…, Window ->
+      Console and Build. Inside the window each opens the window's own (base.html's click above). #}
+  &middot; <a href="/look">theme and tabs</a> &middot; <a href="/console">console</a> &middot; <a href="/build">build</a>
+</footer>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var a = document.getElementById('theme-pick'), NAMES = {auto: 'Auto', light: 'Light', dark: 'Dark'};
+  function label() { a.textContent = 'Theme: ' + NAMES[window.arcadeTheme()]; }
+  a.addEventListener('click', function (e) {
+    e.preventDefault();
+    var now = window.arcadeTheme();
+    window.arcadeTheme(now === 'auto' ? 'light' : now === 'light' ? 'dark' : 'auto');
+    label();
+  });
+  label();
+})();
+</script>
+{% endif %}
+{% if not embed and not fullscreen %}
+<script nonce="{{ csp_nonce }}">
+// Add to Home Screen (2026-10-05, the operator: "add a pop-up ... when it is not opened as
+// a PWA telling them to add it to their home screen ... or just a button that will
+// add it ... on both android and Apple phones and whatever other cell phones").
+// Where the browser can install (Chrome, Edge, Samsung Internet on Android) the
+// button asks it to; where it cannot (every iPhone browser, Firefox, the rest)
+// the card says the steps for THAT browser. Phones only, never inside the
+// installed app, never over a card or a game in full screen; "Not now" for a
+// week; a link in the footer for later.
+(function(){
+  var standalone = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  if (standalone) return;
+  var ua = navigator.userAgent || '';
+  var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var android = /Android/i.test(ua);
+  if (!ios && !android && !/Mobile|Mobi|Tablet/i.test(ua)) return;   // a computer: not here
+  var KEY = 'arcade.a2hs', ask = null;
+  function said(){ try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } }
+  function say(v){ try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); ask = e; });
+  window.addEventListener('appinstalled', function () { say({installed: true}); close(); });
+
+  var inApp = /FBAN|FBAV|Instagram|Line\/|Twitter|TikTok|Snapchat|Pinterest|; wv\)/i.test(ua);
+  var share = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" style="vertical-align:-3px"><path d="M12 3v12M8 7l4-4 4 4"/>' +
+    '<path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+  function steps(){
+    if (inApp) return 'This page is open inside another app. Open it in ' + (ios ? 'Safari' : 'Chrome') +
+      ' first (the &#8943; menu, then <b>Open in browser</b>), then add it from there.';
+    if (ios && /CriOS/.test(ua)) return 'Tap ' + share + ' <b>Share</b> in the address bar, then <b>Add to Home Screen</b>.';
+    if (ios && /FxiOS/.test(ua)) return 'Tap the menu &#9776;, then <b>Share</b>, then <b>Add to Home Screen</b>.';
+    if (ios) return 'Tap ' + share + ' <b>Share</b> at the bottom of Safari, scroll down, and tap <b>Add to Home Screen</b>.';
+    if (/SamsungBrowser/.test(ua)) return 'Tap the menu &#9776;, then <b>Add page to</b>, then <b>Home screen</b>.';
+    if (/Firefox/.test(ua)) return 'Tap the menu &#8942;, then <b>Install</b> (or <b>Add to Home screen</b>).';
+    return 'Open your browser&#8217;s menu &#8942; and tap <b>Install app</b> or <b>Add to Home screen</b>.';
+  }
+  var card = null;
+  function close(){ if (card) { card.remove(); card = null; } }
+  function open(fromLink){
+    if (card) return;
+    if (!fromLink && (document.querySelector('.askcard') || document.querySelector('.askcard-back'))) return;
+    card = document.createElement('div');
+    card.setAttribute('role', 'dialog');
+    card.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);' +
+      'z-index:55;max-width:460px;margin:0 auto;padding:14px 16px;border-radius:14px;' +
+      'background:var(--panel);color:var(--fg);border:1px solid var(--line);' +
+      'box-shadow:0 8px 28px rgba(0,0,0,.28);font-size:.95rem;line-height:1.4';
+    card.innerHTML = '<div style="display:flex;gap:12px;align-items:flex-start">' +
+      '<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:10px;flex:none">' +
+      '<div style="flex:1"><b>Add {{ brand.name }} to your home screen</b>' +
+      '<div style="color:var(--muted);margin-top:4px">It opens full screen like an app, with nothing to download.</div>' +
+      '<div class="a2hs-how" style="margin-top:8px"></div></div></div>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">' +
+      '<button type="button" class="btn ghost small a2hs-later">Not now</button>' +
+      '<button type="button" class="btn small a2hs-go"></button></div>';
+    var how = card.querySelector('.a2hs-how'), go = card.querySelector('.a2hs-go');
+    if (ask) {
+      how.textContent = '';
+      go.textContent = 'Add to Home Screen';
+      go.onclick = function () {
+        var e = ask; ask = null;
+        e.prompt();
+        (e.userChoice || Promise.resolve({})).then(function (r) {
+          if (r && r.outcome === 'accepted') say({installed: true});
+          close();
+        });
+      };
+    } else {
+      how.innerHTML = steps();
+      if (inApp && navigator.clipboard) {
+        go.textContent = 'Copy the link';
+        go.onclick = function () { navigator.clipboard.writeText(location.href).then(function(){ go.textContent = 'Copied'; }); };
+      } else {
+        go.textContent = 'Got it';
+        go.onclick = function () { say({later: Date.now()}); close(); };
+      }
+    }
+    card.querySelector('.a2hs-later').onclick = function () { say({later: Date.now()}); close(); };
+    document.body.appendChild(card);
+  }
+  window.arcadeAddToHome = function () { open(true); };
+  // The footer keeps a way back to it after "Not now".
+  var foot = document.querySelector('footer.version');
+  if (foot) {
+    var link = document.createElement('a');
+    link.href = '#'; link.textContent = 'add to home screen';
+    link.onclick = function (e) { e.preventDefault(); open(true); };
+    foot.appendChild(document.createTextNode(' · '));
+    foot.appendChild(link);
+  }
+  var was = said();
+  if (was.installed || (was.later && Date.now() - was.later < 7 * 86400 * 1000)) return;
+  // A moment after the page settles, so the browser has had its chance to offer
+  // an install (beforeinstallprompt) and the page is not covered while it loads.
+  setTimeout(function () { open(false); }, 4000);
+})();
+</script>
+{% endif %}
+{% if not embed and not fullscreen %}
+<script nonce="{{ csp_nonce }}">
+// Pull to refresh in the installed app (2026-09-27: "When I'm in the
+// PWA on my iPhone, if I scroll all the way to the top and I pull down ... it
+// would refresh the page. I would like it to have the same behavior in the
+// PWA"). Safari gives a tab this and gives a home-screen app nothing, so the
+// page does it: only when installed, only from the very top, and never while
+// something under the finger can still scroll up, a card is open, or a box
+// is being typed in.
+(function(){
+  var standalone = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  if (!standalone || !('ontouchstart' in window)) return;
+  var PULL = 80, startY = null, dist = 0, pill = null;
+  function show(d){
+    if (!pill){
+      pill = document.createElement('div');
+      pill.style.cssText = 'position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 6px);' +
+        'transform:translateX(-50%);z-index:60;padding:6px 14px;border-radius:999px;font-size:.85rem;' +
+        'background:var(--panel);color:var(--fg);border:1px solid var(--line);' +
+        'box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .15s';
+      document.body.appendChild(pill);
+    }
+    pill.style.opacity = Math.min(1, d / PULL);
+    pill.textContent = d >= PULL ? 'Release to refresh' : 'Pull to refresh';
+  }
+  function hide(){ if (pill){ pill.remove(); pill = null; } }
+  function canScrollUp(el){
+    for (; el && el !== document.body && el !== document.documentElement; el = el.parentElement){
+      if (el.scrollTop > 0) return true;
+    }
+    return false;
+  }
+  document.addEventListener('touchstart', function(e){
+    startY = null; dist = 0;
+    if (e.touches.length !== 1 || window.scrollY > 0) return;
+    if (document.querySelector('.askcard-back')) return;
+    // Never mid-signature, mid-trade or mid-upload: the same moments the live
+    // redraw holds off for (frozen(), above).
+    var d = document.body.dataset;
+    if (d.working || d.trading || d.inscribing || document.querySelector('.confirm')) return;
+    var t = e.target;
+    if (t && t.closest && t.closest('input,textarea,select,[contenteditable]')) return;
+    if (canScrollUp(t)) return;
+    startY = e.touches[0].clientY;
+  }, {passive: true});
+  document.addEventListener('touchmove', function(e){
+    if (startY === null) return;
+    dist = e.touches[0].clientY - startY;
+    if (dist > 10 && window.scrollY <= 0) show(dist); else hide();
+  }, {passive: true});
+  document.addEventListener('touchend', function(){
+    var go = startY !== null && dist >= PULL && window.scrollY <= 0;
+    startY = null; dist = 0;
+    if (go){ if (pill) pill.textContent = 'Refreshing…'; location.reload(); }
+    else hide();
+  }, {passive: true});
+})();
+</script>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+// A node with no operator yet (or one whose operator is only a username and
+// password), opened on its own machine by a signed-in account: say where to
+// make it theirs (2026-09-30: bringing an account over to run a new node).
+(function () {
+  if (!ARCADE_ME || location.pathname.indexOf("/join") === 0
+      || document.body.classList.contains("fullscreen")) return;
+  fetch("/auth/who", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (w) {
+    if (!(w.claimable || w.handover)) return;
+    var bar = document.createElement("div");
+    bar.className = "msg info";
+    bar.style.cssText = "margin:10px auto;max-width:960px";
+    bar.innerHTML = 'This node has no operator account yet. '
+      + '<a href="/join/keys">Make this account its operator</a>.';
+    var main = document.querySelector("main") || document.body;
+    main.insertBefore(bar, main.firstChild);
+  }).catch(function () {});
+})();
+</script>
+<script type="module" nonce="{{ csp_nonce }}">
+// Trades run on every arcade page, background tabs too (2026-10-13): one tab at a
+// time runs them (wallet.js startTradeRunner). Nothing happens for a locked wallet.
+if (typeof ARCADE_SIGNED !== "undefined" && (ARCADE_SIGNED || ARCADE_ME)) {
+  import("/wallet.js").then((w) => {
+    w.startTradeRunner(ARCADE_CHAIN);
+    // Message outputs come back by themselves (wallet.js autoSweep), a few seconds after a page opens.
+    // Message outputs come back by themselves (wallet.js autoSweep), a few seconds after a page opens.
+    setTimeout(() => w.autoSweep().catch(() => {}), 8000);
+    setInterval(() => { if (!document.hidden) w.autoSweep().catch(() => {}); }, 150000);
+  }).catch(() => {});
+}
+</script>
+{% include "_helper.html" %}
+<script nonce="{{ csp_nonce }}">
+/* RINGING IN AN OPEN PAGE (2026-10-31: "If I have the arcade desktop open in my browser and somebody is trying to get a hold
+   of me, I want them to be able to call me and my arcade start ringing"). Every page of a signed-in account checks in
+   (arcade/ring.py's rules stay the node's: a contact, an app with Notifications on, a proved caller). One ring on screen
+   at a time; Answer opens the app, in a window on the desktop. Another tab answering closes it here too. */
+(function(){
+  if (typeof ARCADE_SIGNED === 'undefined' || !ARCADE_SIGNED || !window.fetch) return;   // signed in, with or without an @name
+  var EVERY = 5000, showing = null, shown = {}, ctx = null, beat = null, title = document.title, flash = null;
+  var tabs = window.BroadcastChannel ? new BroadcastChannel('arcade-ring') : null;
+  function tone(on){
+    clearInterval(beat); beat = null; if (!on) return;
+    try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (e) { return; }
+    function ring(){ [0, .28, 1, 1.28].forEach(function(at){ var o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + at;
+      o.frequency.value = 660; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.18, t + .03); g.gain.exponentialRampToValueAtTime(.0001, t + .22);
+      o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + .24); }); }
+    ring(); beat = setInterval(ring, 3000);
+  }
+  function close(){
+    tone(false); clearInterval(flash); flash = null; document.title = title;
+    if (showing) { showing.box.remove(); showing = null; }
+  }
+  function show(r){
+    shown[r.id] = true;
+    var box = document.createElement('div');
+    box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Incoming call');
+    box.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:2147483000;width:min(340px,calc(100vw - 36px));background:#181d21;color:#e9eef0;border:1px solid #2a3238;border-radius:14px;padding:16px;box-shadow:0 10px 40px #000a;font:15px/1.4 system-ui,sans-serif';
+    var who = document.createElement('div'); who.style.cssText = 'font-size:18px;font-weight:700'; who.textContent = r.from;
+    var what = document.createElement('div'); what.style.cssText = 'color:#a3b0b8;margin:2px 0 12px'; what.textContent = (r.line || 'is ringing you') + ' \u00b7 ' + r.app;
+    var row = document.createElement('div'); row.style.cssText = 'display:flex;gap:10px';
+    function btn(t, bg, fg){ var b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.style.cssText = 'flex:1;min-height:44px;border:0;border-radius:10px;font:inherit;font-weight:700;cursor:pointer;background:' + bg + ';color:' + fg; row.appendChild(b); return b; }
+    var no = btn('Decline', '#ff7a63', '#1a0a07'), yes = btn('Answer', '#3fbf74', '#06150c');
+    no.onclick = function(){ if (tabs) tabs.postMessage(r.id); close(); };
+    yes.onclick = function(){
+      if (tabs) tabs.postMessage(r.id);
+      close();
+      if (window.arcadeDeskOpen) window.arcadeDeskOpen(r.url, r.app); else location.href = r.url;
+    };
+    box.appendChild(who); box.appendChild(what); box.appendChild(row); document.body.appendChild(box);
+    showing = {id: r.id, box: box}; tone(true);
+    var on = false; flash = setInterval(function(){ on = !on; document.title = on ? 'Ringing: ' + r.from : title; }, 1000);
+    setTimeout(function(){ if (showing && showing.id === r.id) close(); }, 40000);
+    yes.focus();
+  }
+  if (tabs) tabs.onmessage = function(e){ shown[e.data] = true; if (showing && showing.id === e.data) close(); };
+  function look(){
+    fetch('/account/ring/live', {credentials: 'same-origin', cache: 'no-store'}).then(function(r){ return r.ok ? r.json() : {rings: []}; })
+      .then(function(j){ if (showing) return; var r = (j.rings || []).filter(function(x){ return !shown[x.id]; })[0]; if (r) show(r); })
+      .catch(function(){});
+  }
+  look(); setInterval(look, EVERY);
+})();
+</script>
+</body>
+</html>

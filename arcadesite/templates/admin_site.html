@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Admin · {{ brand.name }}{% endblock %}
+{% block body %}
+<style nonce="{{ csp_nonce }}">
+.adm{max-width:860px;margin:24px auto;padding:0 16px}
+.adm h1{font-size:24px;margin:0 0 14px}
+.adm .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line,#ddd);margin-bottom:18px}
+.adm .tabs a{padding:8px 14px;border-radius:8px 8px 0 0;text-decoration:none;color:inherit;opacity:.7}
+.adm .tabs a.on{opacity:1;font-weight:700;border-bottom:2px solid currentColor}
+.adm .card{border:1px solid var(--line,#ddd);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.adm .row{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.adm .row p{margin:4px 0 0;font-size:14px;opacity:.8;max-width:600px}
+.adm .warn{color:#9a3412}
+.adm table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+.adm td,.adm th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line,#eee)}
+.adm input[type=text]{width:100%;box-sizing:border-box;padding:6px 8px;font:inherit}
+.adm .fee{display:flex;align-items:center;gap:8px}
+.adm .fee input{width:90px}
+.adm .say{margin-left:12px;font-size:14px}
+</style>
+<div class="adm">
+  <h1>Admin</h1>
+  <nav class="tabs" role="tablist">
+    <a href="/admin?tab=marketplace" class="{{ 'on' if tab == 'marketplace' else '' }}" role="tab">Marketplace</a>
+  </nav>
+
+  <form id="mk">
+    <div class="card">
+      <div class="row">
+        <div><b>Visitors may take trades across chains</b>
+          <p>A visitor takes another arcade's order: coins, tokens or inscriptions on one chain for those on another.
+            Their browser makes the secret and signs every step, and signs a refund first, which this site sends if
+            they close the tab. Nobody else holds their key. They keep the tab open for a few minutes.</p></div>
+        <label><input type="checkbox" name="market_taker" {{ 'checked' if market.market_taker }}> On</label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <div><b>Visitors may place trades across chains that this site finishes</b>
+          <p>A visitor puts an order on the book and leaves. Their browser makes a key for that one order and this
+            site holds it, to lock and claim when somebody takes it.
+            <span class="warn">That trusts you, the operator, with up to the cap below for each order; the visitor
+            is told so before they place it.</span></p></div>
+        <label><input type="checkbox" name="market_maker" {{ 'checked' if market.market_maker }}> On</label>
+      </div>
+    </div>
+    <div class="card">
+      <b>Your fee</b>
+      <p style="margin:4px 0 10px;font-size:14px;opacity:.8">A share of what your visitor receives in a trade made here,
+        paid to you as its own output when they claim. The other arcade's operator takes their own fee, if any, from
+        their side. Visitors see both fees before they sign.</p>
+      <div class="fee"><input type="text" name="trade_cut" value="{{ market.trade_cut }}" inputmode="decimal"> percent
+        (0 to 5; 0 is no fee)</div>
+      <table>
+        <thead><tr><th>Chain</th><th>Fee paid to</th><th>Cap per order, in coins (sites that finish orders)</th></tr></thead>
+        <tbody>
+        {% for c in market.chains %}
+          <tr><td>{{ c.label }}</td>
+            <td><input type="text" data-net="{{ c.network }}" data-k="pay_to" value="{{ c.pay_to if c.pay_to_set else '' }}"
+                       placeholder="{{ c.pay_to or 'your address on ' ~ c.label }}"></td>
+            <td><input type="text" data-net="{{ c.network }}" data-k="cap" value="{{ c.cap }}" placeholder="no orders" inputmode="decimal"></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="submit" class="btn">Save</button><span class="say" id="say"></span>
+  </form>
+</div>
+<script nonce="{{ csp_nonce }}">
+document.getElementById("mk").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, say = document.getElementById("say"), rows = {};
+  for (const i of f.querySelectorAll("input[data-net]")) (rows[i.dataset.net] = rows[i.dataset.net] || {})[i.dataset.k] = i.value.trim();
+  const body = {market_taker: f.market_taker.checked, market_maker: f.market_maker.checked, trade_cut: f.trade_cut.value.trim() || "0", chains: rows};
+  say.textContent = "Saving…";
+  const r = await fetch("/admin/api/marketplace", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  say.textContent = r.ok ? "Saved." : (j.detail || "Not saved.");
+});
+</script>
+{% endblock %}

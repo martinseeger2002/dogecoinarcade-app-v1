@@ -1159,6 +1159,85 @@ def register(app, st, chains):
                              "left": format_amount(row["reserved"] - units, prop["divisible"]),
                              **unsigned.as_json()})
 
+    @app.post("/account/market/build")
+    def account_market_build(request: Request, payload: Any = Body(None)):
+        """The transaction for one market question a page asked this account (apps.py, kind "market"), for the card
+        to show and the browser to sign: place {give, get} is the on-chain order (a MetaDExTrade: give for get, a
+        token for the coin, the coin for a token, or one token for another), cancel {order} withdraws one of this
+        account's orders at its price, take {order, amount} buys from an ask (/account/order/take). Nothing is
+        broadcast here."""
+        account = app.state.signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        chain = home()
+        address = chains.account_address(account.pubkey, chain)
+        if not address:
+            return no_address(chain)
+        row = app.state.page_send(str(said.get("id") or "")) if hasattr(app.state, "page_send") else None
+        if row is None or row.get("kind") != "market" or row["address"] != address or row["status"] != "pending":
+            return JSONResponse({"detail": "no such question waiting"}, status_code=404)
+        op, args = row["op"], row["args"]
+        if op == "take":
+            return account_order_take(request, {"order": args["order"], "units": str(args["amount"])})
+        try:
+            index = Index(v1, chain)
+
+            def named(pid: int, units: int) -> str:
+                if not pid:
+                    return f"{format_amount(units, True)} {chain.params.coin}"
+                prop = index.property(pid)
+                if prop is None:
+                    raise tokenlib.TokenError(f"there is no token {pid}.")
+                return f"{format_amount(units, bool(prop['divisible']))} {prop['name']}"
+
+            if op == "place":
+                give, get = args["give"], args["get"]
+                if give["asset"] and get["asset"] and getattr(chain.params, "token_pairs_from", None) is None:
+                    raise tokenlib.TokenError(f"token-for-token pairs are not switched on on {chain.label} yet.")
+                said_give, said_get = named(give["asset"], give["amount"]), named(get["asset"], get["amount"])
+                if give["asset"]:
+                    # What it sells is held back when its block lands: it must be free now (account_order's check).
+                    held = index.balance(address, give["asset"]) - index.pending_out(address, give["asset"])
+                    if not get["asset"]:
+                        held -= sum(o["tokens"] for o in index.book(give["asset"])["asks"]
+                                    if o["address"] == address and o.get("pending"))
+                    if held < give["amount"]:
+                        raise tokenlib.TokenError(f"this account has {named(give['asset'], max(0, held))} free, not "
+                                                  f"{said_give}. An order holds back what it sells when its block "
+                                                  "lands, and one it cannot hold back costs a fee to fail.")
+                message = P.MetaDExTrade(property_id_for_sale=give["asset"], amount_for_sale=give["amount"],
+                                         property_id_desired=get["asset"], amount_desired=get["amount"])
+                what = f"put an order on the book: {said_give} for {said_get}"
+            elif op == "cancel":
+                # The order on one of the home chain's books (each market's book, as the page's own "mine" reads).
+                mine = None
+                for m in markets_now().get("markets") or []:
+                    if mine is not None:
+                        break
+                    if (m.get("base") or {}).get("network") != chain.key or (m.get("venue") or "ledger") != "ledger":
+                        continue
+                    b, q = int((m.get("base") or {}).get("property_id") or 0), int((m.get("quote") or {}).get("property_id") or 0)
+                    pb = index.pair_book(b, q)
+                    for side in ("asks", "bids"):
+                        for r in pb[side]:
+                            if r["txid"] == args["order"] and r["address"] == address:
+                                mine = (b, r["base"], q, r["quote"]) if side == "asks" else (q, r["quote"], b, r["base"])
+                if mine is None:
+                    raise tokenlib.TokenError("that order is not yours on the book any more: filled, cancelled, or "
+                                              "still waiting for its block. Refresh the page.")
+                message = P.MetaDExCancelPrice(property_id_for_sale=mine[0], amount_for_sale=mine[1],
+                                               property_id_desired=mine[2], amount_desired=mine[3])
+                what = (f"cancel your order of {named(mine[0], mine[1])} for {named(mine[2], mine[3])} "
+                        "(every order of yours at that price on that book)")
+            else:
+                raise ValueError(f"{op} is not a market request")
+            outputs = class_c_or_b(chain, address, message.encode(), coin_pubkey(account.pubkey, chain), wrap=False)
+            unsigned = build(chain, address, outputs, what)
+            quota(account, "trade")
+        except (tokenlib.TokenError, fundinglib.FundingError, AmountError, ValueError, V1Error) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        offer = offers.add(account.pubkey, chain.network, unsigned, what)
+        return JSONResponse({"offer": offer.id, "what": what, "chain": chain.network, **unsigned.as_json()})
+
     @app.post("/account/order/list")
     def account_order_list(request: Request, payload: Any = Body(None)):
         """What this account has standing on the book, and where it stands in line. A read."""

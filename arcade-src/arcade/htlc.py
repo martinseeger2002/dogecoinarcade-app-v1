@@ -73,9 +73,19 @@ def hash_of(secret: bytes) -> bytes:
 
 # --- the script -------------------------------------------------------------------------
 
+#: Arcade V1.0's maker lock takes only a 32-byte secret (swaps.rs "sized", htlc.rs SIZE_32): OP_SIZE 32 OP_EQUALVERIFY
+#: right after OP_IF. Read and written here so a website visitor can claim a V1.0 maker's lock (2026-11-11).
+SIZE_32 = bytes([0x82, 0x01, 0x20, 0x88])
+
+
 def redeem_script(secret_hash: bytes, claimer_pub: bytes, refunder_pub: bytes,
-                  locktime: int) -> bytes:
-    """The lock. `locktime` is a unix time (consensus: >= 500,000,000), never a height."""
+                  locktime: int, sized: bool = False) -> bytes:
+    """The lock. `locktime` is a unix time (consensus: >= 500,000,000), never a height. `sized`: V1.0's maker form."""
+    plain = _redeem_plain(secret_hash, claimer_pub, refunder_pub, locktime)
+    return plain[:1] + SIZE_32 + plain[1:] if sized else plain
+
+
+def _redeem_plain(secret_hash: bytes, claimer_pub: bytes, refunder_pub: bytes, locktime: int) -> bytes:
     if len(secret_hash) != 32:
         raise HtlcError("the secret's hash is 32 bytes (SHA-256)")
     for key in (claimer_pub, refunder_pub):
@@ -95,7 +105,12 @@ def parse(redeem: bytes) -> dict | None:
     """{secret_hash, claimer, locktime, refunder} for a lock this file wrote, else None.
 
     Read back exactly, byte by byte: a script that only looks like a lock is not one,
-    and the page that shows somebody what they are paying into reads it with this."""
+    and the page that shows somebody what they are paying into reads it with this. V1.0's sized form reads with
+    "sized": True."""
+    if redeem[1:5] == SIZE_32:
+        got = parse(redeem[:1] + redeem[5:])
+        return {**got, "sized": True} if got and redeem_script(got["secret_hash"], got["claimer"], got["refunder"],
+                                                                   got["locktime"], sized=True) == redeem else None
     try:
         at = 0
 

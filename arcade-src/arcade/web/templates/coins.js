@@ -1668,7 +1668,13 @@ function pushData(bytes) {
 }
 
 /** The lock's redeem script. `locktime` is a unix time (>= 500,000,000), never a height. */
-export function htlcRedeem(secretHash, claimer, refunder, locktime) {
+/* Arcade V1.0's maker lock takes only a 32-byte secret ("sized", swaps.rs): OP_SIZE 32 OP_EQUALVERIFY after OP_IF. */
+const SIZE_32 = new Uint8Array([0x82, 0x01, 0x20, 0x88]);
+export function htlcRedeem(secretHash, claimer, refunder, locktime, sized = false) {
+  const plain = htlcRedeemPlain(secretHash, claimer, refunder, locktime);
+  return sized ? join([plain.slice(0, 1), SIZE_32, plain.slice(1)]) : plain;
+}
+function htlcRedeemPlain(secretHash, claimer, refunder, locktime) {
   if (secretHash.length !== 32) throw new Error("the secret's hash is 32 bytes");
   for (const key of [claimer, refunder])
     if (key.length !== 33 || (key[0] !== 2 && key[0] !== 3)) throw new Error("a key in a lock is 33 bytes, compressed");
@@ -1683,6 +1689,11 @@ export function htlcRedeem(secretHash, claimer, refunder, locktime) {
 export function htlcParse(redeem) {
   try {
     const b = redeem instanceof Uint8Array ? redeem : unhex(redeem);
+    if (b.length > 5 && hex(b.slice(1, 5)) === hex(SIZE_32)) {
+      const got = htlcParse(join([b.slice(0, 1), b.slice(5)]));
+      return got && hex(htlcRedeem(got.secretHash, got.claimer, got.refunder, got.locktime, true)) === hex(b)
+        ? {...got, sized: true} : null;
+    }
     if (b[0] !== 0x63 || b[1] !== 0xa8 || b[2] !== 32) return null;
     const secretHash = b.slice(3, 35);
     if (b[35] !== 0x88 || b[36] !== 33) return null;

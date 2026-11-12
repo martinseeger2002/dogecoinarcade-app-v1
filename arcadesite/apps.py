@@ -297,7 +297,7 @@ def register(app, st, chains, template_dir: Path):
         rows = [r for r in sends.values() if r["address"] == address and r["status"] == "pending"
                 and now - r["created"] <= PAGE_SEND_FOR]
         keys = ("id", "kind", "to", "amount", "propertyid", "name", "label", "note", "page", "creator", "to_address",
-                "issuer", "inscription", "made_by", "silent", "coin")
+                "issuer", "inscription", "made_by", "silent", "coin", "op", "args")
         return JSONResponse({"chain": "test", "requests": [{**{k: r.get(k, "") for k in keys},
                                                             "chain": r.get("network", "")} for r in rows]},
                             headers={"Cache-Control": "no-store"})
@@ -313,7 +313,10 @@ def register(app, st, chains, template_dir: Path):
         if status == "sent":
             txid = str(said.get("txid") or "").strip().lower()
             seen = False
-            if re.fullmatch(r"[0-9a-f]{64}", txid):
+            if row.get("op") == "swap_take" and hasattr(app.state, "swap_claim_of") and txid \
+                    and app.state.swap_claim_of(row["id"]) == txid:
+                seen = True                                 # the claim this site sent for that take (swaptake.py)
+            elif re.fullmatch(r"[0-9a-f]{64}", txid):
                 try:
                     seen = v1.page(f"tx/{txid}")[0] == 200 if row["network"] == "test" else \
                         bool(v1.core(row["network"], "getrawtransaction", txid, True))
@@ -327,6 +330,200 @@ def register(app, st, chains, template_dir: Path):
         else:
             return JSONResponse({"detail": "sent, denied or failed"}, status_code=400)
         return JSONResponse(told(row))
+
+    # ---------------------------------------------------------------- the market page API (Swap and other market apps)
+    # Arcade V1.0's arcade.market, for the reader: the market's own reads come from V1.0 (the markets from the
+    # exchange's background copy: V1.0 can take minutes to answer them), the reader's holdings and orders are the
+    # reader's, and an order, a cancel or a take is a question on the reader's card (kind "market"), built by
+    # /account/market/build (exchange.py) and signed in the reader's browser. Only the home chain's on-chain book
+    # (venue "ledger") is traded here: DigiDollar trades and swaps across chains need an arcade that holds its own
+    # wallet and stays on (docs/MARKET.md, "Trust in V1.0"), so those answer that plainly.
+    market_js = (Path(__file__).parent / "shims" / "market.js").read_text()
+    MARKET_OPS = ("place", "cancel", "take")
+    ACROSS = "Trading across chains and DigiDollar trades need the Arcade app on your own computer: it holds your " \
+             "wallet and stays on to finish a swap. Here you can trade on the Pepecoin testnet book."
+
+    # A page runs sandboxed (an opaque origin), so its JSON POSTs (a market order, a send) are preflighted: answered
+    # here, for the page API only. Every /r/ write is a question its reader approves on this site's own card.
+    @app.options("/r/{rest:path}")
+    def r_preflight(rest: str):
+        return Response(status_code=204, headers={**contentlib.CORS, "Access-Control-Allow-Methods": "GET, POST",
+                                                  "Access-Control-Allow-Headers": "Content-Type",
+                                                  "Access-Control-Max-Age": "600"})
+
+    @app.get("/r/market.js")
+    def r_market_js():
+        return Response(market_js, media_type="application/javascript",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
+
+    def market_ok(v, status: int = 200) -> Response:
+        return _json({"ok": True, "result": v}, status)
+
+    def market_no(e: str, status: int = 400) -> Response:
+        return _json({"ok": False, "error": e}, status)
+
+    def home_markets() -> list[dict]:
+        """The home chain's on-chain book markets, from the exchange's copy."""
+        snap = app.state.exchange_markets() if hasattr(app.state, "exchange_markets") else {"markets": []}
+        here = chains.account_chain().key
+        return [m for m in snap.get("markets") or []
+                if (m.get("venue") or "ledger") == "ledger" and (m.get("base") or {}).get("network") == here
+                and (m.get("quote") or {}).get("network") == here]
+
+    def market_holdings(address: str) -> list[dict]:
+        """What the reader can pay with on the home chain: its coin (satoshis) and its tokens (base units)."""
+        home = chains.account_chain()
+        coins = (v1.coins([address]).get("addresses") or {}).get(address) or {}
+        amount = sum(int(c["value"]) for c in (coins.get("confirmed") or []) + (coins.get("unconfirmed") or []))
+        out = [{"network": home.key, "kind": "coin", "asset": "coin", "amount": amount, "name": home.params.coin}]
+        code, bal = v1.page(f"balances/{address}", {"pending": 1})
+        for b in (bal or []) if code == 200 and isinstance(bal, list) else []:
+            free = int(b.get("units") or 0) - int(b.get("leaving") or 0)
+            if free > 0:
+                pid = int(b.get("propertyid") or 0)
+                out.append({"network": home.key, "kind": "token", "asset": str(pid), "property_id": pid,
+                            "name": b.get("name") or f"Token #{pid}", "divisible": bool(b.get("divisible")),
+                            "amount": free})
+        return out
+
+    def market_mine(address: str) -> dict:
+        """The reader's orders resting on the home chain's books (V1.0's mine, for this address)."""
+        orders = []
+        for m in home_markets():                            # every book: the copy's counts can be minutes old
+            b, q = int((m.get("base") or {}).get("property_id") or 0), int((m.get("quote") or {}).get("property_id") or 0)
+            try:
+                code, got = v1.page("market/book", {"base": b, "quote": q, "depth": 500})
+            except V1Error:
+                continue
+            res = (got or {}).get("result") or {} if code == 200 else {}
+            for side in ("asks", "bids"):
+                for r in res.get(side) or []:
+                    if r.get("maker") != address:
+                        continue
+                    base, quote = {"asset": b, "amount": int(r.get("base") or 0)}, {"asset": q, "amount": int(r.get("quote") or 0)}
+                    give, get = (base, quote) if side == "asks" else (quote, base)
+                    orders.append({"order": r.get("order"), "address": address, "give": give, "get": get,
+                                   "pending": bool(r.get("pending")), "taking": int(r.get("taking") or 0),
+                                   "status": "open"})
+        return {"orders": orders, "swaps": [], "listings": [], "offers": []}
+
+    @app.get("/r/market/{name}")
+    def r_market(name: str, request: Request):
+        if name in ("holdings", "mine"):
+            address, _ = viewer_of(request)
+            if not address:
+                return market_no("sign in and open this page there to see your wallet", 403)
+            try:
+                return market_ok(market_holdings(address) if name == "holdings" else market_mine(address))
+            except V1Error as e:
+                return market_no(str(e), 503)
+        if name in ("markets", "pairs"):
+            return market_ok(home_markets())
+        if name == "swaps":
+            if not st.setting("market_taker", False):
+                return market_ok({"book": [], "mine": [], "running": [], "me": "", "note": ACROSS})
+            try:
+                book = v1.cmd("swap.book") or []
+            except V1Error:
+                book = []
+            # The orders a visitor can take here: coins for coins, on chains this site keeps wallets on (swaptake.py).
+            keys = {c.key for c in chains.account_chains()}
+            book = [o for o in book if (o.get("give") or {}).get("kind") == "coin" and (o.get("get") or {}).get("kind") == "coin"
+                    and (o.get("give") or {}).get("chain") in keys and (o.get("get") or {}).get("chain") in keys]
+            return market_ok({"book": book, "mine": [], "running": [], "me": ""})
+        if name == "trades":
+            snap = app.state.exchange_markets() if hasattr(app.state, "exchange_markets") else {}
+            def one(v: str) -> int:
+                return 0 if v in ("", "0", "coin") else int(v)
+            try:
+                key = (one(request.query_params.get("base") or ""), one(request.query_params.get("quote") or ""))
+            except ValueError:
+                return market_no("base and quote are token numbers, or coin")
+            if key in (snap.get("trades") or {}):
+                limit = max(1, min(5000, int(request.query_params.get("limit") or 100)))
+                return market_ok(snap["trades"][key][:limit])
+        if name not in ("book", "trades", "candles", "assets", "terms"):
+            return market_no(f"{name} is not a market read", 404)
+        if (request.query_params.get("network") or chains.account_chain().key) != chains.account_chain().key:
+            return market_no(ACROSS)
+        try:
+            r = v1.raw("GET", f"/r/market/{name}", params=dict(request.query_params))
+        except V1Error as e:
+            return market_no(str(e), 503)
+        return Response(r.content, status_code=r.status_code, media_type="application/json",
+                        headers={**contentlib.CORS, "Cache-Control": "no-store"})
+
+    def market_side(v) -> dict:
+        if not isinstance(v, dict):
+            raise ValueError("each side is {asset, amount}")
+        asset = str(v.get("asset") if v.get("asset") is not None else "").strip()
+        amount = str(v.get("amount") if v.get("amount") is not None else "").strip()
+        if asset != "coin" and not asset.isdigit():
+            raise ValueError(ACROSS if asset else "each side names its asset: coin or a token number")
+        if not amount.isdigit() or int(amount) <= 0:
+            raise ValueError("an amount in whole base units, above zero")
+        return {"asset": 0 if asset == "coin" else int(asset), "amount": int(amount)}
+
+    @app.post("/r/market/{op}")
+    def r_market_write(op: str, request: Request, body: dict = Body(default={})):
+        """A market question for the reader (never an action): place {give, get}, cancel {order}, take {order, amount}."""
+        if op == "swap_take" and st.setting("market_taker", False):
+            pass                                            # a take across chains (swaptake.py), when the operator allows
+        elif op.startswith("swap_"):
+            return market_no(ACROSS)
+        if op not in MARKET_OPS + ("swap_take",):
+            return market_no(f"{op} is not a market request", 404)
+        if not isinstance(body, dict):
+            return market_no("send a JSON object")
+        if body.get("network") and str(body["network"]) != chains.account_chain().key:
+            return market_no(ACROSS)
+        address, page = viewer_of(request)
+        if not address:
+            return market_no("sign in and open this page there to be asked", 403)
+        try:
+            if op == "swap_take":
+                node, order = str(body.get("node") or ""), str(body.get("order") or "")
+                if not re.fullmatch(r"[0-9a-f]{8,64}", node) or not re.fullmatch(r"[0-9a-f]{4,64}", order):
+                    raise ValueError("name the order and its arcade")
+                args = {"node": node, "order": order}
+            elif op == "place":
+                args = {"give": market_side(body.get("give")), "get": market_side(body.get("get"))}
+                if args["give"]["asset"] == args["get"]["asset"]:
+                    raise ValueError("a trade is two different assets")
+            else:
+                order = str(body.get("order") or "").strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", order):
+                    raise ValueError("name the order by its transaction id")
+                args = {"order": order}
+                if op == "take":
+                    amount = str(body.get("amount") or "").strip()
+                    if not amount.isdigit() or int(amount) <= 0:
+                        raise ValueError("take an amount in whole base units, above zero")
+                    args["amount"] = int(amount)
+        except ValueError as e:
+            return market_no(str(e))
+        with lock:
+            now = time.time()
+            sweep(now)
+            waiting = [r for r in sends.values() if r["address"] == address and r["status"] == "pending"]
+            if len(waiting) >= 20 and not unlimited(address):
+                return market_no("twenty requests are already waiting", 429)
+        page_row = None
+        if page:
+            code, page_row = v1.page(f"inscription/{page}")
+            page_row = page_row if code == 200 else None
+        rid = secrets.token_urlsafe(12)
+        home = chains.account_chain()
+        row = {"id": rid, "address": address, "network": home.network, "kind": "market", "coin": home.params.coin,
+               "op": op, "args": args, "to": "", "amount": "", "propertyid": None, "name": "", "label": "", "note": "",
+               "page": page, "creator": (page_row or {}).get("creator") or "", "to_address": "", "issuer": "",
+               "inscription": "", "made_by": "", "silent": False, "status": "pending", "txid": "", "error": "",
+               "created": time.time()}
+        with lock:
+            sends[rid] = row
+        return _json(told(row), 202)
+
+    app.state.page_send = lambda rid: sends.get(rid)
 
     # ---------------------------------------------------------------- game state and escrow: not used on this arcade
     # (Strawberry's stores held no game_state row and no escrow, 2026-11-11); answered plainly, never pretended.
@@ -349,6 +546,26 @@ def register(app, st, chains, template_dir: Path):
                 if k.lower() in ("content-type", "content-security-policy", "cache-control", "location",
                                  "access-control-allow-origin")}
         return Response(r.content, status_code=r.status_code, headers=keep)
+
+    # ---------------------------------------------------------------- one DRC-20 / PRC-20 tick (2026-11-12)
+    # For the Token Minter and any page: on the pages host only /r/ answers, so the tick read is here as well as at
+    # /explore/api/tick. Public: supply, minted, the most one mint may take, decimals (base units, as strings).
+    @app.get("/r/ord-token/{net}/{tick}")
+    def r_ord_token(net: str, tick: str):
+        if not re.fullmatch(r"[a-z]{2,10}", net) or not tick.strip() or len(tick) > 32:
+            return _json({"error": "ask /r/ord-token/<doge|main|test>/<tick>"}, 400)
+        try:
+            tok = v1.cmd("explorer.token", chain=chain_key(net), tick=tick.strip()) or {}
+        except V1Error as e:
+            return _json({"error": str(e)}, 404)
+        if not tok.get("tick"):
+            return _json({"error": f"no tick {tick} on that chain"}, 404)
+        return Response(json.dumps({"tick": tok.get("tick"), "shown": tok.get("shown") or tok.get("tick"),
+                                    "supply": str(tok.get("supply") or "0"), "minted": str(tok.get("minted") or "0"),
+                                    "lim": str(tok.get("lim") or tok.get("supply") or "0"),
+                                    "dec": int(tok.get("dec") if tok.get("dec") is not None else 18),
+                                    "deployer": tok.get("deployer"), "holders": tok.get("holders")}),
+                        media_type="application/json", headers={**contentlib.CORS, "Cache-Control": "no-store"})
 
     # ---------------------------------------------------------------- every other page API read: V1.0's own
     @app.api_route("/r/{rest:path}", methods=["GET", "HEAD"])
