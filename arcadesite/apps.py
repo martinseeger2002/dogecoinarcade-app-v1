@@ -470,17 +470,24 @@ def register(app, st, chains, template_dir: Path):
         if name in ("markets", "pairs"):
             return market_ok(home_markets())
         if name == "swaps":
-            if not st.setting("market_taker", False):
+            if not st.setting("market_taker", False) and not st.setting("market_maker", False):
                 return market_ok({"book": [], "mine": [], "running": [], "me": "", "note": ACROSS})
             try:
                 book = v1.cmd("swap.book") or []
             except V1Error:
                 book = []
-            # The orders a visitor can take here: coins for coins, on chains this site keeps wallets on (swaptake.py).
+            # The orders a visitor can take here: coins for coins, or an inscription for coins (swaptake.py), on chains this
+            # site keeps wallets on; and the reader's own orders this site placed for them (sitemaker.py), to cancel.
             keys = {c.key for c in chains.account_chains()}
-            book = [o for o in book if (o.get("give") or {}).get("kind") == "coin" and (o.get("get") or {}).get("kind") == "coin"
+            kinds = lambda o: ((o.get("give") or {}).get("kind"), (o.get("get") or {}).get("kind"))
+            book = [o for o in book if kinds(o) in (("coin", "coin"), ("ord", "coin"))
                     and (o.get("give") or {}).get("chain") in keys and (o.get("get") or {}).get("chain") in keys]
-            return market_ok({"book": book, "mine": [], "running": [], "me": ""})
+            reader = app.state.signed_in(request)
+            ours = app.state.made_orders(reader.pubkey) if reader is not None and hasattr(app.state, "made_orders") else set()
+            mine = [o for o in book if o.get("id") in ours]
+            if not st.setting("market_taker", False):
+                book = mine
+            return market_ok({"book": book, "mine": mine, "running": [], "me": ""})
         if name == "trades":
             snap = app.state.exchange_markets() if hasattr(app.state, "exchange_markets") else {}
             def one(v: str) -> int:
@@ -519,9 +526,11 @@ def register(app, st, chains, template_dir: Path):
         """A market question for the reader (never an action): place {give, get}, cancel {order}, take {order, amount}."""
         if op == "swap_take" and st.setting("market_taker", False):
             pass                                            # a take across chains (swaptake.py), when the operator allows
+        elif op in ("swap_place", "swap_cancel") and st.setting("market_maker", False):
+            pass                                            # an order placed for the reader (sitemaker.py)
         elif op.startswith("swap_"):
             return market_no(ACROSS)
-        if op not in MARKET_OPS + ("swap_take",):
+        if op not in MARKET_OPS + ("swap_take", "swap_place", "swap_cancel"):
             return market_no(f"{op} is not a market request", 404)
         if not isinstance(body, dict):
             return market_no("send a JSON object")
@@ -536,6 +545,29 @@ def register(app, st, chains, template_dir: Path):
                 if not re.fullmatch(r"[0-9a-f]{8,64}", node) or not re.fullmatch(r"[0-9a-f]{4,64}", order):
                     raise ValueError("name the order and its arcade")
                 args = {"node": node, "order": order}
+            elif op == "swap_place":
+                legs = {}
+                for side in ("give", "get"):
+                    leg = body.get(side) if isinstance(body.get(side), dict) else {}
+                    one = {k: str(leg.get(k) if leg.get(k) is not None else "") for k in ("chain", "kind", "asset", "amount")}
+                    if not re.fullmatch(r"[a-z]{2,10}", one["chain"]) or one["kind"] not in ("coin", "ord", "token", "token20", "dd"):
+                        raise ValueError("each leg is {chain, kind (coin, ord, token or token20), asset, amount}")
+                    if one["kind"] == "token20" and (not re.fullmatch(r"[^\s\"\\]{1,32}", one["asset"]) or not one["amount"].isdigit()
+                                                     or int(one["amount"]) <= 0):
+                        raise ValueError("a DRC-20 / PRC-20 leg names its tick and whole tokens above zero")
+                    if one["kind"] == "token" and (not one["asset"].isdigit() or not one["amount"].isdigit() or int(one["amount"]) <= 0):
+                        raise ValueError("a token leg names its token number and whole units above zero")
+                    if one["kind"] in ("coin", "dd") and (not one["amount"].isdigit() or int(one["amount"]) <= 0):
+                        raise ValueError("a coin leg's amount is whole base units, above zero")
+                    if one["kind"] == "ord" and not re.fullmatch(r"[0-9a-f]{64}i\d+", one["asset"]):
+                        raise ValueError("an inscription leg names its inscription id")
+                    legs[side] = one
+                args = legs
+            elif op == "swap_cancel":
+                order = str(body.get("order") or "").strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{4,64}", order):
+                    raise ValueError("name the order")
+                args = {"order": order}
             elif op == "place":
                 args = {"give": market_side(body.get("give")), "get": market_side(body.get("get"))}
                 if args["give"]["asset"] == args["get"]["asset"]:
@@ -698,6 +730,40 @@ def register(app, st, chains, template_dir: Path):
             return _json({"error": "send a JSON object"}, 400)
         fields = {k: str(body[k] or "")[:300] for k in ("pfp", "bio", "url") if k in body}
         return page_request(request, "profile", fields, "publish your profile")
+
+    # ---------------------------------------------------------------- ongoing mints, and what a mint costs (2026-11-12)
+    @app.get("/r/ord-tokens/{net}")
+    def r_ord_tokens(net: str, q: str = ""):
+        """Ticks starting with `q` still being minted (minted under supply), for the Token Minter's suggestions."""
+        q = q.strip().lower()
+        if not re.fullmatch(r"[a-z]{2,10}", net) or not q or len(q) > 32:
+            return _json({"error": "ask /r/ord-tokens/<doge|main|test>?q=<the start of a tick>"}, 400)
+        try:
+            got = v1.cmd("explorer.tokens", chain=chain_key(net), q=q, open=True, n=20) or {}
+        except V1Error as e:
+            return _json({"error": str(e)}, 503)
+        out = []
+        for t in got.get("items") or []:
+            tick = str(t.get("tick") or "")
+            supply, minted = int(t.get("supply") or 0), int(t.get("minted") or 0)
+            if not tick.startswith(q) or minted >= supply:       # an older V1.0 ignores q and open: kept honest here
+                continue
+            out.append({"tick": tick, "shown": t.get("shown") or tick, "supply": str(supply), "minted": str(minted),
+                        "lim": str(t.get("lim") or supply), "dec": int(t.get("dec") if t.get("dec") is not None else 18)})
+        return Response(json.dumps({"items": out}), media_type="application/json",
+                        headers={**contentlib.CORS, "Cache-Control": "no-store"})
+
+    @app.get("/r/ord-quote/{net}")
+    def r_ord_quote(net: str, size: int = 0, type: str = "text/plain;charset=utf-8"):
+        """What one short ord costs on that chain (creator.ord_quote_one), before the arcade's card asks."""
+        quote = getattr(app.state, "ord_quote", None)
+        if quote is None or not (0 < size <= 4000):
+            return _json({"error": "ask /r/ord-quote/<doge|main|test>?size=<bytes>"}, 400)
+        try:
+            return Response(json.dumps(quote(net, size, type[:80])), media_type="application/json",
+                            headers={**contentlib.CORS, "Cache-Control": "no-store"})
+        except Exception as e:  # noqa: BLE001
+            return _json({"error": str(e)}, 400)
 
     # ---------------------------------------------------------------- every other page API read: V1.0's own
     @app.api_route("/r/{rest:path}", methods=["GET", "HEAD"])

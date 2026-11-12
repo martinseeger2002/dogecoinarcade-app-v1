@@ -1355,8 +1355,10 @@ def _assemble_witness(unsigned: "Unsigned", signatures: list[str], pubkey: bytes
                 if len(sig) != 64:
                     raise FundingError(f"input {n} is a Taproot coin and needs a 64-byte Schnorr signature")
                 tap = coin["taproot"]
-                item["witness"] = [sig] + ([bytes.fromhex(tap["leaf"]), bytes.fromhex(tap["control"])]
-                                           if tap.get("leaf") else [])
+                # A swap lock's claim (2026-11-12, arcadesite/ddswap.py) carries the secret after the signature.
+                extra = [bytes.fromhex(x) for x in tap.get("extra") or []]
+                item["witness"] = [sig] + extra + ([bytes.fromhex(tap["leaf"]), bytes.fromhex(tap["control"])]
+                                                   if tap.get("leaf") else [])
             elif coin.get("segwit") == "p2wpkh":
                 item["witness"] = [sig, pubkey]
             elif coin.get("segwit") == "p2sh-p2wpkh":

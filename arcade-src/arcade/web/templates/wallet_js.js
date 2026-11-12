@@ -3372,7 +3372,7 @@ async function signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, l
     if (ops.some((p) => tx.outputs.filter((o) => same(o.script, p.script) && o.value === p.value).length !== 1))
       throw new Error("that claim leaves out the operator fee the swap agreed. Nothing was signed.");
     // The sender paid the network fee (2026-10-21): a coin claimed on the new terms comes out whole.
-    if (kind === "claim" && what.kind === "coin" && leg && leg.fee_bps != null) {
+    if (kind === "claim" && what.kind === "coin" && leg && (leg.fee_bps != null || leg.fee_value != null)) {
       const got = tx.outputs.filter((o) => same(o.script, mine)).reduce((n, o) => n + o.value, 0n);
       if (got < BigInt(leg.amount)) throw new Error("that claim pays you less than the amount agreed. Nothing was signed.");
     }
@@ -3596,6 +3596,9 @@ export function feeFloor(network) {
  *  base is the leg's own amount for coin; for a token, NFT or Doginal, `other`'s when that is coin on the same chain,
  *  else nothing (the floor alone). */
 export function operatorFee(leg, other = null) {
+  // A website take's fee (arcade-site swaptake.py, 2026-11-12): the amount the card showed, out of what this account
+  // receives, paid to that site's operator as its own output; `leg.amount` is then what this account gets.
+  if (leg.fee_value != null && leg.fee_to) return Math.max(0, Math.trunc(Number(leg.fee_value)));
   const bps = Math.min(Math.trunc(Number(leg.fee_bps || 0)), TRADE.FEE_BPS_CEILING);
   if (!(bps > 0) || !leg.fee_to) return 0;
   const kind = leg.kind || "coin";
