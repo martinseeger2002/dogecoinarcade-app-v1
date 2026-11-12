@@ -1,7 +1,7 @@
 """The chains an account holds coins on, and what the site writes down per account, in the original's keys.
 
     account_chain()      Pepecoin testnet: where @tags and messages live (V1.0's home chain)
-    account_chains()     that first, then every other chain V1.0 keeps with an Addresses index
+    account_chains()     that first, then every other chain V1.0 keeps with an Addresses index or borrows
     address_key(...)     "address:<pubkey>" / "address:<network>:<pubkey>" (settings.json, as the original)
     welcome(...)         the faucet's gift for a new account, paid from V1.0's own wallet (arcade/faucet.py rules)
 
@@ -48,13 +48,15 @@ class Chains:
         return Chain("test", NETWORKS["test"])
 
     def account_chains(self) -> list[Chain]:
-        """Tag chain first, then each chain V1.0 has installed with its Addresses index (asked every 5 minutes)."""
+        """Tag chain first, then each chain V1.0 has installed with its Addresses index, or borrows from arcades that
+        share it (V1.0 answers coins, sends and Core calls of a borrowed chain from its lenders, as the original's
+        Wallet showed borrowed chains: Martin 2026-11-12, "I'm missing a bunch of coin networks"). Asked every 5 minutes."""
         if self._kept and time.time() - self._kept[0] < 300:
             return self._kept[1]
         keys = set()
         try:
             for c in self.v1.cmd("chains.list") or []:
-                if c.get("installed") and "addresses" in (c.get("indexes") or []):
+                if (c.get("installed") and "addresses" in (c.get("indexes") or [])) or c.get("borrowed"):
                     keys.add(str(c.get("key")))
         except V1Error:
             pass

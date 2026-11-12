@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from . import accountpages, actions, apps, auth, catalog, creator, doginals, exchange, pools, explore, feed, imported, llm, marketplace, messages, pages, realtime, rings, sidecar, swaptake, tokens, wallet
+from . import accountpages, actions, apps, auth, catalog, creator, digidollar, doginals, exchange, pools, explore, feed, imported, llm, marketplace, messages, pages, realtime, rings, sidecar, swaptake, tokens, wallet
 from .chains import Chains
 from .state import SiteState
 from .v1 import V1, V1Error
@@ -51,6 +51,7 @@ def create_app(home: str | os.PathLike) -> FastAPI:
 
     auth.register(app, st, chains)
     wallet.register(app, st, chains)
+    digidollar.register(app, st, chains)
     actions.register(app, st, chains)
     tokens.register(app, st, chains)
     sidecar.register(app, st, chains)

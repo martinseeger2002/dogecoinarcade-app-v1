@@ -26,6 +26,7 @@ from arcade.config import NETWORKS
 from arcade.web import brand as brandlib
 
 from . import legacy as L
+from . import digidollar
 
 #: The original's tabs (arcade/web/app.py NAV / ACCOUNT_NAV), less those this site does not serve yet.
 ACCOUNT_NAV = [
@@ -387,6 +388,6 @@ def register(app, st, chains, template_dir: Path):
         if account is None:
             return to_join(request)
         return render(request, "my_wallet.html", chain=chains.account_chain(),
-                      hidden=st.setting(f"wallets_hidden:{account.pubkey}", []) or [], dd_nets=[])
+                      hidden=st.setting(f"wallets_hidden:{account.pubkey}", []) or [], dd_nets=digidollar.nets(chains))
 
     return render
