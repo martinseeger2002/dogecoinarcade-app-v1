@@ -228,7 +228,7 @@ def register(app, st, chains):
                              "ltc": one.network == "ltc", "ltctest": one.network == "ltctest", "coins": rows})
 
     @app.get("/account/activity")
-    def account_activity(request: Request, chain: str = "", since: int = 0, address: str = ""):
+    def account_activity(request: Request, chain: str = "", since: int = 0, address: str = "", before: int = 0):
         account = signed_in_account(request)
         try:
             one = chain_asked({"chain": chain})
@@ -243,8 +243,53 @@ def register(app, st, chains):
             return JSONResponse({"chain": one.network, "rows": [], "waiting": [], "height": 0})
         got = v1.cmd("tx.activity", addresses=[address], since=int(since), chain=one.key) or {}
         mine = (got.get("addresses") or {}).get(address) or {}
-        return JSONResponse({"chain": one.network, "address": address, "rows": mine.get("confirmed") or [],
-                             "waiting": mine.get("waiting") or [], "height": got.get("height")})
+        tip = int(got.get("height") or 0)
+        rows, more = activity_page(mine.get("confirmed") or [], tip, before, one, address)
+        return JSONResponse({"chain": one.network, "address": address, "rows": rows, "more": more,
+                             "tip": tip, "waiting": mine.get("waiting") or [], "height": tip})
+
+    ACTIVITY_PAGE = 50
+    block_times: dict[tuple[str, int], int] = {}
+
+    def block_time(one: Chain, height: int) -> int:
+        """A block's time, from V1's explorer header row (cheap: no block read). Kept, blocks don't change time."""
+        key = (one.key, height)
+        if key not in block_times:
+            try:
+                rows = v1.cmd("explorer.blocks", chain=one.key, before=height + 1, n=1) or []
+                block_times[key] = int(rows[0].get("time") or 0) if rows and int(rows[0].get("height", -1)) == height else 0
+            except V1Error:
+                return 0
+            if len(block_times) > 20000:
+                block_times.clear()
+        return block_times[key]
+
+    def activity_page(raw: list, tip: int, before: int, one: Chain, address: str) -> tuple[list, bool]:
+        """V1's tx.activity rows are {height, txid, received, spent}, oldest first; the wallet page lists
+        {net, time, confirmations, other, other_tag, fee}, newest first, a page at a time (before = a height)."""
+        rows = sorted(raw, key=lambda r: int(r.get("height") or 0), reverse=True)
+        if before:
+            rows = [r for r in rows if int(r.get("height") or 0) < before]
+        page, more = rows[:ACTIVITY_PAGE], len(rows) > ACTIVITY_PAGE
+        out = []
+        for r in page:
+            h = int(r.get("height") or 0)
+            net = int(r.get("received") or 0) - int(r.get("spent") or 0)
+            row = {"txid": r.get("txid"), "height": h, "net": net, "spent": int(r.get("spent") or 0),
+                   "time": block_time(one, h), "confirmations": max(0, tip - h + 1) if tip and h else 0}
+            if net < 0 and r.get("txid"):
+                # Who it went to: the first output that is not this address (none: only data or our own change).
+                try:
+                    tx = v1.cmd("explorer.tx", chain=one.key, txid=r["txid"]) or {}
+                except V1Error:
+                    tx = {}
+                row["fee"] = tx.get("fee")
+                for o in tx.get("outputs") or []:
+                    if o.get("address") and o["address"] != address:
+                        row["other"], row["other_tag"] = o["address"], o.get("tag")
+                        break
+            out.append(row)
+        return out, more
 
     # ---------------------------------------------------------------- paying
     def where_to_pay(tag: str, one: Chain) -> str:
