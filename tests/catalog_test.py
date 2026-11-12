@@ -85,7 +85,7 @@ def run(who):
     one = page("/collections/nmrRmZASYVZXA7hbzxXY4J3BYTPKgfea9c/" + urllib.parse.quote("ASHVALE Saltmere Links"), who)
     check("Saltmere" in one.text and "Traits" in one.text, f"{who}: a collection with its traits")
     check(client.get("/collections/nX/none").status_code == 303, f"{who}: a missing collection -> /collections")
-    check(client.get("/launches").headers.get("location") == "/exchange?tab=mintpads", f"{who}: /launches -> mintpads")
+    check(client.get("/launches").headers.get("location") == "/apps", f"{who}: /launches -> /apps (the Exchange pages are gone)")
     page("/launches/16d9d0b814e1ddfefe95db1c46cb10310b4d4b9e0357d460968538d67c2f2e56", who)   # Demo Bucks' creation
     page("/launches/78b347e0489b31cf66540c6e611263022ad5b01eca6bd90bb3db39ac8e8b8cf4", who)   # Saltmere Links #1
     page("/launches/" + "00" * 32, who, want=404)

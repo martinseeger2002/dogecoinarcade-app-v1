@@ -141,26 +141,13 @@ def offline():
         home = tempfile.mkdtemp()
         json.dump({"v1": "http://127.0.0.1:1", "v1_home": home}, open(home + "/site.json", "w"))
         c, app = site(home, ME)
-        for path in ("/exchange", "/exchange?tab=tokens", "/exchange?tab=offers", "/exchange?tab=market",
-                     "/exchange/pair/7", "/exchange/pairs/7/8", "/exchange/history", f"/exchange/trade/{TRADE}",
-                     f"/exchange/sell/{PIECE}", "/listings"):
-            r = c.get(path)
-            check(no_jinja_error(r), f"offline page {path}: {r.status_code}")
-        r = c.get("/exchange?tab=tokens")
-        check("/exchange/pair/7" in r.text and "Frog" in r.text, "Tokens tab lists Frog/coin from /r/market/markets")
-        r = c.get("/exchange/pair/7")
-        check("0.5" in r.text and "@maker" in r.text or "maker" in r.text, "pair page draws the ask at 0.5")
-        check(c.get("/exchange/pair/999").status_code == 404, "an unknown token's pair page is 404")
-        r = c.get("/exchange/history")
-        check(TRADE in r.text, "history: the account's own trade as maker")
-        r = c.get(f"/exchange/trade/{TRADE}")
-        check(MAKER not in r.text and "Taken from the book" in r.text, "trade page: a take, seller = maker")
-        r = c.get("/exchange/pairs?base=7&quote=coin", follow_redirects=False)
-        check(r.status_code == 303 and r.headers["location"] == "/exchange/pair/7", "open-a-pair -> /exchange/pair/7")
-        r = c.get("/exchange/pairs?base=test-token-7&quote=test-token-8", follow_redirects=False)
-        check(r.headers.get("location") == "/exchange/pairs/7/8", "token/token -> /exchange/pairs/7/8")
-        j = c.get("/exchange/token20/search?q=do").json()
-        check(isinstance(j.get("results"), list), f"token20 search answers ({j})")
+        # The Exchange pages are gone (2026-11-12): every /exchange address goes to the Apps page.
+        for path in ("/exchange", "/exchange?tab=tokens", "/exchange/pair/7", "/exchange/pairs/7/8", "/exchange/history",
+                     f"/exchange/trade/{TRADE}", f"/exchange/sell/{PIECE}", "/exchange/token20/search?q=do"):
+            r = c.get(path, follow_redirects=False)
+            check(r.status_code == 303 and r.headers.get("location") == "/apps", f"{path} -> /apps ({r.status_code})")
+        r = c.get("/listings")
+        check(no_jinja_error(r), f"offline page /listings: {r.status_code}")
 
         r = c.post("/account/order", json={"side": "ask", "property_id": 7, "amount": "1", "price": "0.5"})
         j = r.json()
@@ -208,7 +195,6 @@ def offline():
         check(r.status_code == 403, "listing with node-facilitated trades off: the original's refusal")
         r = c.post("/account/standing", json={"property_id": 7, "amount": "1", "price": "0.1"})
         check(r.status_code == 200 and r.json()["standing"]["price"] == "0.1", "a fill-when-back buy order stands")
-        check("standing-" in c.get("/exchange/pair/7").text, "...and is drawn among the bids")
         r = c.post("/account/standing", json={"property_id": 7, "amount": "1", "price": "0.1", "away": True})
         check(r.status_code == 403, "an away buy order is refused (node-facilitated)")
     finally:
