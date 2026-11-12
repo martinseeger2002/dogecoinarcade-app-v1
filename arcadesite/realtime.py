@@ -10,13 +10,17 @@ The viewer (_page_doors) asks these routes on its page's behalf, exactly as it a
     POST /realtime/hub/attach|detach, GET /realtime/hub?id=
                                           many rooms on one stream (kept here, fed by V1.0's streams)
     GET  /realtime/nodes                  ways in a browser may use: this site
-    GET  /realtime/ice                    STUN (and TURN, when this site has a relay) for the fast lane
+    GET  /realtime/ice                    STUN, and a relay for a signed-in player: the arcade nodes' own media relays
+                                          (node-relays.json), else the operator's Cloudflare TURN key
 
 A signed-in account joins as its own address only: the address comes from its session, never from the request.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import secrets
 import time
@@ -28,6 +32,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 PUBLIC_STUN = "stun:stun.cloudflare.com:3478"
 TURN_API = "https://rtc.live.cloudflare.com/v1/turn/keys/{key}/credentials/generate-ice-servers"
 TURN_TTL = 6 * 3600
+#: Arcade nodes' media relays (the original's mesh/turn.py, which every public original arcade runs on its STUN port), in
+#: <home>/node-relays.json, readable by this user only: [{"name", "urls": ["turn:host:3478?transport=udp", ...],
+#: "secret": hex}]. A node's secret is blake2b(its mesh key, 32 bytes, person "arcm-turn"): one way, so it lets this site
+#: give out logins on that relay and nothing else. A login is "<expiry>:<who>" and an HMAC of it (turn.login).
+NODE_RELAYS_FILE = "node-relays.json"
 HEARTBEAT = 15.0
 HUB_MAX_ROOMS = 16
 HUB_IDLE = 120.0
@@ -270,9 +279,34 @@ def register(app, st, chains):
         relay_kept[account.pubkey] = (time.time(), servers)
         return servers
 
+    def node_relays(request: Request) -> list[dict]:
+        """Logins on the arcade nodes' own media relays, for a signed-in player, in any app (the operator 2026-11-12:
+        node relays rather than Cloudflare TURN). Each login lasts TURN_TTL and names the player only by a hash."""
+        account = app.state.signed_in(request)
+        if account is None:
+            return []
+        try:
+            relays = json.loads((st.home / NODE_RELAYS_FILE).read_text())
+        except (OSError, ValueError):
+            return []
+        who = hashlib.blake2b(str(account.pubkey).encode(), digest_size=6).hexdigest()
+        username = f"{int(time.time() + TURN_TTL)}:{who}"
+        out = []
+        for r in relays if isinstance(relays, list) else []:
+            try:
+                secret = bytes.fromhex(str(r["secret"]))
+                urls = [u for u in r["urls"] if isinstance(u, str) and u.startswith("turn:")]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if urls and len(secret) == 32:
+                password = base64.b64encode(hmac.new(secret, username.encode(), hashlib.sha256).digest()).decode()
+                out.append({"urls": urls, "username": username, "credential": password})
+        return out
+
     @app.get("/realtime/ice")
     def ice(request: Request):
         servers = [{"urls": PUBLIC_STUN}] if st.setting("realtime_public_stun", True) is not False else []
-        relay = relay_for(request, request.query_params.get("app", ""))
+        # The nodes' own relays first; the operator's Cloudflare TURN only when no node relay is set up.
+        relay = node_relays(request) or relay_for(request, request.query_params.get("app", ""))
         servers.extend(relay)
         return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)}, headers=CORS)
