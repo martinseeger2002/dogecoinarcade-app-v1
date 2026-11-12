@@ -527,8 +527,8 @@ def register(app, st, chains):
     # ================================================================ launches
     @app.get("/launches", response_class=HTMLResponse)
     def launches_page(sort: str = "popular"):
-        """Folded into Exchange > Mintpads (2026-09-28); each launch's own thread still answers."""
-        return RedirectResponse("/exchange?tab=mintpads" + ("&sort=new" if sort == "new" else ""), status_code=303)
+        """Folded into Exchange > Mintpads (2026-09-28), and the Exchange pages are gone (2026-11-12): the Apps page."""
+        return RedirectResponse("/apps", status_code=303)
 
     def launch_of(txid: str) -> dict | None:
         """A token by its creating transaction, a collection by its #1, else an app card (index.launches)."""
@@ -594,7 +594,7 @@ def register(app, st, chains):
                 creator = found
         summary, _, _ = collection_summary(creator, name)
         if summary is None:
-            return RedirectResponse("/exchange?tab=mintpads", status_code=303)
+            return RedirectResponse("/apps", status_code=303)
         _, art = collection_summary(creator, name, limit=60)[:2]
         art = [r for r in art if r["content_type"].startswith("image/")]
         account, here = account_here(request)
