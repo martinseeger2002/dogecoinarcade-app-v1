@@ -1,0 +1,1626 @@
+{# The two ways an account puts something on the chain, in one place, because
+   there are two pages that offer them and an inscription cannot be taken back
+   from a page that got the transaction wrong.
+
+   `/me/nfts` has always had these. The public `/nfts` page needs them too, and
+   not as a link: on a public instance the node has no key to inscribe with, so
+   the controls that page carried -- the wizard link and the two forms that post
+   to `/inscriptions/create` -- were buttons that answered "Not here" to the one
+   person who could have made the thing. The operator met them on 2026-09-24.
+
+   So the markup is included and the script below belongs to it. It talks to the
+   page through three things only: the `#news` and `#trouble` rows the host page
+   already carries, the `#file`/`#build`/`#run-*` ids below, and the chain this
+   page is drawn for. Nothing here spends anything the tab has not been shown
+   and agreed to: every transaction is offered unsigned by this node, read back
+   by `wallet.checked` out of the transaction's own bytes, and signed here. #}
+{% include "_picture_details.html" %}
+{# Inscriptions of this account's that still owe pieces, with Finish and Give
+   up (a tester, 2026-09-27). Drawn by drawUnfinished(), below. #}
+<div id="unfinished" data-client></div>
+<div class="panel" id="inscribing">
+  <h3 style="margin:0 0 6px">Inscribe one thing</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    A little under 7,500 bytes go on in one transaction; anything bigger goes
+    on in several, one signature each, and both are paid for by this account
+    and signed in this tab, so this node never sees the key that spent it. The
+    first transaction splits this account's coins into one output per piece and
+    each piece spends its own, so a file costs one block &mdash; the split's
+    &mdash; and then every piece goes at once, rather than one piece per block.
+    It cannot be taken back afterwards, and this node keeps no copy of the
+    file: if this tab closes, choose the same file again and it carries on
+    where it stopped.</p>
+  <div class="row">
+    <div style="flex:1"><input type="file" id="file"></div>
+    <button type="button" id="inscribe-it">Inscribe it</button>
+  </div>
+  <p class="muted picked" id="picked-file" hidden><span id="picked-text"></span>
+    <span id="picked-sizes" class="sizes" hidden></span></p>
+  <div id="pic-details" class="setbox" hidden style="margin-top:8px"></div>
+  <details style="margin-top:8px" id="json-box"><summary class="muted">JSON beside the file (optional)</summary>
+    <p class="muted" style="font-size:.84rem;margin:6px 0">Metadata that goes on the chain
+      with it: a name, or the <code>mintpad</code> / <code>tokenpad</code> object that makes
+      a page of your own design a mintpad (see the Mintpads guide).</p>
+    <textarea id="json-field" rows="4" class="mono" spellcheck="false" autocomplete="off"
+      placeholder='{"name": "My pad", "mintpad": {"creator": "…", "collection": "…"}}'
+      style="width:100%"></textarea></details>
+</div>
+
+<div class="panel" id="running">
+  <h3 style="margin:0 0 6px">Run a collection</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    Choose the folder your collection is in. A HashLips Art Engine
+    <code>build</code> folder works as it is (its <code>images</code> and
+    <code>json</code>, with <code>json/_metadata.json</code>), and so does any folder of
+    your own pictures. Every picture goes up exactly as it is &mdash; never shrunk.
+    Nothing is uploaded ahead: the pictures stay in this browser, and each one goes to
+    the chain when its turn comes, as its own inscription, signed here, one after
+    another. This tab stays open while the run is going. If it closes, the run is still
+    there when you open this page again in the same browser, at the piece it stopped on
+    (the pictures are kept here for it); in another browser, choose the folder again and
+    it carries on. Your node paces it by the inscriptions it will take in an hour.</p>
+  <details class="muted" style="font-size:.84rem;margin:0 0 10px">
+    <summary style="cursor:pointer">What the JSON is, and what traits are</summary>
+    <p style="margin:6px 0 0">Every piece of a collection carries a little JSON beside its
+      picture, on the chain with it. It says which collection the piece belongs to and
+      its number &mdash; <code>"name": "Sad Pho #12"</code> and <code>"edition": 12</code>
+      &mdash; and that is how every node files the pieces into one set. It can also carry
+      <strong>traits</strong> (<code>"attributes"</code>): what this piece is made of, like
+      <code>{"trait_type": "Background", "value": "Blue"}</code>. Traits are what
+      collectors filter and compare by, and how rare a trait is comes from how many
+      pieces share it.</p>
+    <p style="margin:6px 0 0">The HashLips Art Engine writes all of this for you, one
+      <code>&lt;number&gt;.json</code> per picture and all of them together in
+      <code>_metadata.json</code>. A folder of your own pictures has none: choose it
+      anyway, and the wizard below writes it, with your collection's name, a description,
+      and traits &mdash; the same for every piece, or each piece's own from a
+      spreadsheet.</p>
+  </details>
+  <div id="pic-set-details" class="setbox" hidden style="margin:0 0 8px"></div>
+  <div class="row">
+    <div style="flex:1"><input type="file" id="build" webkitdirectory
+      directory multiple></div>
+    <button type="button" id="run-start">Write it down</button>
+  </div>
+  <p class="muted picked" id="picked-build" hidden>
+    <strong id="build-folder" style="display:block"></strong>
+    <span id="picked-build-text"></span>
+    <span id="build-pace" style="display:block;margin-top:4px"></span>
+    <span id="build-sizes" class="sizes" hidden></span></p>
+  {# The JSON check and the wizard (2026-10-08, the operator: "If the json is incomplete or
+     missing. Prompt the user and allow them the option to use a wizard to create json
+     for their collection" -- and asked before the wizard writes anything). #}
+  <div id="json-check" class="setbox msg info" hidden>
+    <p id="json-says" style="margin:0 0 8px"></p>
+    <button type="button" class="small" id="wiz-open">Make the JSON with the wizard</button>
+  </div>
+  <div id="wizard" class="setbox" hidden>
+    <h4 style="margin:0 0 6px">The JSON wizard</h4>
+    <p class="muted" style="font-size:.85rem;margin:0 0 8px" id="wiz-intro"></p>
+    <div class="setgrid">
+      <input autocomplete="off" id="wiz-name" placeholder="collection name (every piece is &quot;name #number&quot;)" maxlength="60">
+      <input autocomplete="off" id="wiz-description" placeholder="description of the collection" maxlength="400">
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:.9rem;margin-top:8px">
+      <input type="checkbox" id="wiz-keep" checked> Keep the JSON that is already there, and write
+      only what is missing</label>
+    <p style="margin:10px 0 4px"><strong>Traits</strong></p>
+    <label style="display:block;font-size:.9rem"><input type="radio" name="wiz-traits" value="none" checked>
+      None for now</label>
+    <label style="display:block;font-size:.9rem"><input type="radio" name="wiz-traits" value="same">
+      The same traits on every piece</label>
+    <div id="wiz-same" hidden style="margin:4px 0 6px 22px">
+      <div id="wiz-rows"></div>
+      <button type="button" class="ghost small" id="wiz-add">Add a trait</button>
+    </div>
+    <label style="display:block;font-size:.9rem"><input type="radio" name="wiz-traits" value="sheet">
+      Each piece its own, from a spreadsheet (CSV)</label>
+    <div id="wiz-sheet" hidden style="margin:4px 0 6px 22px" class="muted">
+      <p style="margin:0 0 6px;font-size:.84rem">One row per picture. The first column is the
+        picture's file name (<code>sunset.png</code>) or its number; every other column is a
+        trait, with the trait's name in the first row:<br>
+        <code>file,Background,Eyes</code><br><code>sunset.png,Blue,Laser</code></p>
+      <input type="file" id="wiz-csv" accept=".csv,text/csv">
+    </div>
+    <p class="muted" style="font-size:.84rem;margin:10px 0 4px">The pieces are numbered in the
+      order of their file names (<code>1.png</code>, <code>2.png</code> &hellip; keep their own
+      numbers). Piece #1 will read:</p>
+    <pre id="wiz-preview" style="font-size:.78rem;white-space:pre-wrap;max-height:200px;overflow:auto;margin:0"></pre>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button type="button" id="wiz-make">Write the JSON</button>
+      <button type="button" class="ghost" id="wiz-cancel">Cancel</button>
+    </div>
+    <p class="msg ok" id="wiz-done" hidden style="margin:8px 0 0"></p>
+  </div>
+  {# The set's rules, set by its #1 (2026-09-25): a new collection says
+     them here; a batch added to one already on the chain inherits them. #}
+  <div id="set-new" class="setbox" hidden>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <label for="set-max"><strong>Maximum supply</strong></label>
+      <input autocomplete="off" id="set-max" inputmode="numeric" value="0" style="width:110px">
+      <span class="muted" style="font-size:.85rem">0 = no limit (&infin;): add to it whenever
+        you like. A number seals the set at that size. Set by #1, for good.</span>
+    </div>
+    <details style="margin-top:8px" open>
+      <summary class="muted" style="cursor:pointer;font-size:.88rem">The collection's details,
+        written on #1</summary>
+      <div class="setgrid">
+        <input autocomplete="off" id="set-description" placeholder="description" maxlength="400">
+        <input autocomplete="off" id="set-url" placeholder="website (https://…)" maxlength="200">
+        <input autocomplete="off" id="set-artist" placeholder="artist" maxlength="80">
+        <input autocomplete="off" id="set-icon" placeholder="thumbnail: an inscription id of yours (optional)" maxlength="120">
+      </div>
+    </details>
+  </div>
+  <div id="set-more" class="setbox msg info" hidden>
+    <p id="set-more-says" style="margin:0 0 8px"></p>
+    <label style="display:flex;gap:8px;align-items:center;font-size:.9rem">
+      <input type="checkbox" id="set-renumber" checked> Continue the numbering after the
+      pieces already on the chain (a new build starts at #1 again)</label>
+  </div>
+  <div class="row" id="run-go" hidden>
+    <div style="flex:1" class="muted" id="run-says"
+      style="font-size:.86rem"></div>
+    <a class="btn small ghost" id="run-page" href="#">The run</a>
+    <button type="button" id="run-piece">Inscribe them all</button>
+    <button type="button" class="ghost" id="run-stop">Stop</button>
+  </div>
+  <p class="msg err" id="run-note" hidden style="margin:8px 0 0"></p>
+  <p class="muted" style="font-size:.86rem;margin:8px 0 0">
+    <a href="/me/runs">Every run this account has written down</a> &mdash; the
+    pieces, which one stopped it, and what it cost. New to this? The
+    <a href="/docs/collections.md">collections guide</a> goes through it step by step.</p>
+</div>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
+const newsOuter = news;
+const commas = (n) => Number(n || 0).toLocaleString();
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+/* Mainnet (2026-10-09): real PEP. A single transaction is asked for by wallet.js
+ * itself, with its costs off its own bytes (arcadeMainnetReview), so the pages here
+ * do not ask a second time; anything of many transactions -- a big picture, a run --
+ * is shown its whole estimated total once and then goes without asking again. */
+const MAINNET = {{ (chain.is_mainnet or false)|tojson }};
+/** arcadeFileCost's estimate, split the way the prompt says it, in satoshis. */
+function fileCostSats(bytes) {
+  const c = arcadeFileCost(bytes);
+  return {network: Math.round(c.chunks * 0.09 * 1e8), data: Math.round(c.outputs * 0.01 * 1e8)};
+}
+async function approveRun(label, count, per, feeSaid) {
+  // `per`: one piece's {network, data} in satoshis -- off the first piece's own
+  // transaction where there is one, else arcadeFileCost's estimate.
+  // No `feeSaid`: this node asks no fee of this account (the operator's own, or no fee set). A permille of 0 with a
+  // minimum is a flat fee per inscription (Admin -> Fees, 2026-10-27).
+  const permille = feeSaid ? Number(feeSaid.permille || 0) : 0, floor = feeSaid ? Number(feeSaid.minimum || 0) : 0;
+  const operator = feeSaid ? Math.max(floor, Math.ceil((per.network + per.data) * permille / 1000)) : 0;
+  const total = Math.ceil((per.network + per.data + operator) * count);
+  const ok = await arcadeMainnetReview({label, count, estimate: true, network: per.network * count,
+    data: per.data * count, others: 0, operator: operator * count, total, fee: {permille, minimum: floor}});
+  if (ok) wallet.approveMainnet(Math.ceil(total * 1.5), label);
+  return ok;
+}
+
+// What this tab last sent up, kept here rather than only in the news row.
+// The row cannot hold a sentence across this job: `/account/sign` bumps the
+// generation as the last transaction is broadcast (app.py), so base.html's
+// poller reloads the page over the sentence within a poll of it finishing,
+// and the block that lands the file is a second reload on top of that. So
+// the sentence lives here, and every page that comes back prints it again
+// until the file is found to have arrived.
+const RECEIPT = "arcade.inscribed." + CHAIN.network;
+const remember = (row) => {
+  try { sessionStorage.setItem(RECEIPT, JSON.stringify(row)); } catch (e) {}
+};
+const forget = () => {
+  try { sessionStorage.removeItem(RECEIPT); } catch (e) {}
+};
+const recalled = () => {
+  try { return JSON.parse(sessionStorage.getItem(RECEIPT) || "null"); }
+  catch (e) { return null; }
+};
+
+/** Say it again, on the way back in: the sentence re-printed on every load
+ *  while the file is still on its way, and dropped on the first load that
+ *  finds it has arrived. `/content/<root>` is how a load can know that,
+ *  because it is what the file itself is read from, and it answers short of
+ *  the whole bytes until the last piece's block -- which is exactly the
+ *  difference between "on its way" and news. A job whose root this tab
+ *  never saw (a file resumed where an earlier tab stopped) cannot be asked,
+ *  and an hour outlives any block, so both are dropped by age rather than
+ *  haunting the tab for ever.
+ */
+async function tellItAgain() {
+  const row = recalled();
+  if (!row || !row.says) return;
+  news(row.says);
+  if (Date.now() - Number(row.at || 0) > 60 * 60 * 1000) { forget(); return; }
+  if (!row.root || row.chain !== CHAIN.network) return;
+  try {
+    const got = await fetch("/content/" + row.root, {cache: "no-store"});
+    if (got.ok && (await got.arrayBuffer()).byteLength === Number(row.bytes))
+      forget();
+  } catch (e) { /* the next load asks again */ }
+}
+
+// Started, not waited for. The key is what makes a press mean anything, and a
+// script that awaits it before it wires the buttons has a second or two of
+// page in which a press does nothing at all and says nothing either -- which
+// is how `/feed` answered a person for a whole day. The same lesson, applied
+// here: the handlers are on before the first `await`, and the key is taken
+// when one of them needs it.
+const opening = wallet.opened(CHAIN);
+let keys = null;
+opening.then((found) => { keys = found; });
+const take = async () => keys || (keys = await opening);
+
+
+/** Ask this node for an offer, say what THIS BROWSER read off it, and sign it
+ *  if they say yes.
+ *
+ *  `says` is handed the checked offer, not the raw one: the fee it may quote is
+ *  the one this tab worked out of the transaction's own bytes. `offer.fee` is
+ *  this node's number, and a confirmation that repeats it proves nothing.
+ */
+/** A yes/no card on the page instead of the browser's own dialog (found filming
+ *  the tutorial, 2026-09-25: window.confirm looked foreign, and its one run-on
+ *  sentence read badly). `arcadeAsk` in base.html draws it; the question here
+ *  is nearly always about inscribing, so that is what the button says unless
+ *  the caller says otherwise.
+ */
+const askYes = (title, detail, yes = "Inscribe") => arcadeAsk(title, detail, yes);
+const askYesOuter = askYes;
+
+async function offerAndConfirm(where, body, says, done) {
+  say(""); news("");
+  try {
+    const held = (await take()) || await arcadeKeys(CHAIN);
+    const asked = await fetch(where, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that cannot be done");
+    const read = await wallet.checked(offer, held);
+    if (!MAINNET && !(await askYes("Go ahead?", says(read, offer), "Yes")))
+      return;
+    const out = await wallet.confirm(held, offer);
+    news(done(out, offer));
+  } catch (e) { say(String(e.message || e)); }
+}
+
+$("file").onchange = () => arcadePick($("file"), quotePicked);
+
+// Pictures from the LLM tab's "Your pictures", already picked (2026-10-23: "add an inscribe now Button that brings
+// them to the file in [the inscriber] with the image that they just generated picked as the file"): ?pick=llm:<id>
+// fetches it from this account's own picture cache and puts it in the box as if it had been chosen.
+//
+// 2026-10-27 (SadFrog: "Have a prefilled template of a metadata that they can optionally fill out incase they want to
+// make a small collection"): the details template (_picture_details.html) opens with it and writes the JSON field.
+// Several ids (?pick=llm:<id>,<id>... from "Inscribe as NFTs") are a collection: the pictures go in the run's folder
+// box as 1.png, 2.png ... with a _metadata.json the template writes, and the run goes on exactly as for a folder.
+(async () => {
+  let pics;
+  try { pics = await arcadePickedPictures(); }
+  catch (e) { say("Could not pick those pictures: " + String(e.message || e)); return; }
+  if (pics.length === 1) {
+    const dt = new DataTransfer();
+    dt.items.add(pics[0].file);
+    $("file").files = dt.files;
+    arcadePictureDetails($("pic-details"), pics, ([e]) => {
+      $("json-field").value = e ? JSON.stringify(e) : "";
+      $("json-box").open = !!e;
+    }, false);
+    $("inscribing").scrollIntoView({behavior: "smooth", block: "start"});
+    arcadePick($("file"), quotePicked);
+  } else if (pics.length > 1) {
+    let first = true, later = 0;
+    const put = (entries) => {
+      const meta = entries.map((e, i) => e && {...e, image: `${i + 1}.png`}).filter(Boolean);
+      const dt = new DataTransfer();
+      for (const p of pics) dt.items.add(p.file);
+      // No name, no JSON: the run's own check then says so and offers its wizard, as for a folder of bare pictures.
+      if (meta.length === pics.length && meta.every((e) => Number.isInteger(e.edition)))
+        dt.items.add(new File([JSON.stringify(meta)], "_metadata.json", {type: "application/json"}));
+      $("build").files = dt.files;
+      if (first) { first = false; measureBuild(); return; }
+      // Re-measuring re-encodes the pictures; the name and the JSON are all an edit changes.
+      clearTimeout(later);
+      later = setTimeout(() => { const files = [...$("build").files]; lookUpSet(files); checkJson(files); }, 400);
+    };
+    arcadePictureDetails($("pic-set-details"), pics, put, true);
+    $("running").scrollIntoView({behavior: "smooth", block: "start"});
+  }
+})();
+
+/** What the file in the box will cost, said before anything is paid.
+ *
+ *  The picking, the measuring and the swapping are all shared with messages
+ *  (`arcadePick` in base.html) -- the same three settings, the same Medium by
+ *  default, the same rule that a setting which comes out bigger than the
+ *  original is not offered. What this page adds is the sentence: here the
+ *  bytes go on the chain for ever, so the number that matters is the pieces
+ *  as much as the coins.
+ */
+function quotePicked(file, choice) {
+  const note = $("picked-file"), text = $("picked-text");
+  if (!file) { note.hidden = true; text.innerHTML = ""; return; }
+  const cost = arcadeFileCost(file.size);
+  const one = cost.chunks === 1;
+  note.hidden = false;
+  note.className = "muted picked" + (cost.chunks > 40 ? " costly" : "");
+  text.innerHTML = `<strong></strong> &mdash; ${arcadeSize(file.size)}`
+    + `, ${commas(cost.chunks)} piece${one ? "" : "s"}, about <strong>`
+    + arcadeCoins(cost.coins) + "</strong> in dust and fees"
+    + (choice && choice.key !== "large"
+        ? ` &mdash; re-encoded here at ${choice.label}.` : ".")
+    + (one ? ""
+        : ` That is ${commas(cost.chunks)} transactions, one signature each. `
+          + "The first one splits the coins; one block for it, then the rest "
+          + "go together &mdash; none of them waits for another. A smaller "
+          + "setting costs fewer.");
+  // The name as text (2026-11-09, security review): a file can be called anything, markup included.
+  text.querySelector("strong").textContent = file.name;
+}
+
+// Pressed once means working until it is done: the button says so and cannot be
+// pressed again (filming, 2026-09-25: ~2 minutes of an unchanged panel).
+$("inscribe-it").onclick = async () => {
+  const button = $("inscribe-it"), was = button.textContent;
+  button.disabled = true;
+  button.textContent = "Inscribing\u2026";
+  try { await inscribeTheFile(); }
+  finally { button.disabled = false; button.textContent = was; }
+};
+
+/** One thing asked of this node, and its answer, throwing what it said. */
+async function ask(where, body) {
+  const said = await fetch(where, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const answer = await said.json().catch(() => {
+    throw new Error(`the node did not answer (HTTP ${said.status}); it may be restarting`);
+  });
+  if (!said.ok) throw new Error(answer.detail || "that cannot be done");
+  return answer;
+}
+
+/* What is worth asking again: the node away for a moment (restarting, the
+ * network dropped) or the offer it was holding lost with it. Anything else --
+ * a refusal with a reason -- is said, not retried. */
+const passing = (why) => /did not answer|may be restarting|Failed to fetch|NetworkError|Load failed|not one this node is holding/i.test(why);
+
+function b64(bytes) {
+  let out = "";
+  for (let at = 0; at < bytes.length; at += 8192) {
+    out += String.fromCharCode.apply(null, bytes.subarray(at, at + 8192));
+  }
+  return btoa(out);
+}
+
+/** The content of piece n, from the two numbers the node planned it with.
+ *
+ *  The stream the inscription is cut from is `manifest ++ content`, in pieces
+ *  all of one length but the last. So this piece's slice begins n * chunkLen
+ *  into that stream, and the manifest is not something to ask for again: the
+ *  node wrote that down at the start, and what arrives from here is checked
+ *  against the digest of it.
+ */
+function pieceOf(bytes, n, chunkLen, manifestLen) {
+  const from = Math.max(0, n * chunkLen - manifestLen);
+  const to = Math.min(bytes.length, (n + 1) * chunkLen - manifestLen);
+  return bytes.subarray(from, Math.max(from, to));
+}
+
+/** The offer for piece n, waiting out the split's block if it has to.
+ *
+ *  These pieces spend the outputs the split made, and the chain counts the
+ *  whole package sitting under an unconfirmed parent: about a hundred
+ *  kilobytes, which is two of these transactions, and the third comes back
+ *  `too-long-mempool-chain`. So nothing goes out until the split is in a
+ *  block -- and then all of them do, one after another, with nothing left to
+ *  wait for. One minute for the file rather than one minute per piece, which
+ *  is the same trade the node makes for its own wallet
+ *  (`sender.ensure_outputs`: "one block plus two seconds" against four
+ *  minutes chained). Asking forever is not on the table: fifteen minutes is
+ *  how long that sender will wait for a split at all, and past that the
+ *  honest answer is to ask again later with the same file.
+ */
+async function pieceOffer(bytes, start, n, until, held) {
+  for (;;) {
+    const answer = await ask("/account/inscribe", {
+      part: start.part, chunk: n, chain: CHAIN.network,
+      content: b64(pieceOf(bytes, n, Number(start.chunk_len || 0),
+                           Number(start.manifest_len || 0)))});
+    // The coins set aside for the pieces were spent by another send before any
+    // piece went out: the node offers a new split instead of a piece, and the
+    // file goes on from there. The whole file was already agreed to, and this
+    // costs no more than the split it replaces.
+    if (answer.resplit && answer.offer) {
+      news("This file's " + answer.resplit);
+      await wallet.checked(answer, held);
+      await wallet.confirm(held, answer);
+      until = Date.now() + 15 * 60 * 1000;
+      continue;
+    }
+    if (!answer.waiting) return answer;
+    if (Date.now() > until) throw new Error(
+      "the split has not been mined in fifteen minutes, so nothing further is "
+      + "offered and nothing has been paid for. Ask again with the same file "
+      + "and this carries on where it stopped.");
+    news(answer.waiting);
+    await new Promise((later) => setTimeout(later, 5000));
+  }
+}
+
+/** One inscription, however many transactions it turns out to be.
+ *
+ *  The file is read here rather than uploaded: the bytes this browser pays to
+ *  put on the chain are the bytes it chose, and this node keeps no copy of a
+ *  file it is being asked to make permanent.
+ *
+ *  Confirmed ONCE, before any of it is signed, and then signed one transaction
+ *  at a time. A confirmation for each of twenty-seven would not be consent, it
+ *  would be a person clicking yes until it stopped; what is true of the whole
+ *  -- how many, and what for -- can only be said about the whole.
+ */
+async function inscribeTheFile() {
+  const file = $("file").files[0];
+  // A prize pool, or its deletion, is an inscription written from the
+  // template in the Prize pools guide (2026-09-29): the wallet does the
+  // signing it needs, and there is no file to choose.
+  let typed = null;
+  try { typed = JSON.parse(($("json-field") && $("json-field").value.trim()) || "null"); }
+  catch (e) { typed = null; }
+  if (typed && typed.prizepool && typeof typed.prizepool === "object") {
+    return inscribePrizePool(typed.prizepool);
+  }
+  if (typed && typed.prizepool_delete) return deletePrizePool(typed.prizepool_delete);
+  if (!file) { say("choose a file first"); return; }
+  say(""); news("");
+  let bytes;
+  try { bytes = new Uint8Array(await file.arrayBuffer()); }
+  catch (e) { say(String(e.message || e)); return; }
+  await inscribeBytes(bytes, file.name, file.type);
+}
+
+/* A copy of a many-piece file, kept in this browser until its last piece is
+ * out (a tester, 2026-09-27: a 14-piece picture stopped at 5 when the tab
+ * closed, and finishing it meant finding the same file again). The node keeps
+ * no copy by design (accountparts.py), so this browser does, keyed by the
+ * file's hash, and "Finish" uses it. */
+const KEPT = "arcade-inscribe-files";
+function keptDb() {
+  return new Promise((ok, no) => {
+    // Version 2 (2026-10-11) adds `runs`: a collection run's pictures, keyed
+    // `<run>|<file name>`, so a run carries on after the tab closes without the
+    // folder being chosen again. The node keeps none of them.
+    const open = indexedDB.open(KEPT, 2);
+    open.onupgradeneeded = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains("files")) db.createObjectStore("files");
+      if (!db.objectStoreNames.contains("runs")) db.createObjectStore("runs");
+    };
+    open.onsuccess = () => ok(open.result);
+    open.onerror = () => no(open.error);
+  });
+}
+/** Put a run's pictures in this browser (a list of Files), in a few transactions
+ *  rather than one each. Answers whether they all went in: a private window or a
+ *  full disk means the folder has to be chosen again after a reload. */
+async function keepRunFiles(run, files) {
+  try {
+    const db = await keptDb();
+    for (let at = 0; at < files.length; at += 200) {
+      const ok = await new Promise((done) => {
+        const tx = db.transaction("runs", "readwrite");
+        const store = tx.objectStore("runs");
+        for (const f of files.slice(at, at + 200)) store.put(f, `${run}|${f.name}`);
+        tx.oncomplete = () => done(true); tx.onerror = () => done(false); tx.onabort = () => done(false);
+      });
+      if (!ok) return false;
+    }
+    return true;
+  } catch (e) { return false; }
+}
+async function runFile(run, name) {
+  try {
+    const db = await keptDb();
+    return await new Promise((ok) => { const r = db.transaction("runs").objectStore("runs").get(`${run}|${name}`);
+      r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+  } catch (e) { return null; }
+}
+async function dropRunFile(run, name) {
+  try {
+    const db = await keptDb();
+    await new Promise((ok) => { const tx = db.transaction("runs", "readwrite");
+      tx.objectStore("runs").delete(`${run}|${name}`); tx.oncomplete = ok; tx.onerror = ok; });
+  } catch (e) { /* nothing to free */ }
+}
+/** Forget every run's pictures but these runs' (finished, stopped elsewhere, forgotten). */
+async function pruneRunFiles(keep) {
+  try {
+    const db = await keptDb();
+    await new Promise((ok) => {
+      const tx = db.transaction("runs", "readwrite");
+      const walk = tx.objectStore("runs").openKeyCursor();
+      walk.onsuccess = () => {
+        const c = walk.result; if (!c) return;
+        if (!keep.has(String(c.key).split("|")[0])) tx.objectStore("runs").delete(c.key);
+        c.continue();
+      };
+      tx.oncomplete = ok; tx.onerror = ok;
+    });
+  } catch (e) { /* next time */ }
+}
+async function keep(sha, value) {
+  try {
+    const db = await keptDb();
+    await new Promise((ok) => { const tx = db.transaction("files", "readwrite");
+      value ? tx.objectStore("files").put(value, sha) : tx.objectStore("files").delete(sha);
+      tx.oncomplete = ok; tx.onerror = ok; });
+  } catch (e) { /* a private window: finishing means choosing the file again */ }
+}
+async function kept(sha) {
+  try {
+    const db = await keptDb();
+    return await new Promise((ok) => { const r = db.transaction("files").objectStore("files").get(sha);
+      r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+  } catch (e) { return null; }
+}
+async function shaOf(bytes) {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...h].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function inscribePrizePool(spec) {
+  say(""); news("");
+  try {
+    const held = (await take()) || await arcadeKeys(CHAIN);
+    const nft = spec.kind === "nft";
+    const what = nft
+      ? `${spec.pieces ? spec.pieces.length + " pieces" : "your pieces of " + spec.collection}, at ${spec.price} coins each`
+      : `${spec.lots} lots of ${spec.lot} of token #${spec.token}, at ${spec.price} coins each`;
+    if (!(await arcadeAsk("Make this prize pool?",
+        what + (spec.game ? `, paying out only while you hold ${spec.game}` : "")
+        + (spec.once ? ", one claim per wallet" : "")
+        + (nft ? ". Next: one send puts the coins the lots stand on at the pool's own address, "
+               + "one more moves each piece there, then the pool is inscribed."
+             : ". Next: one send moves the tokens and the coins the lots stand on to the pool's "
+               + "own address, then the pool is inscribed."), "Make it"))) return;
+    const made = await wallet.makeChainPool(held, spec, CHAIN.network, (t) => news(t));
+    await inscribeBytes(made.content, "prize-pool", made.type, made.json);
+  } catch (e) { say(String(e.message || e)); }
+}
+
+async function deletePrizePool(which) {
+  say(""); news("");
+  try {
+    const held = (await take()) || await arcadeKeys(CHAIN);
+    const key = typeof which === "object" ? String(which.pool || "") : String(which);
+    const closing = await wallet.closeChainPool(held, key, CHAIN.network);
+    if (!(await arcadeAsk("Delete this prize pool?",
+        `${closing.shown.says} Its unclaimed tokens and all its coins come back to you, `
+        + "and no lot of it can be claimed once this is in a block.", "Delete it"))) return;
+    await wallet.sendClose(held, closing);
+    await inscribeBytes(new TextEncoder().encode("prize pool deleted"), "delete.txt",
+                        "text/plain; charset=utf-8",
+                        JSON.stringify({prizepool_delete: {pool: closing.pool}}));
+  } catch (e) { say(String(e.message || e)); }
+}
+
+/* `quiet` is a collection run's item of more than one transaction (2026-10-08):
+ * the run was approved once, so nothing is asked here, the receipt and the news
+ * line are the run's, and a failure is thrown to the run rather than said. It
+ * answers the first transaction's id, which is the key the item is read back on. */
+async function inscribeBytes(bytes, name, type, jsonGiven = "",
+                             {quiet = false, held: given = null, run = "", piece = 0} = {}) {
+  const file = {name, type};
+  const typed = jsonGiven || (!quiet && $("json-field") && $("json-field").value.trim()) || "";
+  if (typed) {
+    try { JSON.parse(typed); }
+    catch (e) {
+      if (quiet) throw new Error(`${name}: its JSON does not parse: ${e.message}`);
+      say("the JSON beside the file does not parse: " + e.message); return;
+    }
+  }
+  const askYes = quiet ? (async () => true) : askYesOuter;
+  const news = quiet ? ((t) => { $("run-says").textContent = `${name}: ${t}`; }) : newsOuter;
+  const held = given || (await take()) || await arcadeKeys(CHAIN);
+  try {
+    const start = await ask("/account/inscribe", {
+      content: b64(bytes),
+      content_type: file.type || "application/octet-stream",
+      name: file.name, chain: CHAIN.network,
+      json: typed,
+      // A collection run's piece (2026-10-11): the node checks the bytes against
+      // the hash the run was written down with and lands it under the piece's
+      // own inscription id.
+      ...(run ? {run, piece} : {})});
+    // A run's piece whose picture is in the collection already: the node settled
+    // the piece as skipped and answered with no transaction in it at all
+    // (2026-10-12). Nothing is signed and nothing is paid here, and "already"
+    // tells the run to move on to the next piece rather than wait on this one.
+    if (start.already) {
+      if (!quiet) news(start.already);
+      return "already";
+    }
+    // What this browser reads off the transaction's own bytes, not what this
+    // node says it costs: a confirmation that repeats the node's number proves
+    // nothing. For a file already half up, the split is not offered again, and
+    // then there is nothing new to price -- only pieces left to sign.
+    const shown = start.offer ? await wallet.checked(start, held) : null;
+    const pieces = Math.max(1, Number(start.chunks || 1));
+    const already = Number(start.sent || 0);
+    if (pieces === 1) {
+      if (!MAINNET && !(await askYes(`Inscribe ${file.name}?`,
+          `${commas(start.bytes)} bytes go on the chain for ever, in one `
+          + `transaction, for ${shown.coinsOf(shown.fee)} in fees.`)))
+        return;
+      const out = await wallet.confirm(held, start);
+      if (quiet) return out.txid;
+      const says = `Inscribed: ${file.name}, ${out.txid.slice(0, 16)}… It `
+          + "shows up when its block is mined.";
+      remember({says, root: out.txid, bytes: bytes.length,
+                chain: CHAIN.network, at: Date.now()});
+      news(says);
+      return;
+    }
+    const total = arcadeCoins(arcadeFileCost(bytes.length).coins);
+    if (MAINNET && quiet) {
+      // Part of a run the run's own approval already covers.
+    } else if (MAINNET) {
+      if (!(await approveRun(`Inscribe ${file.name}: ${commas(start.bytes)} bytes in `
+          + `${commas(pieces - already)} transactions, signed here without asking again.`,
+          1, fileCostSats(bytes.length), start.operator_fee))) return;
+    } else if (!(await askYes(`Inscribe ${file.name}?`,
+        `${commas(start.bytes)} bytes go on the chain for ever, as `
+        + `${commas(pieces)} transactions, for about ${total} in dust and fees. `
+        + (already ? `${commas(already)} are already there, so `
+                     + `${commas(pieces - already)} go from this tab. `
+           : "")
+        + (start.offer ? "First one transaction splits your coins into the pieces; "
+                         + "after its block (about a minute) the rest go out together. "
+           : "")
+        + "You sign them all here, without being asked again. "
+        + `Keep this tab open until all ${commas(pieces - already)} are sent (about `
+        + `${Math.max(2, Math.ceil((pieces - already) / 6) + 1)} minutes). If it closes, `
+        + "come back here and press Finish.")))
+      return;
+    const sha = await shaOf(bytes);
+    if (bytes.length <= 25 * 1024 * 1024) await keep(sha, {name, type, bytes});
+    let sent = already;
+    // The transaction the file is read back from: piece 0 carries the
+    // manifest, and it is the key `/content` answers on. Blank when an
+    // earlier tab sent it, which is what the age limit is for.
+    let root = "";
+    // Held for the whole file rather than for one signature, and it cannot
+    // borrow the wallet's own flag: that one is deleted the moment a signature
+    // ends, and what has to be covered is the waiting BETWEEN them. This is
+    // base.html's `trading` case in other clothes -- these pieces wait for the
+    // split's block, and that block is exactly the generation bump that
+    // reloads a page. Measured on the live instance: the split confirmed, the
+    // tab reloaded out from under this loop, and no piece was ever offered.
+    // The split costs a fee either way, so what was left was a file somebody
+    // paid for and did not get, with only re-choosing it to finish it.
+    document.body.dataset.inscribing = String(pieces);
+    // Leaving mid-run is asked about, not just allowed: the rest of the
+    // pieces are signed in this tab and nowhere else.
+    const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", stay);
+    try {
+      if (start.offer) {
+        await wallet.confirm(held, start);
+        news("The split is on its way. Waiting for its block (about a minute), "
+             + "then the pieces go out together\u2026");
+      }
+      const giveUp = Date.now() + 15 * 60 * 1000;
+      for (let n = Number(start.next ?? 0); n < pieces; n++) {
+        news(`Piece ${commas(n + 1)} of ${commas(pieces)}… keep this tab open until the last one.`);
+        // A node that restarts mid-file (2026-10-02: a merge restarted it
+        // between piece 5 and 6, and the loop died on the proxy's error page)
+        // is waited out: the piece is asked for again, which is safe -- an
+        // offer is only an offer, and a piece that did go out is refused as
+        // "already on the chain", which is the answer that was lost.
+        for (let tries = 1; ; tries++) {
+          try {
+            const piece = await pieceOffer(bytes, start, n, giveUp, held);
+            const out = await wallet.confirm(held, piece);
+            if (n === 0) root = out.txid;
+            sent = Math.max(sent + 1, Number(piece.sent || 0));
+            break;
+          } catch (e) {
+            const why = String(e.message || e);
+            const went = /already on the chain \(([0-9a-f]{64})\)/.exec(why);
+            if (went) { if (n === 0) root = went[1]; sent += 1; break; }
+            if (!passing(why) || tries > 20) throw e;
+            const wait = Math.min(30, 5 * tries);
+            news(`The node is not answering (it may be restarting). Piece ${commas(n + 1)} `
+                 + `is asked for again in ${wait} seconds\u2026 keep this tab open.`);
+            await new Promise((later) => setTimeout(later, wait * 1000));
+          }
+        }
+        news(`${commas(sent)} of ${commas(pieces)} on the chain.`);
+      }
+      // Inside the hold, not after it: a sentence written after the delete
+      // lands in a page the generation bump is already on its way to
+      // reloading. Seen live on 2026-09-25: the file went on chain complete,
+      // the tab came back with an empty news row, and nobody was ever told
+      // the six transactions had finished. The hold only covers the job,
+      // though -- this sentence has to outlive the reloads, so it goes to the
+      // receipt too, and `tellItAgain` says it again on every page after.
+      await keep(sha, null);
+      if (quiet) return root;
+      const says = `Inscribed: ${file.name}, ${commas(pieces)} transactions, `
+          + "one file, on the chain for ever. It appears when its last block "
+          + "is mined.";
+      remember({says, root, bytes: bytes.length, chain: CHAIN.network,
+                at: Date.now()});
+      news(says);
+    } finally {
+      delete document.body.dataset.inscribing;
+      window.removeEventListener("beforeunload", stay);
+      if (!quiet) drawUnfinished();
+    }
+  } catch (e) { if (quiet) throw e; say(String(e.message || e)); }
+}
+
+/* -- inscriptions left half-done: say so, and finish or give up -- */
+async function drawUnfinished() {
+  const box = $("unfinished");
+  if (!box) return;
+  let list = [];
+  try { list = (await (await fetch("/account/inscribe/unfinished", {cache: "no-store"})).json()).unfinished || []; }
+  catch (e) { return; }
+  box.replaceChildren();
+  for (const job of list.filter((j) => !j.network || j.network === CHAIN.network)) {
+    const card = document.createElement("div");
+    card.className = "msg info";
+    card.style.margin = "0 0 12px";
+    const words = document.createElement("div");
+    words.innerHTML = "";
+    const strong = document.createElement("strong");
+    if (job.pending) {
+      strong.textContent = `Inscribing ${job.name}: all ${commas(job.chunks)} pieces are sent.`;
+      const note = document.createElement("span");
+      note.textContent = " It shows here when its block lands, usually within a few minutes.";
+      words.append(strong, note);
+      card.append(words);
+      box.append(card);
+      continue;
+    }
+    strong.textContent = `${job.name}: ${commas(job.sent)} of ${commas(job.chunks)} pieces are on the chain.`;
+    const more = document.createElement("span");
+    const copy = job.sha256 ? await kept(job.sha256) : null;
+    more.textContent = copy
+      ? " Finish sends the rest from this browser; keep the tab open until it's done."
+      : " To finish, choose the same file below and inscribe it again: it carries on where it stopped.";
+    words.append(strong, more);
+    const row = document.createElement("div");
+    row.className = "row"; row.style.cssText = "gap:8px;margin-top:8px";
+    if (copy) {
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "small"; go.textContent = `Finish ${job.name}`;
+      go.onclick = () => { go.disabled = true; inscribeBytes(new Uint8Array(copy.bytes), copy.name, copy.type); };
+      row.append(go);
+    }
+    const drop = document.createElement("button");
+    drop.type = "button"; drop.className = "small ghost"; drop.textContent = "Give up on it";
+    drop.onclick = async () => {
+      if (!(await arcadeAsk(`Give up on ${job.name}?`,
+          `The ${commas(job.sent)} pieces already sent stay on the chain; nothing more is sent. `
+          + "The coins set aside for the rest are ordinary balance again once their "
+          + "transaction's block lands.", "Give up on it"))) return;
+      await fetch("/account/inscribe/abandon", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({part: job.part})});
+      if (job.sha256) await keep(job.sha256, null);
+      drawUnfinished();
+    };
+    row.append(drop);
+    card.append(words, row);
+    box.append(card);
+  }
+}
+drawUnfinished();
+
+/* -- the set's rules: new, or added to one of yours (2026-09-25) -- */
+
+let setCap = null;          // what the approval card says the set is sealed at
+async function lookUpSet(files) {
+  $("set-new").hidden = true; $("set-more").hidden = true;
+  const meta = files.find((f) => f.name === "_metadata.json")
+            || files.find((f) => /\.json$/i.test(f.name));
+  if (!meta) return;
+  let first = null, count = 1;
+  try {
+    const said = JSON.parse(await meta.text());
+    first = Array.isArray(said) ? said.slice().sort((a, b) => (a.edition || 0) - (b.edition || 0))[0] : said;
+    count = Array.isArray(said) ? said.length : 1;
+  } catch (e) { return; }
+  if (!first) return;
+  const setName = String((first.collection && first.collection.name) || first.collection
+    || String(first.name || "").replace(/\s*#\s*\d+\s*$/, "")).trim();
+  // Prefilled from the build, where HashLips already says it.
+  $("set-description").value = String(first.description || "");
+  $("set-url").value = /^https?:\/\//i.test(String(first.external_url || "")) ? first.external_url : "";
+  let mine = null;
+  try {
+    const me = await (await fetch("/account", {cache: "no-store"})).json();
+    const row = (me.chains || []).find((c) => c.network === CHAIN.network) || {};
+    if (row.address && setName) {
+      const sets = await (await fetch("/r/collections?creator="
+                                      + encodeURIComponent(row.address))).json();
+      mine = (sets || []).find((c) => c.name === setName) || null;
+    }
+  } catch (e) { mine = null; }
+  if (mine) {
+    setCap = mine.supply || 0;
+    $("set-more-says").textContent = `Adding to your collection ${setName}: `
+      + `${commas(mine.count)} of ${mine.supply ? commas(mine.supply) : "\u221e"} are on the `
+      + "chain. The details and the maximum supply were set by #1 and can't be edited.";
+    $("set-more").hidden = false;
+  } else {
+    setCap = null;
+    $("set-new").hidden = false;
+  }
+}
+
+/* -- a run of them, one transaction at a time -- */
+
+/** This account's inscription allowance on this node: {limit, left}. */
+async function allowance() {
+  try {
+    const said = await (await fetch("/account", {cache: "no-store"})).json();
+    const row = ((said.quota || {}).actions || []).find((a) => a.kind === "inscribe");
+    if (!row) return null;
+    return {limit: Number(row.limit), left: Math.max(0, Number(row.limit) - Number(row.used))};
+  } catch (e) { return null; }
+}
+
+/* An automatic run (2026-09-25): approved once, then this tab signs and
+ * sends piece after piece by itself, waits out the node's hourly allowance and
+ * carries on, and picks up where it was when the tab is opened again. The
+ * approval and a pause are remembered per run in this browser only; the pieces
+ * themselves are the node's record, as before. */
+const AUTO = "arcadeRunAuto";
+const autoAll = () => { try { return JSON.parse(localStorage.getItem(AUTO) || "{}"); }
+                        catch (e) { return {}; } };
+const autoOf = (run) => autoAll()[run] || null;
+const autoSet = (run, value) => {
+  const all = autoAll();
+  if (value) all[run] = value; else delete all[run];
+  try { localStorage.setItem(AUTO, JSON.stringify(all)); } catch (e) {}
+};
+let running = null;          // the run id this tab is working through now
+let resumeTimer = null;
+
+function runNote(text, kind = "err") {
+  const note = $("run-note");
+  note.textContent = text || "";
+  note.className = "msg " + kind;
+  note.hidden = !text;
+}
+
+function capNote(ms) {
+  runNote(`This node takes a set number of inscriptions an hour per account, and `
+          + `this hour's are used. The next piece goes by itself in about `
+          + `${Math.max(1, Math.round(ms / 60000))} min \u2014 keep this tab open, or come `
+          + "back and it carries on.", "info");
+}
+
+function runButtons(run) {
+  const state = run ? autoOf(run) : null;
+  const go = $("run-piece");
+  go.disabled = false;
+  go.textContent = !state ? "Inscribe them all"
+                 : state.paused ? "Resume" : "Pause";
+}
+
+/** An item of more than one transaction (2026-10-08: a collection's pictures are
+ *  never shrunk to fit one): its bytes exactly as uploaded, sent the one-big-file
+ *  way -- a split, its block, then its pieces -- and its first transaction told to
+ *  the run. A tab that closes part way comes back to the same item, and the node
+ *  continues the same file (accountparts.find) rather than paying for it twice. */
+async function bigItem(run, offer, held) {
+  const got = await fetch(`/account/run/item?run=${encodeURIComponent(run)}&edition=${offer.piece}`,
+                          {cache: "no-store"});
+  if (!got.ok) {
+    let why = "";
+    try { why = (await got.json()).detail; } catch (e) {}
+    throw new Error(`${offer.name}: ${why || "the node could not hand over its picture"}`);
+  }
+  const bytes = new Uint8Array(await got.arrayBuffer());
+  $("run-says").textContent = `${offer.name}: ${commas(offer.chunks)} transactions `
+    + `(item ${commas(offer.piece)} of ${commas(offer.items)}, ${commas(offer.sent)} on the chain)\u2026`;
+  const root = await inscribeBytes(bytes, offer.name, offer.content_type, offer.json,
+                                   {quiet: true, held});
+  if (!root) throw new Error(`${offer.name}: its first transaction is not known here, so the `
+                             + "run is waiting on it. Press Resume to pick it up again.");
+  await ask("/account/run/done", {run, piece: offer.piece, txid: root});
+}
+
+/* The run's pictures, in this tab (2026-10-11): the Files of the folder that was
+ * chosen, by name, for the run they were written down for. What a reload loses
+ * comes back from the `runs` store, and what that has lost too is asked for:
+ * `needFolder` names the run waiting for its folder to be chosen again. */
+let runFiles = new Map();
+let runFilesFor = "";
+let needFolder = "";
+const folderNote = (run, why) => `${why} Choose the folder the run was made from `
+  + "(the box above) and it carries on from this piece. Nothing has been paid for.";
+
+/** A piece whose picture is in this browser: the bytes, checked against the hash
+ *  the run was written down with, sent the way one file goes -- one transaction,
+ *  or a split and its pieces -- and the run told. */
+async function browserItem(run, offer, held) {
+  let file = (runFilesFor === run && runFiles.get(offer.image)) || null;
+  if (!file) file = await runFile(run, offer.image);
+  if (!file) {
+    needFolder = run;
+    throw new Error(folderNote(run, `${offer.name}: its picture (${offer.image}) is not in this browser.`));
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (offer.sha256 && (await shaOf(bytes)) !== offer.sha256) {
+    needFolder = run;
+    throw new Error(folderNote(run, `${offer.image} here is not the picture the run was written down with.`));
+  }
+  $("run-says").textContent = `${offer.name}: ${offer.chunks > 1 ? commas(offer.chunks) + " transactions" : "one transaction"} `
+    + `(item ${commas(offer.piece)} of ${commas(offer.items)}, ${commas(offer.sent)} on the chain)\u2026`;
+  const root = await inscribeBytes(bytes, offer.name, offer.content_type, offer.json,
+                                   {quiet: true, held, run, piece: offer.piece});
+  if (root === "already") {                 // in the set; nothing was paid for it
+    await dropRunFile(run, offer.image);
+    return "already";
+  }
+  if (!root) throw new Error(`${offer.name}: its first transaction is not known here, so the `
+                             + "run is waiting on it. Press Resume to pick it up again.");
+  await ask("/account/run/done", {run, piece: offer.piece, txid: root});
+  await dropRunFile(run, offer.image);     // off this browser's disk as it lands
+  return "";
+}
+
+/** The folder chosen again for a run that lost its pictures: the files by name,
+ *  kept here, and the run goes on. */
+async function folderAgain(run) {
+  const files = [...$("build").files].filter(arcadeIsImage);
+  if (!files.length) { runNote("that folder has no pictures in it"); return; }
+  runFiles = new Map(files.map((f) => [f.name, f]));
+  runFilesFor = run;
+  needFolder = "";
+  runNote(`Keeping ${commas(files.length)} pictures in this browser for the run\u2026`, "info");
+  await keepRunFiles(run, files);
+  runNote("");
+  autoRun(run);
+}
+
+/** Work through a run until it is finished, paused, or out of room this hour.
+ *  Out of room is not the end: it waits the minutes the node names and goes on. */
+async function autoRun(run) {
+  if (running) return;
+  const state = autoOf(run);
+  if (!state || state.paused) return;
+  if (needFolder === run) {
+    runNote(folderNote(run, "This run's pictures are not in this browser."));
+    return;
+  }
+  // Waiting for the hour: say so and come back then. The panel's own refresh
+  // called this again at once and asked the node again, which cleared and
+  // redrew the note in a loop (filming, 2026-09-25) -- so the wait is kept.
+  const left = Number(state.resumeAt || 0) - Date.now();
+  if (left > 0) {
+    capNote(left);
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(() => autoRun(run), left + 1000);
+    return;
+  }
+  const held = await take();
+  if (!held) {
+    runNote("Your wallet is not open in this tab, so the run is waiting. Open it and it "
+            + "carries on by itself.", "info");
+    return;
+  }
+  running = run;
+  runButtons(run);
+  runNote("");
+  try {
+    for (;;) {
+      const now = autoOf(run);
+      if (!now || now.paused) break;
+      let offer;
+      try {
+        offer = await ask("/account/run/piece", {run});
+        if (offer.held === "browser" && !offer.finished) {
+          // The hour's allowance is charged as the piece goes, so the wait
+          // for the next hour can come from here too.
+          await browserItem(run, offer, held);
+          continue;
+        }
+      } catch (e) {
+        const wait = /again in (\d+) minute/.exec(String(e.message || e));
+        if (!wait) throw e;
+        const ms = Number(wait[1]) * 60 * 1000 + 15000;
+        autoSet(run, {...autoOf(run), resumeAt: Date.now() + ms});
+        capNote(ms);
+        clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(() => autoRun(run), ms);
+        return;
+      }
+      if (offer.finished) {
+        autoSet(run, null);
+        news(`${offer.skipped
+              ? `${commas(offer.sent)} of them are on the chain and ${commas(offer.skipped)} `
+                + "were in the set already, so nothing was paid for them"
+              : `All ${commas(offer.items)} are on the chain`}. They show up as their blocks `
+             + "are mined.");
+        break;
+      }
+      $("run-says").textContent = `${offer.name}: piece ${offer.piece} of `
+        + `${commas(offer.items)}\u2026 (${commas(offer.sent)} on the chain`
+        + (offer.skipped ? `, ${commas(offer.skipped)} already in the set` : "") + ")";
+      if (offer.big) { await bigItem(run, offer, held); continue; }
+      await wallet.checked(offer, held);
+      await wallet.confirm(held, offer);
+    }
+  } catch (e) {
+    runNote(String(e.message || e));
+  } finally {
+    running = null;
+    await runs();
+  }
+}
+let shownRun = null;          // the row the panel is about, for its name
+function showed(row, finished = null) {
+  shownRun = row;
+  // A finished run keeps its line until the next upload, so somebody who comes
+  // back sees it done rather than an empty panel (filming, 2026-09-25).
+  $("run-go").hidden = !row && !finished;
+  $("run-piece").hidden = $("run-stop").hidden = !row;
+  $("run-piece").dataset.run = row ? row.run : "";
+  $("run-stop").dataset.run = row ? row.run : "";
+  $("run-page").href = row ? `/me/run/${row.run}`
+                     : finished ? `/me/run/${finished.run}` : "#";
+  if (!row) {
+    if (finished) {
+      $("run-says").textContent = `${finished.name}: all ${commas(finished.items)} `
+        + "are on the chain. They show up as their blocks are mined.";
+    }
+    return;
+  }
+  runButtons(row.run);
+  if (autoOf(row.run) && !autoOf(row.run).paused && running !== row.run) {
+    setTimeout(() => autoRun(row.run), 0);    // approved earlier: carry on
+  }
+  $("run-says").textContent = `${row.name}: ${commas(row.sent)} of `
+    + `${commas(row.items)} on the chain`
+    + (row.next ? `, next is ${row.next}` : ".")
+    + (row.skipped ? ` ${commas(row.skipped)} were in the set already, so nothing `
+                   + "was paid for them." : "")
+    + (row.refused ? ` ${commas(row.refused)} refused.` : "");
+}
+
+/** Where this account left off. Asked on load, not when a button is pressed:
+ *  the sentence above promises that a closed tab loses a run nothing, and a
+ *  promise the page never checks is a hope rather than a statement.
+ *
+ *  POST, because that is the route: `/account/run` is registered as a post and
+ *  `door.py` lets only a post through it (door.py PUBLIC_POST). Asked as a GET
+ *  -- which is what this line did, and what it did in `my_nfts.html` before it
+ *  moved here -- a public instance answers with the door's "Not here" page,
+ *  `.json()` throws on the HTML, and the catch below filed the whole thing as
+ *  a sentence in the trouble row. So the promise above was quietly false: a
+ *  reloaded page never found the run it was in the middle of, and the button
+ *  for the next piece never came back. Nothing pressed it twice, so nobody
+ *  knew.
+ */
+async function runs() {
+  try {
+    const said = await (await fetch("/account/run", {method: "POST"})).json();
+    const all = said.runs || [];
+    showed(all.find((row) => row.status !== "done" && row.status !== "stopped") || null,
+           all.find((row) => row.status === "done") || null);
+    pruneRunFiles(new Set(all.filter((row) => row.status !== "done").map((row) => row.run)));
+  } catch (e) { say(String(e.message || e)); }
+}
+
+/* -- a folder of them, measured first and converted on the way up -- */
+
+const SAMPLE_PICTURES = 100;      // re-encoded for the quote, not for the upload
+const SAMPLE_BYTES = 20000000;    // …and never more than this much of them
+let buildSize = "large";
+let buildMeasured = "";
+
+$("build").onchange = () => { if (needFolder) folderAgain(needFolder); else measureBuild(); };
+
+/** What the chosen folder would cost at each size, as far as this browser can
+ *  tell without uploading it three times.
+ *
+ *  A folder cannot go through `arcadePick`: that swaps one File back into one
+ *  input, and rebuilding a `webkitdirectory`'s list out of DataTransfer loses
+ *  what the run is keyed on. So the folder is measured here as it is (never
+ *  re-encoded since 2026-10-08), and the price of that is measuring a sample
+ *  rather than everything. Up to SAMPLE_PICTURES the
+ *  sample IS everything and the number is exact; past it it is scaled by what
+ *  the sample was of the folder, and the sentence says so. A folder with no
+ *  pictures in it, or a browser that cannot re-encode one, is offered no
+ *  buttons at all.
+ */
+/* ---- the JSON: is every picture's there, and the wizard that writes what is not ----
+ * (2026-10-08, the operator: "It needs to look at the hash lips build folder and use the json
+ * and image directories ... If the json is incomplete or missing. Prompt the user and
+ * allow them the option to use a wizard"; "it should also work for people who just
+ * have a folder with a collection. Not made with hash lips".) Read here, in the tab,
+ * so the question comes before anything is uploaded or paid for. */
+let jsonState = null;        // what checkJson found, for the wizard and the Start button
+let wizardMade = null;       // the _metadata.json the wizard wrote, as a File
+const stemOf = (name) => name.replace(/^.*\//, "").replace(/\.[^.]+$/, "");
+const natural = (a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: "base"});
+function wizardFiles() { return wizardMade ? [wizardMade] : []; }
+
+async function checkJson(files) {
+  wizardMade = null; jsonState = null;
+  $("json-check").hidden = true; $("wizard").hidden = true; $("wiz-done").hidden = true;
+  const pictures = files.filter(arcadeIsImage).sort((a, b) => natural(a.name, b.name));
+  if (!pictures.length) return;
+  const meta = files.find((f) => f.name === "_metadata.json");
+  const singles = files.filter((f) => /^\d+\.json$/i.test(f.name));
+  let entries = [], broken = [];
+  if (meta) {
+    try {
+      const list = JSON.parse(await meta.text());
+      if (Array.isArray(list)) entries = list; else broken.push("_metadata.json is not a list");
+    } catch (e) { broken.push(`_metadata.json does not parse (${e.message})`); }
+  }
+  if (!entries.length && singles.length) {
+    for (const f of singles) {
+      try { entries.push(JSON.parse(await f.text())); }
+      catch (e) { broken.push(`${f.name} does not parse`); }
+    }
+  }
+  // Which picture each entry is: its edition number, or the file its "image" names.
+  const byStem = new Map(pictures.map((p) => [stemOf(p.name), p]));
+  const has = new Map();       // picture name -> its entry
+  let nameless = 0;
+  for (const e of entries) {
+    if (!e || typeof e !== "object") { nameless += 1; continue; }
+    const img = typeof e.image === "string" ? stemOf(e.image.split("?")[0]) : "";
+    const pic = (Number.isInteger(e.edition) && byStem.get(String(e.edition))) || byStem.get(img);
+    if (!pic) continue;
+    if (typeof e.name !== "string" || !e.name.trim()) nameless += 1;
+    has.set(pic.name, e);
+  }
+  const missing = pictures.filter((p) => !has.has(p.name));
+  jsonState = {pictures, has, missing, entries, hashlips: !!(meta || singles.length)};
+  if (!missing.length && !broken.length && !nameless) return;
+  const n = pictures.length;
+  // As text (2026-11-09, security review): it quotes file names and the parser's own words about a file's contents.
+  $("json-says").textContent = !entries.length
+    ? `This folder has ${commas(n)} picture${n === 1 ? "" : "s"} and no JSON for them`
+      + (broken.length ? ` (${broken.slice(0, 2).join("; ")})` : "")
+      + ". Without it nothing says these pieces are one collection, or what they are: each "
+      + "would go up as a picture on its own. The wizard can write it \u2014 your "
+      + "collection's name, a description, and traits if you have them."
+    : `The JSON is not complete: ${commas(missing.length)} of the ${commas(n)} pictures have `
+      + "none" + (nameless ? `, ${commas(nameless)} entries have no name` : "")
+      + (broken.length ? `, and ${broken.slice(0, 2).join("; ")}` : "")
+      + ". A picture with no JSON is left out of the collection. The wizard can write "
+      + "what is missing, keeping what is already there.";
+  $("wiz-keep").parentElement.hidden = !entries.length;
+  $("json-check").hidden = false;
+}
+
+function wizTraitRow(type = "", value = "") {
+  const row = document.createElement("div");
+  row.className = "row"; row.style.cssText = "gap:6px;margin-bottom:4px";
+  row.innerHTML = '<input autocomplete="off" class="wt" placeholder="trait (e.g. Background)" maxlength="40">'
+    + '<input autocomplete="off" class="wv" placeholder="value (e.g. Blue)" maxlength="60">'
+    + '<button type="button" class="ghost small">&times;</button>';
+  row.querySelector(".wt").value = type; row.querySelector(".wv").value = value;
+  row.querySelector("button").onclick = () => { row.remove(); wizPreview(); };
+  row.querySelectorAll("input").forEach((i) => i.oninput = wizPreview);
+  $("wiz-rows").append(row);
+}
+
+let wizSheet = null;         // file name or number -> [{trait_type, value}]
+function parseCsv(text) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const cells = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+      else if (c === '"') q = true; else if (c === ",") { cells.push(cur); cur = ""; } else cur += c;
+    }
+    cells.push(cur); rows.push(cells.map((x) => x.trim()));
+  }
+  return rows;
+}
+
+function wizTraitsFor(pic, edition) {
+  const how = (document.querySelector('input[name="wiz-traits"]:checked') || {}).value;
+  if (how === "same") {
+    return [...$("wiz-rows").children].map((r) => ({trait_type: r.querySelector(".wt").value.trim(),
+                                                     value: r.querySelector(".wv").value.trim()}))
+      .filter((t) => t.trait_type && t.value);
+  }
+  if (how === "sheet" && wizSheet) {
+    return wizSheet.get(pic.name.toLowerCase()) || wizSheet.get(stemOf(pic.name).toLowerCase())
+      || wizSheet.get(String(edition)) || [];
+  }
+  return [];
+}
+
+/** Every picture's entry, HashLips-shaped, in file-name order. Pictures named by a
+ *  number keep it; the rest take the free numbers in order. */
+function wizEntries() {
+  const st = jsonState; if (!st) return [];
+  const keep = !$("wiz-keep").parentElement.hidden && $("wiz-keep").checked;
+  const name = $("wiz-name").value.trim(), description = $("wiz-description").value.trim();
+  const used = new Set(), out = [];
+  if (keep) for (const e of st.has.values()) if (Number.isInteger(e.edition)) used.add(e.edition);
+  for (const p of st.pictures) { const s = stemOf(p.name); if (/^\d+$/.test(s)) used.add(Number(s)); }
+  let next = 1;
+  for (const p of st.pictures) {
+    if (keep && st.has.has(p.name)) { out.push(st.has.get(p.name)); continue; }
+    const s = stemOf(p.name);
+    let edition = /^\d+$/.test(s) ? Number(s) : null;
+    if (edition === null) { while (used.has(next)) next++; edition = next; used.add(next); }
+    const entry = {name: `${name} #${edition}`, description, image: p.name, edition};
+    const traits = wizTraitsFor(p, edition);
+    if (traits.length) entry.attributes = traits;
+    entry.compiler = "DogecoinArcade JSON wizard";
+    out.push(entry);
+  }
+  return out.sort((a, b) => (a.edition || 0) - (b.edition || 0));
+}
+
+function wizPreview() {
+  const all = wizEntries();
+  $("wiz-preview").textContent = all.length && $("wiz-name").value.trim()
+    ? JSON.stringify(all[0], null, 2) : "(give the collection a name first)";
+}
+
+$("wiz-open").onclick = () => {
+  const st = jsonState; if (!st) return;
+  $("wiz-intro").textContent = `${commas(st.pictures.length)} pictures. Each gets a name of the `
+    + "form “your collection #number” and its number (that is what makes them one "
+    + "collection on every node), the description, and traits if you add them. Nothing is "
+    + "written until you press Write the JSON, and nothing on your computer is changed: "
+    + "the JSON goes up with the pictures.";
+  if (!$("wiz-rows").children.length) wizTraitRow();
+  $("wizard").hidden = false; $("json-check").hidden = true;
+  wizPreview();
+};
+$("wiz-cancel").onclick = () => { $("wizard").hidden = true; if (jsonState && !wizardMade) $("json-check").hidden = false; };
+$("wiz-add").onclick = () => { wizTraitRow(); };
+document.querySelectorAll('input[name="wiz-traits"]').forEach((r) => r.onchange = () => {
+  const how = document.querySelector('input[name="wiz-traits"]:checked').value;
+  $("wiz-same").hidden = how !== "same"; $("wiz-sheet").hidden = how !== "sheet"; wizPreview();
+});
+["wiz-name", "wiz-description"].forEach((id) => $(id).oninput = wizPreview);
+$("wiz-keep").onchange = wizPreview;
+$("wiz-csv").onchange = async () => {
+  wizSheet = null;
+  const f = $("wiz-csv").files[0]; if (!f) return;
+  const rows = parseCsv(await f.text());
+  if (rows.length < 2) { say("that spreadsheet has no rows under its header"); return; }
+  const head = rows[0];
+  wizSheet = new Map();
+  for (const r of rows.slice(1)) {
+    const key = String(r[0] || "").toLowerCase(); if (!key) continue;
+    wizSheet.set(key, head.slice(1).map((t, i) => ({trait_type: t, value: r[i + 1] || ""}))
+                          .filter((t) => t.trait_type && t.value));
+  }
+  say(""); wizPreview();
+};
+$("wiz-make").onclick = async () => {
+  const name = $("wiz-name").value.trim();
+  if (!name) { say("give the collection a name first"); return; }
+  const all = wizEntries();
+  const fresh = all.filter((e) => e.compiler === "DogecoinArcade JSON wizard").length;
+  const withTraits = all.filter((e) => Array.isArray(e.attributes) && e.attributes.length).length;
+  // Asked before anything is written (the operator: "they should be prompted before the wizard
+  // ... will create a JSON").
+  if (!(await askYesOuter(`Write the JSON for ${name}?`,
+      `The wizard writes JSON for ${commas(fresh)} piece${fresh === 1 ? "" : "s"}`
+      + (all.length > fresh ? ` and keeps the ${commas(all.length - fresh)} that already had it` : "")
+      + `: “${name} #1” onwards, ${withTraits ? commas(withTraits) + " with traits" : "no traits"}. `
+      + "It goes up with the pictures as _metadata.json, and what is on your computer is not "
+      + "changed. Check piece #1 below it first: once a piece is on the chain, its JSON is "
+      + "there for good.", "Write it"))) return;
+  wizardMade = new File([JSON.stringify(all, null, 1)], "_metadata.json", {type: "application/json"});
+  $("wiz-done").textContent = `Written: JSON for ${commas(all.length)} pieces of ${name}. `
+    + "Press Write it down to set the run up with it.";
+  $("wiz-done").hidden = false;
+};
+
+async function measureBuild() {
+  const picked = $("build").files;
+  const files = [...picked];
+  const note = $("picked-build"), text = $("picked-build-text");
+  const sizes = $("build-sizes");
+  sizes.innerHTML = ""; sizes.hidden = true;
+  buildSize = "large"; buildMeasured = "";
+  if (!files.length) { note.hidden = true; text.innerHTML = ""; return; }
+  note.hidden = false;
+  // The folder, by name, and what is in it: the browser's own box only says
+  // "25 files selected" (filming the collection tutorial, 2026-09-25).
+  const folder = ((files[0].webkitRelativePath || "").split("/")[0])
+    || `${commas(files.length)} files`;
+  const jsons = files.filter((f) => /\.json$/i.test(f.name));
+  const meta = jsons.some((f) => f.name === "_metadata.json");
+  const pics = files.filter(arcadeIsImage).length;
+  lookUpSet(files);
+  checkJson(files);
+  // The pace, said when the folder is chosen rather than after it is uploaded
+  // (filming, 2026-09-25: the line came later and Start cleared it).
+  $("build-pace").textContent = "";
+  allowance().then((room) => {
+    if (!room || !(room.limit > 0) || !pics) return;
+    $("build-pace").textContent = pics > room.limit
+      ? `This node takes ${commas(room.limit)} inscriptions an hour per account, so `
+        + `${commas(pics)} take about ${Math.ceil(pics / room.limit)} hours: the run `
+        + "waits out each hour by itself."
+      : `This node takes ${commas(room.limit)} inscriptions an hour per account, so all `
+        + `${commas(pics)} can go in one go.`;
+  });
+  $("build-folder").textContent = `${folder}: ${commas(pics)} picture${pics === 1 ? "" : "s"}, `
+    + `${commas(jsons.length - (meta ? 1 : 0))} JSON file${jsons.length - (meta ? 1 : 0) === 1 ? "" : "s"}`
+    + (meta ? ", and _metadata.json" : ", and no _metadata.json (the Art Engine writes one)");
+  const pictures = files.filter(arcadeIsImage);
+  const bytes = pictures.reduce((n, file) => n + file.size, 0);
+  if (!pictures.length) {
+    text.textContent = `${commas(files.length)} files, and not one of them a picture.`;
+    return;
+  }
+  // As they are, always (2026-10-08: "when inscribing a collection the files
+  // should never be compressed"). What a picture costs is counted per picture,
+  // because each is its own inscription: a 17 KB picture is three transactions.
+  let coins = 0, chunks = 0, multi = 0;
+  for (const f of pictures) {
+    const c = arcadeFileCost(f.size);
+    coins += c.coins; chunks += c.chunks; if (c.chunks > 1) multi += 1;
+  }
+  text.innerHTML = `<strong>${arcadeSize(bytes)}</strong> of pictures, exactly as they are `
+    + `(never shrunk), about <strong>${arcadeCoins(coins)}</strong> in dust and fees, `
+    + `${commas(chunks)} transactions.`
+    + (multi ? ` ${commas(multi)} of the ${commas(pictures.length)} are bigger than one `
+       + "transaction: each of those goes up as its own small job, a transaction that "
+       + "splits your coins for it and then its pieces after the next block (about a "
+       + "minute an item)." : "");
+  // Enough coins for all of it? Said now, not after the upload (2026-10-08: a
+  // 6,480-picture set needs about 20,000 test coins, and a short account found out late).
+  try {
+    const me = await (await fetch("/account", {cache: "no-store"})).json();
+    const have = Number(me.balance || 0) / 1e8;
+    if ($("build").files.length && have < coins) {
+      text.innerHTML += ` <strong>Your account holds ${arcadeCoins(have)}</strong>, so it can pay `
+        + "for part of this: the run goes until the coins run out, and carries on when more "
+        + "arrive.";
+    }
+  } catch (e) { /* the balance is a courtesy here */ }
+}
+
+/** The bytes this upload will carry for one file of the chosen folder.
+ *
+ *  Converted on the way up rather than swapped into the input, and the name
+ *  goes with them: `arcadeJpegName` keeps the stem, and the stem is what a
+ *  build's metadata is matched to (`collections.read_build` keys its pictures
+ *  by stem, `app._save_upload` routes them by name), so `1.png` becoming
+ *  `1.jpg` still reads as the same item. The suffix changes with the bytes
+ *  because it is the name the node guesses a content type from afterwards.
+ *
+ *  Per file the rule is the same one `arcadeOfferSizes` applies to one file:
+ *  whichever of the two is smaller. A picture that re-encodes bigger than it
+ *  already is goes up as it was.
+ */
+$("run-start").onclick = async () => {
+  const files = $("build").files;
+  if (!files.length) { say("choose the folder the Art Engine left"); return; }
+  say(""); news("");
+  // Pictures with no JSON are left out of a run: asked, not found out afterwards
+  // (2026-10-08), with the wizard as the other answer.
+  if (jsonState && jsonState.missing.length && !wizardMade) {
+    const m = jsonState.missing.length, all = jsonState.pictures.length;
+    const go = await askYesOuter(m === all ? "No JSON for these pictures" : `${commas(m)} pictures have no JSON`,
+      m === all
+        ? "Nothing in this folder says these pictures are one collection, so there is nothing to "
+          + "run yet. The wizard writes the JSON: the collection's name, a description, traits."
+        : `${commas(m)} of the ${commas(all)} pictures have no JSON, and a run leaves them out. `
+          + "Go on with the others, or let the wizard write what is missing?",
+      m === all ? "Open the wizard" : "Go on without them");
+    if (m === all || !go) { if (m === all ? go : true) $("wiz-open").click(); return; }
+  }
+  // Nothing is uploaded (2026-10-11: a 6,480-picture folder, 123 MB, never
+  // got past Cloudflare's 100 MB limit, and the node keeping everybody's pictures
+  // was never the point). The run is written down from what this tab read off
+  // the folder -- each piece's JSON and its picture's name, size and hash -- and
+  // the pictures stay here, kept in this browser, going up one at a time.
+  const st = jsonState;
+  if (!st || !st.pictures.length) { say("choose a folder with pictures in it"); return; }
+  const byPic = new Map();
+  if (wizardMade) {
+    const byStem = new Map(st.pictures.map((p) => [stemOf(p.name), p]));
+    for (const e of JSON.parse(await wizardMade.text())) {
+      const img = typeof e.image === "string" ? stemOf(e.image.split("?")[0]) : "";
+      const pic = (Number.isInteger(e.edition) && byStem.get(String(e.edition))) || byStem.get(img);
+      if (pic) byPic.set(pic.name, e);
+    }
+  } else {
+    for (const [name, e] of st.has) byPic.set(name, e);
+  }
+  const chosen = st.pictures.filter((p) => byPic.has(p.name));
+  if (!chosen.length) { say("none of these pictures has JSON; the wizard can write it"); return; }
+  $("run-start").disabled = true;
+  // Name, size and JSON only. Nothing is read off the disk here: hashing six
+  // thousand pictures before the first one goes on the chain is the same "all at
+  // once" the run was built to avoid, and it is what left a 6,480-piece run
+  // saying "Reading your pictures… 0 of 6,480" for twenty minutes while the
+  // browser swapped (2026-10-12). Each picture is read when its own turn
+  // comes, and the node still refuses bytes that do not match the size it was
+  // written down with, and pays for nothing whose picture is already in the set.
+  const items = chosen.map((p) => ({json: byPic.get(p.name), image: p.name,
+                                    size: p.size, content_type: p.type || ""}));
+  const body = {run_chain: CHAIN.network, items,
+                numbering: $("set-renumber").checked ? "continue" : "keep"};
+  if (!$("set-new").hidden) {
+    body.max_supply = $("set-max").value.trim() || "0";
+    for (const f of ["description", "url", "artist", "icon"]) body[f] = $("set-" + f).value.trim();
+  }
+  try {
+    runNote("Writing the collection down\u2026", "info");
+    const start = await ask("/account/run/plan", body);
+    runFiles = new Map(chosen.map((p) => [p.name, p]));
+    runFilesFor = start.run;
+    needFolder = "";
+    // Not waited for. Copying six thousand pictures into this browser's own
+    // storage is a minute of nothing happening before a run may start, and the
+    // copy exists only to survive a reload: this tab already holds every file in
+    // `runFiles`, and a piece whose turn comes before its copy lands is read from
+    // the folder it came from anyway.
+    keepRunFiles(start.run, chosen).then((all) => {
+      if (!all) runNote("This browser would not keep copies of the pictures, so a reload means "
+        + "choosing the folder again. The run is written down either way.", "info");
+    });
+    const room = await allowance();
+    const pace = room && room.limit > 0 && start.items > room.limit
+      ? ` This node takes ${commas(room.limit)} inscriptions an hour per account, `
+        + `so about ${Math.ceil(start.items / room.limit)} hours.`
+      : "";
+    setCap = start.supply || 0;
+    runNote((start.continues ? `Added to ${start.name}, after the ${commas(start.on_chain)} `
+          + "already on the chain. " : "")
+      + `Written down: ${start.name}, ${commas(start.items)} items in a moment — nothing `
+      + "was uploaded and nothing was read off your disk to do it. Each picture is read once, "
+      + "when its own turn comes." + pace
+      + (start.note ? " " + start.note : ""), "ok");
+    showed({run: start.run, name: start.name, items: start.items, sent: 0, skipped: 0,
+            next: start.next});
+  } catch (e) { runNote(String(e.message || e)); }
+  finally { $("run-start").disabled = false; }
+};
+
+// Approve once, then it runs by itself (2026-09-25). The same button
+// pauses it and resumes it.
+$("run-piece").onclick = async () => {
+  const run = $("run-piece").dataset.run;
+  if (!run) return;
+  say(""); news("");
+  const state = autoOf(run);
+  if (state) {
+    autoSet(run, {...state, paused: !state.paused, resumeAt: 0});
+    clearTimeout(resumeTimer);
+    runButtons(run);
+    if (state.paused) autoRun(run);
+    else runNote("Paused. Nothing more is sent until you press Resume.", "info");
+    return;
+  }
+  try {
+    const held = (await take()) || await arcadeKeys(CHAIN);
+    const first = await ask("/account/run/piece", {run});
+    if (first.finished) {
+      news(`That run is finished. ${commas(first.sent)} of its ${commas(first.items)}`
+        + " are on the chain"
+        + (first.skipped ? ", and " + commas(first.skipped)
+                         + " were in the set already and cost nothing" : "") + ".");
+      await runs();
+      return;
+    }
+    const left = Number(first.items) - Number(first.sent) - Number(first.skipped || 0);
+    const room = await allowance();
+    // A run whose pictures live in the browser answers with WHICH piece is next,
+    // not with a transaction: its bytes come out of this tab when its turn comes
+    // (2026-10-11). Asking `wallet.checked` of that answer is "that offer has no
+    // transaction in it, so there is nothing to check against", which is how a
+    // 6,480-piece run died before its first piece (2026-10-12). It is the
+    // same shape of answer an item that needs several transactions gives, and is
+    // read the same way: nothing to review until the bytes are here.
+    const shown = (first.big || first.held === "browser") ? null
+                  : await wallet.checked(first, held);
+    // The run's name, not the first piece's: "…of Skull Squad", not "…of Skull
+    // Squad #1" (filming, 2026-09-25).
+    const setName = (shownRun && shownRun.name) || first.name;
+    if (MAINNET) {
+      // The whole run's estimate, from the first piece's own transaction, once.
+      const per = shown ? wallet.mainnetCosts(first, shown) : fileCostSats(Number(first.bytes || 0));
+      if (!(await approveRun(`Inscribe all ${commas(left)} of ${setName}, one after another, `
+          + "signed here without asking again.", left, {network: per.network, data: per.data},
+          first.operator_fee))) return;
+      autoSet(run, {approved: Date.now(), paused: false});
+      autoRun(run);
+      return;
+    }
+    const ok = await askYes(`Inscribe all ${commas(left)} of ${setName}?`,
+      (Number(first.sent)
+        ? `${commas(first.sent)} of ${commas(first.items)} are on the chain already. The `
+          + `other ${commas(left)}`
+        : `None are on the chain yet. All ${commas(left)}`)
+      + (shown
+         ? ` go up one after another, signed here by themselves (this one is `
+           + `${commas(first.bytes)} bytes for ${shown.coinsOf(shown.fee)} in fees).`
+         : ` go up one after another, signed here by themselves.`)
+      + " A picture bigger than one transaction goes up as it is, never shrunk: first a "
+      + "transaction that splits your coins for it, then (after its block, about a minute) "
+      + "its pieces together."
+      + (room && room.limit > 0 && left > room.left
+         ? ` This node takes ${commas(room.limit)} an hour per account, so it pauses when `
+           + `the hour's are used and carries on by itself \u2014 about `
+           + `${Math.ceil(left / room.limit)} hours in all.` : "")
+      + (setCap === null ? "" : setCap ? ` The set is sealed at ${commas(setCap)}.`
+                                        : " The set has no limit (\u221e).")
+      + " Keep this tab open; if it closes, opening it again carries on. Pause or Stop "
+      + "at any time.", "Start");
+    if (!ok) return;
+    autoSet(run, {approved: Date.now(), paused: false});
+    autoRun(run);
+  } catch (e) {
+    runNote(String(e.message || e));
+  }
+};
+
+$("run-stop").onclick = async () => {
+  const where = $("run-stop").dataset.run;
+  if (!where) return;
+  say(""); news("");
+  try {
+    const asked = await fetch("/account/run/stop", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({run: where}),
+    });
+    const stop = await asked.json();
+    if (!asked.ok) throw new Error(stop.detail || "that cannot be stopped");
+    autoSet(where, null);
+    clearTimeout(resumeTimer);
+    news(`${stop.name} is filed as stopped at ${commas(stop.sent)} of `
+      + `${commas(stop.items)}. What is already on the chain stays there, `
+      + "and asking for a piece starts it going again.");
+    await runs();
+  } catch (e) { say(String(e.message || e)); }
+};
+
+tellItAgain();
+runs();
+// The panel asks again on its own, and whenever the page hears a block. A tab
+// that sent the last three pieces of a run by itself once sat on "9 of 12, next
+// is #10" with Pause showing, the run long finished (filming, 2026-09-25); one
+// answer from /account/run puts it right, so it is asked for rather than
+// trusted to have arrived. Not while this tab is sending: autoRun asks when it
+// is done.
+const recheck = () => { if (!running && !document.hidden) runs(); };
+setInterval(recheck, 30000);
+document.addEventListener("visibilitychange", recheck);
+document.addEventListener("arcade:changed", recheck);
+document.body.dataset.inscribeReady = "yes";
+</script>
+
+<style>
+.setbox{margin:10px 0}
+.setgrid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:8px}
+</style>
+

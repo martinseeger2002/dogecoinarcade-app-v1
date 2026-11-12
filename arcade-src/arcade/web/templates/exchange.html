@@ -1,0 +1,1041 @@
+{% extends "base.html" %}
+{% import "_chains.html" as chains %}
+{% import "_token_confirm.html" as tk %}
+{% import "_exui.html" as ex %}
+{% block title %}Exchange · {{ brand.name }}{% endblock %}
+{% block body %}
+{% macro tabs(current) %}
+{# The swap book redraws at the market pace (2026-10-19: "Books should be updated as instantaneously as
+   possible"). #}
+<div id="live" data-generation="{{ state.generation }}" class="live"{% if current == 'tokens' %} data-live-fast{% endif %}></div>
+{# The markets first, then what is yours (the Exchange redesign, 2026-10-09). #}
+{# Tokens, NFTs, Launchpad (the mintpads, by the name people know them by), and
+   Offers with a count of what waits for an answer (the Exchange redesign, 2026-10-09). #}
+{% set waiting_offers = (offers_in | rejectattr('settled') | list | length) + ((x_in or []) | length) %}
+<nav class="ex-seg" aria-label="Exchange">
+  {#- LLM service (2026-10-23: "You can add the LLM exchange page to the rest of the exchange"; then "I want LLM to
+      be the first option and ... change it to LLM's"). #}
+  <a class="{{ 'on' if current == 'llm' }}" href="/exchange?tab=llm"{% if current == 'llm' %} aria-current="page"{% endif %}>LLMs</a>
+  <a class="{{ 'on' if current == 'tokens' }}" href="/exchange?tab=tokens"{% if current == 'tokens' %} aria-current="page"{% endif %}>Tokens</a>
+  <a class="{{ 'on' if current == 'market' }}" href="/exchange?tab=market"{% if current == 'market' %} aria-current="page"{% endif %}>NFTs</a>
+  <a class="{{ 'on' if current == 'mintpads' }}" href="/exchange?tab=mintpads"{% if current == 'mintpads' %} aria-current="page"{% endif %}>Launchpad</a>
+  {# Doginals for DOGE on a tab of their own (2026-10-14), grayed out while Dogecoin syncs; Pepinals for PEP
+     (2026-10-17) the same way, and every other chain whose ords are listed here (arcade/ord_chains.py). #}
+  {%- for o in ord_tabs() %}
+  {%- if o.ready %}
+  <a class="{{ 'on' if current == o.tab }}" href="/exchange?tab={{ o.tab }}"{% if current == o.tab %} aria-current="page"{% endif %}>{{ o.word }}s</a>
+  {%- else %}
+  <span class="chain-off" aria-disabled="true" title="{{ o.word }}s open when the {{ o.chain }} node has synced ({{ o.progress }}% so far)">{{ o.word }}s</span>
+  {%- endif %}
+  {%- endfor %}
+  <a id="ex-offers-tab" class="{{ 'on' if current == 'offers' }}" href="/exchange?tab=offers"{% if current == 'offers' %} aria-current="page"{% endif %}>Offers
+    {%- if waiting_offers %}<span class="nav-count" aria-label="{{ waiting_offers }} waiting">{{ waiting_offers if waiting_offers < 100 else '99+' }}</span>{% endif %}</a>
+</nav>
+<script nonce="{{ csp_nonce }}">
+// A pressed tab looks pressed at once, while its page is on its way (the operator
+// 2026-10-11: the tabs felt "really unresponsive when you click the button").
+document.querySelectorAll('.ex-seg a').forEach(function (a) {
+  a.addEventListener('click', function () {
+    document.querySelectorAll('.ex-seg a').forEach(function (b) { b.classList.remove('on'); });
+    a.classList.add('on'); a.setAttribute('aria-busy', 'true');
+  });
+});
+</script>
+{% endmacro %}
+
+{% macro shopcard(s, what) %}
+<div class="card">
+  <div class="row" style="align-items:baseline">
+    <strong>{{ s.name or ('#' ~ '{:,}'.format(s.number)) }}</strong>
+    <span class="muted" style="margin-left:auto">#{{ "{:,}".format(s.number) }}</span>
+  </div>
+  {% if s.thumb %}
+    <a class="media" href="/inscriptions/{{ s.txid }}/view" title="one of them, at random">
+      <img src="/content/{{ s.thumb }}" alt="one piece of this collection"
+           loading="lazy" style="max-width:100%;border-radius:8px;margin:8px 0"></a>
+  {% endif %}
+  <table>
+    {% for l in s.listings %}
+    <tr><td colspan="2">{{ l.text }}
+      {%- if l.available %} <span class="muted">&mdash; {{ l.available }}</span>
+      {%- elif l.give.left is defined %} <span class="muted">&mdash;
+        {{ "{:,}".format(l.give.left) }} left</span>{% endif %}</td></tr>
+    {% endfor %}
+    <tr><td class="muted" style="width:74px">Sold by</td>
+        <td class="mono" style="word-break:break-all">
+          {%- if s.mine %}<strong>you</strong>
+          {%- else %} {{ s.seller|who }}{% endif %}</td></tr>
+  </table>
+  <div class="row" style="margin-top:8px">
+    <a class="btn {{ 'ghost' if s.mine else '' }} small"
+       href="/inscriptions/{{ s.txid }}/view">{{ 'Open it' if s.mine else what }}</a>
+  </div>
+</div>
+{% endmacro %}
+
+{{ ex.style() }}
+<h1>Exchange {{ tk.chain_switch(chain, other_chains, csrf, "/exchange", public) }}</h1>
+{{ tabs(tab) }}
+{% if tab != 'offers' %}
+<script nonce="{{ csp_nonce }}">
+// The Offers count, fetched after this tab has shown (2026-10-13: each tab loads only
+// what it draws; the offers are read on the Offers tab itself).
+(function () {
+  fetch('/exchange?tab=offers&count=1', {credentials: 'same-origin'})
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (said) {
+      var n = said && said.waiting, tab = document.getElementById('ex-offers-tab');
+      if (!n || !tab || tab.querySelector('.nav-count')) return;
+      var c = document.createElement('span');
+      c.className = 'nav-count';
+      c.setAttribute('aria-label', n + ' waiting');
+      c.textContent = n < 100 ? String(n) : '99+';
+      tab.appendChild(c);
+    }).catch(function () {});
+})();
+</script>
+{% endif %}
+
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+{# Which chain a market is on (2026-10-13: "a mix, testnet only, mainnet only,
+   and cross chain only" on Tokens, then the same on NFTs and Launchpad). #}
+{% macro net_chips(tab_name, keys, extra='') -%}
+{# Dogecoin's chip comes after Mainnet's whenever this node has a Dogecoin node,
+   grayed out with how far it has got until it has synced (2026-10-13). #}
+{%- set doge = (chain_menu()|selectattr('doge')|list or [none])[0] %}
+{%- set ltc = (chain_menu()|selectattr('ltc')|list or [none])[0] %}
+<span class="ex-modes" style="margin:0" id="netshow">
+  {%- for key in keys %}
+  <a class="ex-chip{{ ' on' if show == key }}" href="/exchange?tab={{ tab_name }}{{ extra }}{{ '' if key == 'mix' else '&show=' ~ key }}"{% if show == key %} aria-current="true"{% endif %}>{% if key in ('testnet', 'mainnet') %}{{ net_badge(key) }}{% else %}{{ {'mix': 'Mix', 'cross': 'Cross chain only'}[key] }}{% endif %}</a>
+  {%- if key == 'mainnet' and doge %}
+  {%- if doge.ready %}
+  <a class="ex-chip{{ ' on' if show == 'dogecoin' }}" href="/exchange?tab={{ tab_name }}{{ extra }}&show=dogecoin"{% if show == 'dogecoin' %} aria-current="true"{% endif %}>{{ net_badge('doge') }}</a>
+  {%- else %}
+  <span class="ex-chip chain-off" aria-disabled="true" title="Dogecoin (DOGE) – Main opens when its node has synced ({{ doge.progress }}% so far)">{{ net_badge('doge') }}</span>
+  {%- endif %}
+  {%- endif %}
+  {%- if key == 'mainnet' and ltc %}
+  {%- if ltc.ready %}
+  <a class="ex-chip{{ ' on' if show == 'litecoin' }}" href="/exchange?tab={{ tab_name }}{{ extra }}&show=litecoin"{% if show == 'litecoin' %} aria-current="true"{% endif %}>{{ net_badge('ltc') }}</a>
+  {%- else %}
+  <span class="ex-chip chain-off" aria-disabled="true" title="Litecoin (LTC) – Main opens when its node has synced ({{ ltc.progress }}% so far)">{{ net_badge('ltc') }}</span>
+  {%- endif %}
+  {%- endif %}
+  {%- endfor %}</span>
+{%- endmacro %}
+{# A link to something on the OTHER chain than this page's switches the browser's
+   chain on the way in: the page it opens reads that chain, and would otherwise open
+   the same id on this one. An account's browser keeps it in a cookie
+   (/create/chain); the operator's node switches with the header's own form
+   (#netswitch, below). #}
+{% macro go(href, switch) -%}
+{%- if switch and viewer == 'account' %}href="/create/chain?to={{ switch }}&amp;back={{ href|urlencode }}"
+{%- elif switch %}href="{{ href }}" data-switch="{{ switch }}" data-back="{{ href }}"
+{%- else %}href="{{ href }}"{% endif -%}
+{%- endmacro %}
+{# Only the operator's own node switches with a form; a public copy never offers one
+   (an account's links use /create/chain instead, see `go`). #}
+{% if not public and viewer != 'account' %}
+<form method="post" action="/tokens/chain" id="netswitch" hidden>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="chain"><input type="hidden" name="back"></form>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+// A button shows or hides the form or panel its data-toggle names (the script policy, 2026-11-09: a listener, not
+// an inline onclick). On the document, so what the in-place refresh puts back still answers.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("button[data-toggle]");
+  if (!b) return;
+  var f = document.getElementById(b.dataset.toggle);
+  if (f) f.hidden = !f.hidden;
+});
+// A thumbnail that does not load goes, rather than showing a broken picture. Caught on the way down (an image's
+// error does not bubble), and set before any thumbnail is on the page.
+document.addEventListener("error", function (e) {
+  if (e.target.matches && e.target.matches("img[data-drop-broken]")) e.target.remove();
+}, true);
+// The market search filters as it is typed in (findMarket, _exui.html market_list_assets).
+document.addEventListener("input", function (e) {
+  if (e.target.id === "marketfind" && window.findMarket) findMarket(e.target.value);
+});
+document.addEventListener('click', function (ev) {
+  var a = ev.target.closest && ev.target.closest('a[data-switch]');
+  if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return;
+  ev.preventDefault();
+  var f = document.getElementById('netswitch');
+  f.elements.chain.value = a.dataset.switch;
+  f.elements.back.value = a.dataset.back;
+  f.submit();
+});
+</script>
+
+{% if tab == 'offers' %}
+  {# Simple on purpose (2026-09-28: "The offers page needs to be simpler.
+     It should be very simple to understand"): one line per offer, who, what,
+     how much, and the one or two buttons that apply. #}
+  {% macro piece(b) -%}
+    <a href="/inscriptions/{{ b.inscription }}/view">
+      {%- if b.collection %}{{ b.collection }}{% if b.edition is not none %} #{{ b.edition }}{% endif %}
+      {%- elif b.number is not none %}#{{ "{:,}".format(b.number) }}{% else %}{{ b.inscription[:10] }}…{% endif %}</a>
+  {%- endmacro %}
+  {% macro thumb(b) -%}
+    <a class="ofthumb" href="/inscriptions/{{ b.inscription }}/view"><img src="/content/{{ b.inscription }}"
+       alt="" loading="lazy" data-drop-broken></a>
+  {%- endmacro %}
+  <style>
+    .offerrow{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);min-width:0}
+    .offerrow:last-child{border-bottom:0}
+    .ofthumb{flex:none;width:48px;height:48px;border-radius:8px;background:var(--code);overflow:hidden}
+    .ofthumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .oftext{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+    .ofdo{flex:none;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+    @media(max-width:560px){.offerrow{flex-wrap:wrap}.ofdo{width:100%;justify-content:flex-start;padding-left:60px}}
+  </style>
+
+  {% if offers_in or not x_in %}<div class="ex-h">Offers for your things</div>{% endif %}
+  {% if not offers_in and not x_in %}
+    <div class="panel empty"><p>No offers yet. When somebody offers for one of your
+      NFTs, it shows up here.</p></div>
+  {% elif offers_in %}
+  <div class="ex-card" style="padding:4px 14px">
+    {% for b in offers_in %}
+    <div class="offerrow">
+      {{ thumb(b) }}
+      <div class="oftext"><strong>{{ b.buyer|who }}</strong> offers <strong>{{ b.price|replace(' coins', ' ' ~ chain.params.coin) }}</strong> {{ net_badge(chain) }}
+        for {{ piece(b) }} {{ net_badge(chain) }}</div>
+      <div class="ofdo">
+        {% if b.settled %}<span class="ex-pill done">Sold</span>
+        {% elif b.busy %}<span class="ex-pill wait">Selling, waiting for its block</span>
+        {% elif b.accepted %}
+          <span class="ex-pill wait">accepted, waiting for them</span>
+          <button type="button" class="ghost small" data-takeback
+                  data-piece="{{ b.inscription }}" data-buyer="{{ b.buyer|who_text }}">Take it back</button>
+        {% elif b.held_for %}<span class="ex-pill off">You accepted someone else</span>
+        {% elif viewer == 'account' %}
+          <button type="button" class="small" data-accept
+                  data-offer="{{ b.txid }}" data-piece="{{ b.inscription }}"
+                  data-give="{{ b.give }}" data-price="{{ b.price|replace(' coins', ' ' ~ chain.params.coin) }}"
+                  {% if b.presigned %}data-presigned="1"{% endif %}
+                  data-buyer="{{ b.buyer|who_text }}">Accept</button>
+          <button type="button" class="ghost small" data-refuse
+                  data-offer="{{ b.txid }}" data-piece="{{ b.inscription }}"
+                  data-give="{{ b.give }}" data-price="{{ b.price|replace(' coins', ' ' ~ chain.params.coin) }}"
+                  data-buyer="{{ b.buyer|who_text }}">Decline</button>
+        {% else %}
+          <form method="post" action="/exchange/offers/{{ b.txid }}" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" name="decision" value="accept" class="small">Accept</button>
+            <button type="submit" name="decision" value="decline" class="ghost small">Decline</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% if viewer == 'account' %}
+    <p class="msg" id="answer-news" hidden></p>
+    <script type="module" nonce="{{ csp_nonce }}">
+    /* Answering an offer from the tab that holds the key, which is all this
+       row ever lacked. `wallet.answerOffer` runs the three signatures &mdash;
+       two over the leg, never broadcast, and one over the letter that carries
+       it &mdash; and the node refuses any answer whose bytes do not say the
+       offer that was made, so the price below is the price signed.
+    */
+    import * as wallet from "/wallet.js";
+
+    const news = document.getElementById("answer-news");
+    const CHAIN = {network: "{{ chain.network }}",
+                   version: {{ chain.params.pubkeyhash_version }}};
+    const opening = wallet.opened(CHAIN);
+    const say = (text, ok) => {
+      news.textContent = text;
+      news.hidden = !text;
+      news.className = "msg " + (ok ? "ok" : "err");
+    };
+
+    for (const button of document.querySelectorAll("[data-offer]")) {
+      button.onclick = async () => {
+        const refuse = button.hasAttribute("data-refuse");
+        const who = button.dataset.buyer || "whoever offered";
+        const gave = button.dataset.give || "the piece";
+        const paid = button.dataset.price || "the price in the offer";
+        const ok = await arcadeAsk(
+          refuse ? "Decline this offer?" : (button.dataset.presigned ? `Sell ${gave} for ${paid}?` : "Accept this offer?"),
+          refuse
+            ? `Refuse ${who}'s offer of ${paid} for ${gave}? The offer stays on `
+              + "the chain until their block is spent, so nothing here stops them "
+              + "asking again."
+            : `Give ${gave}, get ${paid}. Your key signs the piece at that price; `
+              + "their wallet signs the payment, and one transaction moves both or "
+              + "neither.",
+          refuse ? "Decline" : "Accept");
+        if (!ok) return;
+        if (refuse) {
+          // Gone from both lists at once (2026-09-28); the buyer's own
+          // node is told afterwards, and that note failing does not undo it.
+          button.disabled = true;
+          const r = await fetch("/account/offer/decline", {method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({offer: button.dataset.offer, piece: button.dataset.piece,
+                                  chain: CHAIN.network})});
+          const said = await r.json();
+          if (!r.ok) { button.disabled = false; say(said.detail || "that offer cannot be declined", false); return; }
+          const rowEl = button.closest(".offerrow, tr");
+          if (rowEl) rowEl.remove();
+          say("Declined.", true);
+          (async () => {
+            try {
+              const held = await opening;
+              if (held) await wallet.answerOffer(held, {offer: button.dataset.offer,
+                piece: button.dataset.piece, refuse: true, chain: CHAIN.network});
+            } catch (e) { /* the decline stands; the note is a courtesy */ }
+          })();
+          return;
+        }
+        const ask = {offer: button.dataset.offer, piece: button.dataset.piece,
+                     refuse, chain: "{{ chain.network }}"};
+        for (const other of document.querySelectorAll("[data-offer]")) {
+          other.disabled = true;
+        }
+        try {
+          const held = (await opening) || await arcadeKeys(CHAIN);
+          const out = await wallet.answerOffer(held, ask);
+          say((out.refused ? "Declined. Nothing was spent. "
+               : out.completed ? `${out.says} It's theirs when the block lands. It's in History now.`
+                           : "Answered in " + String(out.txid).slice(0, 16)
+                             + "… The piece is held for them for a day, until their "
+                             + "wallet signs; all this account spent is the fee of "
+                             + "one message."), true);
+          setTimeout(() => location.reload(), 1600);        // into History
+        } catch (error) {
+          say(String(error.message || error), false);
+        } finally {
+          for (const other of document.querySelectorAll("[data-offer]")) {
+            other.disabled = false;
+          }
+        }
+      };
+    }
+    </script>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% macro xpiece(b) -%}
+    <a href="/inscriptions/{{ b.inscription }}/view"><strong>{{ b.name or (b.collection ~ (' #' ~ b.edition if b.edition is not none else '')) or ('#' ~ "{:,}".format(b.number) if b.number is not none else b.inscription[:10] ~ '…') }}</strong></a>
+    {{- ' ' }}{{ net_badge(false) }}
+    {%- if b.name and b.collection %}<div class="muted" style="font-size:.8rem">{{ b.collection }}</div>{% endif %}
+  {%- endmacro %}
+  {% macro xthumb(b) -%}
+    <a class="ofthumb" href="/inscriptions/{{ b.inscription }}/view">{% if b.content_type.startswith('image/') %}<img src="/content/{{ b.inscription }}"
+       alt="{{ b.name }}" loading="lazy" data-drop-broken>{% else %}<span class="muted" style="display:grid;place-items:center;height:100%;font-size:.7rem">{{ (b.content_type.split('/')[-1] or 'file')[:6] }}</span>{% endif %}</a>
+  {%- endmacro %}
+  {% if x_in %}
+  <div class="ex-h">Offers in Pepecoin main PEP for your things</div>
+  <div class="ex-card" style="padding:4px 14px">
+    {% for b in x_in %}
+    <div class="offerrow">
+      {{ xthumb(b) }}
+      <div class="oftext">Somebody offers <strong>{{ b.pep }} PEP</strong> {{ net_badge(true) }} for your {{ xpiece(b) }}
+        <div class="muted" style="font-size:.8rem">Real coins, held by this node until you sell. It takes 0.5%.</div></div>
+      <div class="ofdo"><a class="btn small" href="/exchange/x/nft/{{ b.inscription }}?held=1&amp;side=sell&amp;price={{ b.pep }}#x-form">Sell for {{ b.pep }} PEP</a></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="ex-h">Your offers</div>
+  {% if x_out %}
+  <div class="ex-card" style="padding:4px 14px;margin-bottom:10px">
+    {% for b in x_out %}
+    <div class="offerrow">
+      {{ xthumb(b) }}
+      <div class="oftext">You offer <strong>{{ b.pep }} PEP</strong> {{ net_badge(true) }} for {{ xpiece(b) }}
+        <div style="margin-top:3px">{% if b.status == 'awaiting' %}<span class="ex-pill wait">Checking deposit</span>
+          {% else %}<span class="ex-pill open">Waiting for the owner</span>{% endif %}</div></div>
+      <div class="ofdo"><a class="btn ghost small" href="/exchange/x/nft/{{ b.inscription }}?held=1">Manage</a></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if not offers_out and not x_out %}
+    <div class="panel empty"><p>You haven't made any offers. Open any NFT and press
+      <strong>Make offer</strong>.</p></div>
+  {% elif offers_out %}
+  <div class="ex-card" style="padding:4px 14px">
+    {% for b in offers_out %}
+    <div class="offerrow">
+      {{ thumb(b) }}
+      <div class="oftext">You offered <strong>{{ b.price|replace(' coins', ' ' ~ chain.params.coin) }}</strong> {{ net_badge(chain) }} for {{ piece(b) }} {{ net_badge(chain) }}
+        <span class="muted" style="font-size:.84rem">&middot; owned by {{ b.owner|who }}</span></div>
+      <div class="ofdo">
+        {% if viewer == 'account' and b.presigned %}
+          <span class="ex-pill wait" title="It buys the piece the moment they accept">Waiting for the owner</span>
+          <button type="button" class="ghost small" data-withdraw="{{ b.txid }}">Withdraw</button>
+        {% elif viewer == 'account' %}
+          <span data-answer-for="{{ b.txid }}" {% if b.busy %}data-busy="1"{% endif %}
+                data-piece="{{ b.inscription }}" data-price="{{ b.price|replace(' coins', ' ' ~ chain.params.coin) }}"
+                data-number="{{ b.number if b.number is not none else '' }}"></span>
+        {% else %}<span class="ex-pill wait">Waiting for the owner</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% if viewer == 'account' %}
+    <p class="msg" id="fill-news" hidden></p>
+    {% include "_offer_complete.html" %}
+    <script type="module" nonce="{{ csp_nonce }}">
+    // Cancel an offer (2026-09-28: "Offers need to be able to be
+    // canceled"): spend the coins it was signed over back to you, which is the
+    // only way to take back a signature already handed over.
+    import * as wallet from "/wallet.js";
+    const CHAIN = {network: "{{ chain.network }}", version: {{ chain.params.pubkeyhash_version }}};
+    for (const b of document.querySelectorAll("[data-withdraw]")) {
+      b.onclick = async () => {
+        const news = document.getElementById("fill-news");
+        const say = (t, ok) => { news.textContent = t; news.hidden = !t;
+                                 news.className = "msg " + (ok ? "ok" : "err"); };
+        b.disabled = true;
+        try {
+          const held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN);
+          const offer = await wallet.withdrawOffer(held, b.dataset.withdraw);
+          const shown = await wallet.checked(offer, held);
+          if (!(await arcadeAsk("Cancel this offer?",
+              "Nobody can accept it after this. Your coins come back to you: one small "
+              + `transaction, ${shown.coinsOf(shown.fee)} in fees.`, "Cancel the offer"))) {
+            b.disabled = false; return;
+          }
+          await wallet.confirm(held, offer);
+          b.replaceWith(Object.assign(document.createElement("span"),
+                        {className: "muted", textContent: "cancelled"}));
+          say("Cancelled. Your coins are yours to spend again when the block lands.", true);
+          setTimeout(() => location.reload(), 1600);          // into History
+        } catch (e) { b.disabled = false; say(String(e.message || e), false); }
+      };
+    }
+    </script>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if token_bids %}
+  <div class="ex-h">Buy orders on your tokens {{ net_badge(chain) }}</div>
+  <script nonce="{{ csp_nonce }}">
+  /* Decline hides it from this list only: the order stays on the book, and
+     anybody may still sell into it (2026-09-28). */
+  document.addEventListener("click", async function (e) {
+    var b = e.target.closest && e.target.closest("[data-bid-decline]");
+    if (!b) return;
+    b.disabled = true;
+    var r = await fetch("/account/token-bid/decline", {method: "POST",
+      headers: {"Content-Type": "application/json"{% if viewer != 'account' %}, "X-Arcade-Admin": "1"{% endif %}}, body: JSON.stringify({key: b.dataset.bidDecline})});
+    if (r.ok) { var row = b.closest(".offerrow"); if (row) row.remove(); } else { b.disabled = false; }
+  });
+  </script>
+  <div class="ex-card" style="padding:4px 14px">
+    {% for b in token_bids %}
+    <div class="offerrow">
+      <div class="oftext"><strong>{{ b.buyer|who }}</strong> wants <strong>{{ b.amount }}
+        {{ wall(b.name) }}</strong> at <strong>{{ b.price }} {{ chain.params.coin }}</strong> each
+        {%- if b.mode %} <span class="muted" style="font-size:.8rem">&middot;
+          {{ 'fills at once' if b.mode == 'away' else 'fills when they are back' }}</span>{% endif %}</div>
+      <div class="ofdo"><a class="btn small" href="/exchange/pair/{{ b.property_id }}?sell={{ b.price|urlencode }}&amp;amount={{ b.amount|urlencode }}">Sell to them</a>
+        <button type="button" class="ghost small" data-bid-decline="{{ b.key }}">Decline</button></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if offer_history %}
+  <div class="ex-h">History</div>
+  <div class="ex-card" style="padding:4px 14px">
+    {% for h in offer_history %}
+    <div class="offerrow">
+      {{ thumb(h) }}
+      <div class="oftext">
+        {%- if h.mine %}You offered <strong>{{ h.price }}</strong> for {{ piece(h) }}
+          <span class="muted" style="font-size:.84rem">&middot; {{ h.other|who }}</span>
+        {%- else %}<strong>{{ h.other|who }}</strong> offered <strong>{{ h.price }}</strong> for {{ piece(h) }}{% endif %}</div>
+      <div class="ofdo"><span class="pill{{ ' ok' if h.status in ('sold', 'bought') }}">{{ h.status }}</span>
+        <span class="muted" style="font-size:.78rem">{{ h.at|int|ago }}</span></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+{% elif tab in ord_tab_names() %}
+{% include "_doginals_tab.html" %}
+{% elif tab == 'mintpads' %}
+  {# Every mintpad, NFT and token alike, drawn as the feed draws it and ranked
+     like the old Launches list (2026-09-28). The buttons are the feed's
+     forms aimed at the pad's txid; an account's tab signs them (script below). #}
+  {% set acts = viewer == 'wallet' or (mine_tag) %}
+  <div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
+    <span class="ex-modes" style="margin:0">
+      {%- set keep = '' if show == 'mix' else '&show=' ~ show %}
+      <a class="ex-chip{{ ' on' if sort != 'new' }}" href="/exchange?tab=mintpads{{ keep }}"{% if sort != 'new' %} aria-current="true"{% endif %}>Popular</a>
+      <a class="ex-chip{{ ' on' if sort == 'new' }}" href="/exchange?tab=mintpads&amp;sort=new{{ keep }}"{% if sort == 'new' %} aria-current="true"{% endif %}>Latest</a></span>
+    {{ net_chips('mintpads', ['mix', 'testnet', 'mainnet'], '&sort=new' if sort == 'new' else '') }}
+    <a class="btn small" style="margin-left:auto" href="/mintpad/new">Start a launch</a>
+  </div>
+  <p class="msg" id="pad-news" hidden></p>
+  {# This arcade's own DigiDollar-test launchpad (arcade/ddpad.py, /bytelings), on top while it has pieces. #}
+  <div class="panel" id="ddpad-card" hidden style="gap:12px;align-items:center;margin:0 0 12px">
+    <img id="ddpad-img" alt="" style="width:64px;height:64px;image-rendering:pixelated;border-radius:8px">
+    <div><b id="ddpad-name"></b><div class="muted" id="ddpad-says" style="font-size:.88rem"></div></div>
+    <a class="ex-cta" href="/bytelings" style="margin:0 0 0 auto">Open</a>
+  </div>
+  <script nonce="{{ csp_nonce }}">
+  fetch("/ddpad/state", {cache: "no-store"}).then((r) => r.ok ? r.json() : null).then((s) => {
+    if (!s || !s.counts || !s.counts.total) return;
+    const card = document.getElementById("ddpad-card");
+    document.getElementById("ddpad-img").src = `/ddpad/picture/${1 + Math.floor(Math.random() * s.counts.total)}`;
+    document.getElementById("ddpad-name").textContent = s.name;
+    document.getElementById("ddpad-says").textContent = s.open
+      ? `${s.counts.left} of ${s.counts.total} left · $${(s.price_cents / 100).toFixed(2)} in DigiDollar test, one each`
+      : `Coming soon: ${s.counts.inscribed} of ${s.counts.total} on the chain`;
+    card.hidden = false; card.style.display = "flex";
+  }).catch(() => {});
+  </script>
+  {% if not pads %}
+  <div class="panel empty"><p>No mintpads are on {{ show if show != 'mix' else 'any chain' }} yet.</p>
+    <p class="muted" style="font-size:.86rem"><a href="/mintpad/new">Open one</a> for a
+      collection or a token you made.</p></div>
+  {% endif %}
+  {% for it in pads %}
+  {# A launch as a card (the Exchange redesign, 2026-10-09): what it is, who made it,
+     how far it has got, and Mint, which opens the pad's own page right here -- the
+     page inscribed with it is what mints, so it is the thing the button shows. A pad
+     that has minted out has already left this list (2026-09-28), so every card here
+     is live. #}
+  {% set total = (it.trades or 0) + (it.mints or 0) %}
+  <div class="ex-card padcard">
+    <div class="ex-hero" style="margin:0 0 8px">
+      <span class="ex-tic" style="width:44px;height:44px;border-radius:12px;background:hsl({{ (it.number or 0) * 47 % 360 }} 45% 42%)">{{ (wall_text(it.name, '?') or '?')[:1]|upper }}</span>
+      <div class="ex-mid" style="white-space:normal">
+        <b>{{ wall(it.name) }}</b>
+        <small>{{ net_badge(it.chain_net or it.mainnet) }} <span class="ex-pill done">Live</span>
+          <span class="ex-pill off">{{ 'Token' if it.kind == 'token' else 'NFT collection' }}</span>
+          by {{ it.creator|who }} &middot; &#9829; {{ it.likes }} &middot; {{ when(it.time) if it.time else 'just now' }}</small>
+      </div>
+    </div>
+    <div class="ex-stats" style="margin:0 0 4px">
+      <span>{{ 'Mint it' if not (it.lot or it.kind != 'token' or it.mints) else '' }}
+      {%- if it.lot %}{{ it.lot }} per mint{% endif %}
+      {%- if it.kind != 'token' %}{{ ' &middot; '|safe if it.lot }}{{ '{:,}'.format(it.trades) }} minted{% endif %}
+      {%- if it.mints %} &middot; {{ '{:,}'.format(it.mints) }} {{ ('mint' if it.kind == 'token' else 'piece') ~ ('' if it.mints == 1 else 's') }} left{% endif %}</span>
+    </div>
+    {% if it.kind != 'token' and it.mints is not none and total %}
+    <div class="ex-bar" role="progressbar" aria-label="Minted" aria-valuemin="0" aria-valuemax="{{ total }}" aria-valuenow="{{ it.trades }}">
+      <i style="width:{{ (it.trades / total * 100)|round(1) }}%"></i></div>
+    {% endif %}
+    <div class="row" style="gap:8px;margin-top:12px">
+      {% if it.switch %}
+      {# On the other chain: mint it from that chain's own Launchpad, where its page
+         reads the right chain (2026-10-13). #}
+      <a class="ex-cta" style="margin:0;flex:1;text-align:center" {{ go('/exchange?tab=mintpads&show=' ~ it.net, it.switch) }}>Mint on {{ it.net }}</a>
+      {% else %}
+      <button type="button" class="ex-cta" style="margin:0;flex:1" data-pad-open="{{ it.txid }}"
+              data-pad-src="{{ pad_frames.get(it.txid) or ('/content/' ~ it.txid) }}" aria-expanded="false">Mint</button>
+      {% endif %}
+      <a class="btn ghost" {{ go('/inscriptions/' ~ it.txid ~ '/view', it.switch) }} style="flex:0 0 auto">Open</a>
+    </div>
+    {% if not it.switch %}
+    {# Hidden until Mint, and lazy, so a list of pads loads none of them until one is wanted. #}
+    <iframe class="inscription-frame postmedia padframe" src="{{ pad_frames.get(it.txid) or ('/content/' ~ it.txid) }}" id="pad-{{ it.txid }}" hidden
+            title="{{ wall_text(it.name, 'mintpad') }}" loading="lazy" sandbox="allow-scripts allow-pointer-lock"></iframe>
+    {% endif %}
+    <div class="row lacts" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+      {% if acts %}
+      <form method="post" action="/feed/{{ it.txid }}/{{ 'unlike' if it.liked else 'like' }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="back" value="/exchange?tab=mintpads{{ '&sort=new' if sort == 'new' else '' }}">
+        <button class="small ghost likebtn{{ ' liked' if it.liked }}" type="submit" data-count="{{ it.likes }}">{{ '♥' if it.liked else '♡' }} {{ it.likes }}</button></form>
+      <form method="post" action="/feed/{{ it.txid }}/{{ 'undislike' if it.disliked else 'dislike' }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="back" value="/exchange?tab=mintpads{{ '&sort=new' if sort == 'new' else '' }}">
+        <button class="small ghost dislikebtn{{ ' disliked' if it.disliked }}" type="submit" data-count="{{ it.dislikes }}">&#128078; {{ it.dislikes }}</button></form>
+      <button class="small ghost" type="button" data-toggle="c-{{ it.txid }}">&#128172; {{ it.comments }}</button>
+      {% else %}
+      <span class="pill">&#9829; {{ it.likes }}</span>
+      <span class="pill">&#128078; {{ it.dislikes }}</span>
+      <span class="pill">&#128172; {{ it.comments }}</span>
+      <a class="muted" style="font-size:.84rem" href="/me">Sign in to react</a>
+      {% endif %}
+    </div>
+    {% for c in it.comment_rows %}
+    <div class="muted" style="font-size:.86rem;margin-top:6px"><strong>{{ c.author|who }}</strong> {{ c.text }}</div>
+    {% endfor %}
+    <a class="small" style="display:inline-block;margin-top:6px" href="/launches/{{ it.txid }}">
+      {%- if it.comments %}All {{ it.comments }} comment{{ '' if it.comments == 1 else 's' }} and replies &rarr;
+      {%- else %}Discuss it &rarr;{% endif %}</a>
+    {% if acts %}
+    <form method="post" action="/feed/{{ it.txid }}/reply" id="c-{{ it.txid }}" hidden
+          class="row" style="gap:8px;margin-top:8px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="/exchange?tab=mintpads{{ '&sort=new' if sort == 'new' else '' }}">
+      <div style="flex:1"><input autocomplete="off" name="text" maxlength="200" placeholder="say something about it"></div>
+      <button class="small" type="submit">Comment</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <script nonce="{{ csp_nonce }}">
+  // Mint opens the pad's own page in the card; it loads only when asked for.
+  document.querySelectorAll("[data-pad-open]").forEach(function (b) {
+    b.onclick = function () {
+      var f = document.getElementById("pad-" + b.dataset.padOpen);
+      f.hidden = !f.hidden;
+      b.setAttribute("aria-expanded", String(!f.hidden));
+      b.textContent = f.hidden ? "Mint" : "Close";
+      if (!f.hidden) f.scrollIntoView({behavior: "smooth", block: "nearest"});
+    };
+  });
+  </script>
+  <style>
+    .padcard{margin:0 0 14px;min-width:0}
+    .padframe{display:block;width:100%;max-width:100%;border:0;border-radius:10px;height:min(78vh,640px);margin-top:10px}
+    .lacts button.on{background:var(--accent,#c9a227);color:#fff}
+  </style>
+  {% if viewer == 'account' and mine_tag %}
+  <script type="module" nonce="{{ csp_nonce }}">
+  /* An account's tab signs the like, dislike or comment itself, as on the feed. */
+  import * as wallet from "/wallet.js";
+  const CHAIN = {network: "{{ state.messaging.network }}",
+                 version: {{ state.messaging.params.pubkeyhash_version }}};
+  const KINDS = {like: 1, unlike: 2, reply: 3, dislike: 8, undislike: 9};
+  const news = document.getElementById("pad-news");
+  const say = (t, bad) => { news.textContent = t; news.hidden = !t;
+                            news.className = "msg " + (bad ? "err" : "ok"); };
+  const opening = wallet.opened(CHAIN);
+  document.addEventListener("submit", async (event) => {
+    const form = event.target;
+    const one = (form.getAttribute("action") || "").match(
+      /^\/feed\/([0-9a-f]{64})\/(like|unlike|dislike|undislike|reply)$/);
+    if (!one) return;
+    event.preventDefault();
+    const flip = window.arcadePress(form, one[2]);
+    const held = (await opening) || await arcadeKeys(CHAIN).catch(() => null);
+    if (!held) { if (flip) flip.undo(); say("Unlock your wallet to do that.", true); return; }
+    const [, txid, doing] = one;
+    const button = form.querySelector("button[type=submit]");
+    if (button) button.disabled = true;
+    try {
+      const out = await wallet.react(held, txid, KINDS[doing],
+                                     (form.elements.text || {}).value || "");
+      if (form.elements.text) { form.elements.text.value = ""; form.hidden = true; }
+      say(`Sent (${out.txid.slice(0, 12)}…). It counts here when its block lands.`);
+    } catch (e) {
+      if (flip) flip.undo();
+      say(String(e.message || e), true);
+    } finally { if (button) button.disabled = false; }
+  });
+  </script>
+  {% endif %}
+
+  {% if account_pads and show in ('mix', 'mainnet' if chain.is_mainnet else 'testnet') %}
+  <div class="ex-h">Collection mintpads not inscribed yet</div>
+
+  {% if account_pads %}
+  <div class="cards" style="margin-bottom:18px">
+    {% for pad in account_pads %}
+    <a class="panel" href="/mintpad/{{ pad.seller }}/{{ pad.name|urlencode }}" style="display:block;color:inherit">
+      <img src="/content/{{ pad.cover }}" alt="" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px">
+      <strong>{{ pad.name }}</strong>
+      <div class="muted" style="font-size:.84rem">by {{ pad.seller|who_text }} &middot; {{ pad.left }} pieces left
+        &middot; {{ '%g' % (pad.price / 100000000) }} {{ chain.params.coin }} {{ net_badge(chain) }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+
+{% elif tab == 'llm' %}
+{% include "_llm_tab.html" %}
+{% elif tab == 'tokens' %}
+  {# The coin side is said as the coin, not the chain (2026-10-08: PEP, and PEP TEST on testnet). #}
+  {% set coin_name = chain.params.coin %}
+  {# Which markets (2026-10-13: "a mix, testnet only, mainnet only, and cross
+     chain only"): every chain's pairs together, or one kind of them. #}
+  <div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
+    {{ net_chips('tokens', ['mix', 'testnet', 'mainnet', 'cross']) }}
+  </div>
+  {% if pairs %}
+  {# One row per market, as a phone wants it (2026-10-09): its face, its name and
+     what it is priced in, a line of its real recent trades, the last price and the
+     day's move. Everything else is one tap away on the market itself. #}
+  {# Favorites first (2026-10-17, layout A): the page opens on the markets this reader
+     starred, with All markets and + New pair beside it; search always looks through every
+     market. Stars are kept per account (/account/favorites, _exui.fav_script). #}
+  {{ ex.fav_script() }}{{ ex.pair_icon_css() }}
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><a class="btn small ghost" href="/exchange/history">Trade history</a></div>
+  <div class="ex-seg" id="mktmode" role="group" aria-label="Which markets">
+    <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
+    <button type="button" data-mode="all" aria-pressed="true">All markets</button>
+    <button type="button" data-mode="new" aria-pressed="false">+ New pair</button>
+  </div>
+  <input autocomplete="off" id="marketfind" class="ex-find" type="search" placeholder="Search all {{ pairs|length }} market{{ '' if pairs|length == 1 else 's' }}"
+         aria-label="Search markets">
+  <div class="ex-list" id="markets">
+    <p class="ex-note" id="fav-empty" hidden style="margin:6px 4px 10px">Tap &#9734; on any market to keep it here.
+      The Exchange opens on your favorites, and searching always looks through every market.</p>
+    <div id="sugg-head" hidden style="display:flex;justify-content:space-between;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:14px 4px 4px">
+      <span>Suggested</span><span>most traded today</span></div>
+    {% for p in pairs %}
+    {% set coin_name = coin_of(p.chain_net or p.mainnet) %}
+    {% set quote_text = wall_text(p.quote_label, 'a token') if p.quote_label else coin_name %}
+    {# The row's own search key. A judged name contributes nothing to it, because the
+       name is exactly what the cover hides; such a token is found by its number. #}
+    <a class="ex-mrow" {{ go(p.href, p.switch) }} data-net="{{ p.net }}" data-market="{{ wall_text(p.name, '')|lower }}/{{ quote_text|lower }} #{{ p.property_id }}"
+       data-fav-key="{{ fav_key(p.href, p.chain_net) }}" data-vol="{{ p.coins or 0 }}" data-orders="{{ p.orders or 0 }}">
+      {%- if p.face_base %}{{ ex.pair_icon(p.face_base, p.face_quote) }}
+      {%- elif p.icon %}<img class="ex-tic" src="/content/{{ p.icon }}" alt="" loading="lazy">
+      {%- else %}<span class="ex-tic" style="background:hsl({{ ((p.property_id|string|length * 97 + (p.name|length) * 31) % 360) }} 45% 42%)">{{ (wall_text(p.name, '?') or '?')[:1]|upper }}</span>{% endif %}
+      {# Each row still says which chain and what supply (2026-10-06): the badges, small. #}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(p.name, 'token name') }}<span class="muted" style="font-weight:500">/{% if p.quote_label %}{{ wall(p.quote_label, 'token name') }}{% else %}{{ coin_name }}{% endif %}</span></span></b>
+        <small>{{ net_badge(p.chain_net or p.mainnet) }}{% if p.quote_net %}<span class="muted">/</span>{{ net_badge(p.quote_net) }}{% elif p.quote_main %}<span class="muted">/</span>{{ net_badge(true) }}{% endif %}{% if p.property_id %}{{ supply_badge(p) }}{% endif %}
+          {#- The whole description, behind its wall (a verdict is kept per text): CSS cuts it short. -#}
+          {%- if p.coins %} {{ p.trades }} trade{{ '' if p.trades == 1 else 's' }} today{% elif p.bid or p.ask %} {{ p.orders }} order{{ '' if p.orders == 1 else 's' }}{% endif %}
+          {%- if p.about %}<span class="about" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ wall(p.about, 'description') }}</span>{% endif %}</small></span>
+      {#- No sparkline in the list (2026-10-11: "remove the charts from the
+          token list, but not the token pair pages"): the chart is on the market's own page. -#}
+      <span class="ex-px">
+        {%- if p.last is not none %}{{ ex.px(p.last) }}
+        {%- elif p.ask %}{{ ex.px(p.ask) }}<div class="muted" style="font-size:.7rem;font-weight:500">asking</div>
+        {%- elif p.bid %}{{ ex.px(p.bid) }}<div class="muted" style="font-size:.7rem;font-weight:500">bid</div>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}
+        <div class="muted" style="font-size:.66rem;font-weight:600">{% if p.quote_label %}{{ wall_text(p.quote_label, 'token') }}{% else %}{{ coin_name }}{% endif %}</div>
+        {%- if p.last is not none %}<div>{{ ex.chg(p.change, p.new) }}</div>{% endif %}</span>
+      {{ ex.fav_button(fav_key(p.href, p.chain_net), small=true) }}
+    </a>
+    {% endfor %}
+  </div>
+  <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
+  {# The pair's whole name on a line of its own, the rest below it (2026-10-17: "The pair name is cut off ...
+     If the name is still too long for the display, it should scroll across"). #}
+  {{ ex.market_list_assets() }}
+  {% else %}
+  <div class="panel empty"><p>No market has an order or a trade yet
+    {%- if show == 'cross' %} on the cross-chain book{% elif show == 'mainnet' %} on mainnet{% elif show == 'testnet' %} on testnet{% endif %}.</p>
+    <p class="muted" style="font-size:.86rem">Open a token from the
+      <a href="/tokens">Tokens</a> page and put an order on its book.</p></div>
+  {% endif %}
+
+  {# Token/token pairs (Params.token_pairs_from, 2026-10-06): one token priced in
+     another, matched by the chain itself when two orders cross. #}
+  {# One trade box (2026-10-15: the swaps card and Start a market "are going to be
+     combined ... it also should show more information like the price per asset priced in the
+     other asset ... I want 1000 <token/coinA> at <N values> <token/coinB> per <token/coinA>").
+     Any coin, or a token or piece you hold, on any chain, for any other: both on one chain open
+     that chain's own market (instant, one transaction); two chains list a swap, settled by lock
+     scripts. Below it, the swaps every arcade lists, each with its price. #}
+  {% set trades_here = (viewer == 'account' and can_list_orders) or can_trade_orders %}
+  {% include "_pick.html" %}
+  <div class="ex-card" id="trade-orders" style="margin-top:18px">
+    <h3 style="margin:0 0 4px">Trade any pair</h3>
+    <p class="muted" style="font-size:.84rem;margin:0 0 12px">Both on one chain: that chain's own market, settled
+      instantly in one transaction. On two chains: a swap settled by lock scripts on both -- either both sides get
+      paid or both get their own back, and nobody holds anybody's coins. <a href="/docs/swaps.md">How a swap works</a></p>
+    {% if public or viewer == 'account' %}<form id="start-market" method="get" action="/exchange/pairs" style="margin:0"{% if viewer == 'account' and can_list_orders %} data-account-trade{% endif %}>
+    {% else %}<form id="start-market" method="post" action="/exchange/trade-orders/place" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">{% endif %}
+      <div class="ex-seg" role="radiogroup" aria-label="Buy or sell" style="margin-bottom:10px">
+        <label><input type="radio" name="side" value="buy" checked><span>I want to buy (bid)</span></label>
+        <label><input type="radio" name="side" value="sell"><span>I want to sell (ask)</span></label>
+      </div>
+      <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
+        <input name="amount" inputmode="decimal" placeholder="1000" autocomplete="off" style="width:96px;flex:0 0 auto" aria-label="How many">
+        {#- Search boxes, not drop-downs (2026-10-17): the reader's own half lists only what they hold,
+            with how much; the select behind each box keeps the value the form sends. #}
+        <span class="pick" data-for="pair-base"><input type="search" class="pick-q" placeholder="Search a coin or token" autocomplete="off" role="combobox" aria-expanded="false" aria-label="Of what"><span class="pick-list" role="listbox" hidden></span></span>
+        <select id="pair-base" name="base" hidden aria-label="Of what">
+          {#- Coins and tokens only (2026-10-17: "NFT's should not be in the coin and token pair list"): a piece is sold from its own page. #}
+          {%- for o in pair_choices or [] if o.kind not in ('nft', 'doginal') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}" data-mine="{{ 1 if o.mine else 0 }}" data-held="{{ o.held }}"{% if loop.first and o.kind != 'coin' %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+        </select>
+        <input name="token" inputmode="numeric" placeholder="token #" autocomplete="off" hidden style="width:96px;flex:0 0 auto" aria-label="Token number">
+      </div>
+      <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <span class="muted" style="font-size:.9rem">at</span>
+        <input name="price" inputmode="decimal" placeholder="price" autocomplete="off" style="width:96px;flex:0 0 auto" aria-label="Price">
+        <span class="pick" data-for="pair-quote"><input type="search" class="pick-q" placeholder="Search a coin or token" autocomplete="off" role="combobox" aria-expanded="false" aria-label="Priced in"><span class="pick-list" role="listbox" hidden></span></span>
+        <select id="pair-quote" name="quote" hidden aria-label="Priced in">
+          {%- for o in pair_choices or [] if o.kind not in ('nft', 'other') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}" data-mine="{{ 1 if o.mine else 0 }}" data-held="{{ o.held }}"{% if loop.index == 2 %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+        </select>
+        <span class="muted" style="font-size:.9rem">per <b id="pair-per">each</b></span>
+      </div>
+      <p class="muted" id="pair-sum" style="font-size:.84rem;margin:8px 0 0" aria-live="polite"></p>
+      <button type="submit" class="ex-cta" id="pair-go" style="margin-top:10px">{{ 'Place order' if trades_here else 'Open the market' }}</button>
+    </form>
+    {% if pair_viewer == 'nobody' %}<p class="muted" style="font-size:.8rem;margin:8px 0 0">Sign in to trade, and to see your own tokens and pieces here.</p>{% endif %}
+    <script nonce="{{ csp_nonce }}">
+    (function () {
+      var f = document.getElementById('start-market'); if (!f) return;
+      var trades = {{ 'true' if trades_here else 'false' }};
+      function pick(sel) { var o = sel.selectedOptions[0]; return o ? o.dataset : {}; }
+      function draw() {
+        var a = pick(f.base), b = pick(f.quote), n = Number(f.amount.value), p = Number(f.price.value);
+        var nft = a.kind === 'nft', other = a.kind === 'other';
+        f.amount.hidden = nft; if (nft) f.amount.value = '1';
+        f.token.hidden = !other;
+        document.getElementById('pair-per').textContent = nft ? 'it' : other ? ('token #' + (f.token.value || '…')) : (a.name || 'each');
+        var same = a.net && a.net === b.net, sum = document.getElementById('pair-sum'), go = document.getElementById('pair-go');
+        go.disabled = !a.net || !b.net;
+        if (go.disabled) { sum.textContent = (f.side.value === 'buy' ? 'Pick what you pay with' : 'Pick what you sell')
+          + ': only coins and tokens in your wallet can go on your side.'; return; }
+        go.textContent = same || !trades ? 'Open the market' : 'Place order';
+        if (same) { sum.textContent = 'One chain: this opens its own market, where it trades instantly.'; return; }
+        if (n > 0 && p > 0) {
+          var total = +(n * p).toPrecision(12);
+          var buying = f.side.value === 'buy';
+          sum.textContent = (buying ? 'You pay ' : 'You get ') + total + ' ' + (b.name || '') + (buying ? ' for ' : ' for ')
+            + (nft ? a.name : n + ' ' + (a.name || '')) + ', through lock scripts on both chains.';
+        } else sum.textContent = trades ? 'Fill in how many and the price each.' : '';
+      }
+      ['input', 'change'].forEach(function (e) { f.addEventListener(e, draw); });
+      // The two search boxes. The reader's own half -- what they pay on a bid, what they sell on an
+      // ask -- offers only what they hold, each with how much; the other half offers anything.
+      var known = {{ 'false' if pair_viewer == 'nobody' else 'true' }};
+      function ownHalf(sel) { return known && (f.side.value === 'buy' ? sel === f.quote : sel === f.base); }
+      function allowed(sel, o) { return !ownHalf(sel) || o.dataset.mine === '1'; }
+      function shown(sel) { var o = sel.selectedOptions[0]; return o && allowed(sel, o) ? o.textContent : ''; }
+      // Each box is the shared search tool (_pick.html, 2026-10-21); the select behind it keeps the value sent.
+      var boxes = [].slice.call(f.querySelectorAll('.pick')).map(function (box) {
+        var sel = document.getElementById(box.dataset.for);
+        var tool = window.arcadeSearchBox(box, {
+          placeholder: 'Search a coin or token',
+          shown: function () { return shown(sel); },
+          choose: function (row) { sel.value = row.value; sel.dispatchEvent(new Event('change', {bubbles: true})); },
+          // Type to search (2026-10-20: "auto complete search boxes rather than a drop-down with a super long
+          // list"): empty, a short start -- what the reader holds on their own half, coins first otherwise -- and
+          // then only what every typed word matches, a dozen at most.
+          items: function (text, words, done) {
+            // DRC-20 / PRC-20 ticks are thousands (2026-10-22): asked of the node as they are typed, and added to the
+            // select behind the box, so a pick is sent like any other.
+            if (words.length && !ownHalf(sel)) {
+              answer();                                   // what is here now, at once; the node's ticks join it
+              var asked = text;
+              fetch('/exchange/token20/search?q=' + encodeURIComponent(words[0])).then(function (r) { return r.json(); })
+                .then(function (got) {
+                  var have = {};
+                  [].slice.call(sel.options).forEach(function (o) { have[o.value] = 1; });
+                  (got.results || []).forEach(function (t) {
+                    if (have[t.value]) return;
+                    var o = document.createElement('option');
+                    o.value = t.value; o.textContent = t.label;
+                    o.dataset.net = t.net; o.dataset.kind = t.kind; o.dataset.div = '0'; o.dataset.name = t.name;
+                    o.dataset.mine = '0'; o.dataset.held = '';
+                    sel.appendChild(o);
+                  });
+                  // Only for the words still in the box: an answer to an earlier keystroke never redraws a later one.
+                  if ((got.results || []).length && box.querySelector('.pick-q').value.trim().toLowerCase() === String(asked || '').trim().toLowerCase()) answer();
+                }).catch(function () {});
+              return;
+            }
+            answer();
+            function answer() {
+            var opts = [].slice.call(sel.options).filter(function (o) {
+              var hay = (o.textContent + ' ' + o.value + ' ' + (o.dataset.name || '')).toLowerCase();
+              return allowed(sel, o) && words.every(function (w) { return hay.indexOf(w) >= 0; });
+            });
+            if (!words.length) {
+              opts.sort(function (a, b) {
+                return (b.dataset.mine === '1') - (a.dataset.mine === '1')
+                  || (a.dataset.kind === 'coin' ? 0 : 1) - (b.dataset.kind === 'coin' ? 0 : 1);
+              });
+            }
+            var cap = words.length ? 12 : 8;
+            done(opts.slice(0, cap).map(function (o) {
+              return {value: o.value, label: o.textContent, note: o.dataset.held ? 'you have ' + o.dataset.held : ''};
+            }), opts.length - cap, ownHalf(sel) ? 'Nothing you hold matches. You can only offer coins and tokens in your '
+                                                 + 'wallet.' : 'Nothing matches.');
+            }
+          }
+        });
+        return {sel: sel, q: tool.q, sync: function () {
+          // A side switch can leave the reader's half on something they do not hold: take the first they do.
+          var o = sel.selectedOptions[0];
+          if (!o || !allowed(sel, o)) {
+            var first = [].slice.call(sel.options).filter(function (x) { return allowed(sel, x); })[0];
+            if (first) sel.value = first.value; else sel.selectedIndex = -1;
+          }
+          tool.sync();
+        }};
+      });
+      function syncAll() { boxes.forEach(function (b) { b.sync(); }); draw(); }
+      [].slice.call(f.side).forEach(function (r) { r.addEventListener('change', syncAll); });
+      syncAll();
+    })();
+    </script>
+
+    <div class="ex-h" style="margin-top:16px">Swaps listed now</div>
+    {% for o in trade_orders %}
+    <div class="row" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)">
+      <span style="flex:1">{{ net_badge(o['give'].network) }} <strong>{{ o.give_label }}</strong>
+        for {{ net_badge(o['get'].network) }} <strong>{{ o.get_label }}</strong>
+        {% if o.price_text %}<br><small><b>{{ o.price_text }}</b></small>{% endif %}
+        <small class="muted">&middot; by {{ o.lister|who }}{% if o.market %} &middot; <a href="{{ o.market }}">market</a>{% endif %}</small></span>
+      {% if o.mine and viewer != 'account' %}
+      {# The node's own order, in the same book everybody sees (2026-10-19). #}
+      <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
+        <input type="hidden" name="order" value="{{ o.id }}">
+        <button type="submit" class="ghost small">Cancel</button></form>
+      {% elif can_trade_orders %}
+      <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+        <button type="submit" class="small">Take</button></form>
+      {% elif viewer == 'account' and o.mine %}
+      <button type="button" class="ghost small" data-mine-id="{{ o.id }}" data-cancel-order="{{ o.id }}">Cancel</button>
+      {% elif viewer == 'account' %}
+      <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">Take</button>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% if not trade_orders %}<p class="muted" style="margin:0 0 8px">No arcade is offering a swap right now.</p>{% endif %}
+    {% if viewer != 'account' and viewer != 'nobody' and not can_trade_orders %}
+    <p class="muted" style="margin:6px 0 0;font-size:.84rem">This node's own wallet lists and takes swaps once
+      <a href="/admin#trading">Node-facilitated trades</a> is on (Admin &rarr; Trading).</p>
+    {% endif %}
+    {% if viewer == 'account' %}
+    {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks; shown on
+       Trade history (2026-10-17), so only their machinery is here. #}
+    <div hidden>{% include "_tab_swaps.html" %}</div>
+    {% endif %}
+    {% if viewer != 'nobody' %}
+    <p style="margin:6px 0 0;font-size:.84rem"><a href="/exchange/history">Your swaps and trade history &rarr;</a></p>
+    {% endif %}
+    {% if can_trade_orders %}
+    {% if my_trade_orders %}
+    <div class="ex-h" style="margin-top:10px">This node's swaps</div>
+    {% for o in my_trade_orders %}
+    <div class="row" style="gap:8px;align-items:center;padding:4px 0">
+      <span style="flex:1">{{ net_badge(o['give'].network) }} {{ o.give_label }}
+        for {{ net_badge(o['get'].network) }} {{ o.get_label }}</span>
+      <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
+        <button type="submit" class="ghost small">Withdraw</button></form>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if my_trades %}
+    <div class="ex-h" style="margin-top:10px">In progress</div>
+    {% for t in my_trades %}
+    <p class="muted" style="font-size:.82rem;margin:2px 0">{{ t.give }} for {{ t.get }} &middot; {{ t.role }} &middot; {{ t.note or t.state }}</p>
+    {% endfor %}
+    {% endif %}
+    {% endif %}
+  </div>
+
+
+{% else %}
+  <div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
+    {{ net_chips('market', ['mix', 'testnet', 'mainnet', 'cross']) }}
+  </div>
+
+  {# Collections as cards, the way the Wallet shows them (2026-10-09): the art, the
+     name, how many, and the two numbers a buyer looks for, the floor and how many are
+     for sale. Prices in {{ coin }}. #}
+  {% set coin_name = chain.params.coin %}
+  {% macro collcard(c) -%}
+    {% set where = '/exchange/collection/' ~ c.creator ~ '/' ~ c.name|urlencode %}
+    {% set coin_name = coin_of(c.chain_net or c.mainnet) %}
+    <a class="ex-coll" {{ go(where, c.switch) }} data-net="{{ c.net }}">
+      <span class="art" {% if c.cover %}style="background-image:url(/content/{{ c.cover }})"{% endif %}
+            role="img" aria-label="{{ wall_text(c.name, 'collection') }}">{% if not c.cover %}no art{% endif %}</span>
+      <b>{{ wall(c.name, 'collection name') }}</b>
+      <small>{{ net_badge(c.chain_net or c.mainnet) }} {{ "{:,}".format(c.count) }} pieces &middot; {{ c.creator|who_text }}</small>
+      <span class="nums"><span>Floor</span><strong>{% if c.floor %}{{ "%.4f"|format(c.floor / 100000000) }} <small>{{ coin_name }}</small>{% else %}&mdash;{% endif %}</strong></span>
+      <span class="nums"><span>24h</span>{% if c.change is defined and c.change is not none %}{{ ex.chg(c.change) }}{% else %}<span>&mdash;</span>{% endif %}</span>
+      <span class="nums"><span>For sale</span><strong>{{ c.for_sale or 0 }}</strong></span>
+      {%- if c.day_coins %}<span class="nums"><span>Volume today</span><span>{{ "%.2f"|format(c.day_coins) }} {{ coin_name }}</span></span>{% endif %}
+    </a>
+  {%- endmacro %}
+
+  {% if collections or ord_rows %}
+  {#- Every collection a row of one list, the way the Tokens tab draws its markets (2026-10-17: the NFT part
+      "needs to look as good as the tokens look"): its cover with the chain it lives on (top right) and the coin it is
+      priced in (bottom right), the whole name, its floor and the day's move, a star; Favorites first. -#}
+  {{ ex.fav_script() }}{{ ex.pair_icon_css() }}
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><a class="btn small ghost" href="/exchange/history">Trade history</a></div>
+  <div class="ex-seg" id="mktmode" role="group" aria-label="Which collections">
+    <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
+    <button type="button" data-mode="all" aria-pressed="true">All collections</button>
+    <button type="button" data-mode="new" data-href="/me/nfts" aria-pressed="false">+ List yours</button>
+  </div>
+  <input autocomplete="off" id="marketfind" class="ex-find" type="search" placeholder="Search {{ (collections|length) + (ord_rows or [])|length }} collections"
+         aria-label="Search collections">
+  <div class="ex-list" id="markets">
+    <p class="ex-note" id="fav-empty" hidden style="margin:6px 4px 10px">Tap &#9734; on any collection to keep it here.</p>
+    <div id="sugg-head" hidden style="display:flex;justify-content:space-between;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:14px 4px 4px">
+      <span>Suggested</span><span>most traded today</span></div>
+    {% for o in ord_rows or [] %}
+    <a class="ex-mrow" href="{{ o.href }}" data-net="mainnet" data-market="{{ o.name|lower }}"
+       data-fav-key="{{ o.href }}" data-vol="0" data-orders="{{ o.for_sale }}">
+      {%- if o.word %}
+      {{ ex.pair_icon({'src': doginal_frame(o.cover) if o.cover else '', 'letter': o.name[:1]|upper, 'net': o.net}, {'coin': o.net}) }}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ o.name }}</span></b>
+        <small>{{ net_badge(o.net) }} {{ "{:,}".format(o.count) }} {{ o.word }}s{% if o.for_sale %} &middot; {{ o.for_sale }} for sale{% endif %}</small></span>
+      {%- else %}
+      {{ ex.pair_icon({'coin': o.net}, {'coin': o.net}) }}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ o.name }}</span></b>
+        <small>{{ net_badge(o.net) }} {{ o.for_sale }} for sale &middot; ord inscriptions on {{ 'Dogecoin' if o.net == 'doge' else 'Pepecoin' }}</small></span>
+      {%- endif %}
+      <span class="ex-px">
+        {%- if o.floor %}{{ ex.px(o.floor / 100000000) }}<div class="muted" style="font-size:.7rem;font-weight:500">floor</div>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}
+        <div class="muted" style="font-size:.66rem;font-weight:600">{{ o.coin }}</div></span>
+      {{ ex.fav_button(o.href, small=true) }}
+    </a>
+    {% endfor %}
+    {% for c in collections %}
+    {% set where = '/exchange/collection/' ~ c.creator ~ '/' ~ c.name|urlencode %}
+    {% set cnet = c.chain_net or ('main' if c.mainnet else 'test') %}
+    {% set coin_name = coin_of(c.chain_net or c.mainnet) %}
+    <a class="ex-mrow" {{ go(where, c.switch) }} data-net="{{ c.net }}" data-market="{{ wall_text(c.name, '')|lower }} {{ c.creator }}"
+       data-fav-key="{{ where }}" data-vol="{{ c.day_coins or 0 }}" data-orders="{{ c.for_sale or 0 }}">
+      {{ ex.pair_icon({'icon': c.cover, 'net': cnet, 'letter': (wall_text(c.name, '?') or '?')[:1]|upper}, {'coin': cnet}) }}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(c.name, 'collection name') }}</span></b>
+        <small>{{ net_badge(c.chain_net or c.mainnet) }} {{ "{:,}".format(c.count) }} piece{{ '' if c.count == 1 else 's' }}
+          {%- if c.for_sale %} &middot; {{ c.for_sale }} for sale{% endif %} &middot; {{ c.creator|who_text }}</small></span>
+      <span class="ex-px">
+        {%- if c.floor %}{{ ex.px(c.floor / 100000000) }}<div class="muted" style="font-size:.7rem;font-weight:500">floor</div>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}
+        <div class="muted" style="font-size:.66rem;font-weight:600">{{ coin_name }}</div>
+        {%- if c.change is defined and c.change is not none %}<div>{{ ex.chg(c.change) }}</div>{% endif %}</span>
+      {{ ex.fav_button(where, small=true) }}
+    </a>
+    {% endfor %}
+  </div>
+  <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
+  {{ ex.market_list_assets() }}
+  {% endif %}
+
+  {% if sales %}
+  <div data-browse><div class="ex-h">Recently sold</div>
+  <table class="ex-table">
+    {% for t in sales %}
+    {% set view = go('/inscriptions/' ~ t.txid ~ '/view', t.switch) %}
+    <tr><td style="width:48px" data-net="{{ t.net }}"><a {{ view }}>
+      {%- if t.held and t.content_type.startswith('image/') %}
+      <img class="ex-tic" style="border-radius:10px" src="/content/{{ t.txid }}" alt="" loading="lazy">
+      {%- else %}<span class="ex-tic" style="border-radius:10px;background:var(--code);color:var(--muted);font-size:.66rem">#{{ t.number }}</span>{% endif %}</a></td>
+      <td><a {{ view }}><b>{{ wall(t.name) }}</b></a>
+        <small>{% if t.collection %}{{ t.collection }}{% if t.edition is not none %} #{{ t.edition }}{% endif %} &middot; {% endif %}{{ t.when|ago }}
+          &middot; from {{ t.seller|who }}</small></td>
+      <td class="ex-px">{{ t.price|replace(' coins', ' ' ~ coin_of(t.chain_net or t.mainnet)) }}<div>{{ net_badge(t.chain_net or t.mainnet) }}</div></td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+
+  {% if not collections %}
+  <div class="panel empty"><p>No collections
+    {%- if show == 'cross' %} have a piece on the cross-chain book{% else %} are indexed on {{ show if show != 'mix' else 'any chain' }}{% endif %} yet.</p>
+    <p class="muted" style="font-size:.86rem">A collection appears here because it
+      is on the chain, not because anybody listed it. Inscribe one from the
+      <a href="/inscriptions/collection">collection wizard</a>.</p></div>
+  {% endif %}
+
+
+{% endif %}
+{% if viewer == 'account' %}{% include "_buy_listing.html" %}{% endif %}
+{% endblock %}

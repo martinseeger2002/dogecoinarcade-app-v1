@@ -1,0 +1,600 @@
+{% extends "base.html" %}
+{% import "_account_wallettabs.html" as wt %}
+{% import "_not_ordinals.html" as notord %}
+{% block title %}Your NFTs · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Wallet</h1>
+{{ wt.tabs('nfts') }}
+<p class="sub">The inscriptions held by this account's addresses, read off
+  the chain. Everything inscribed here, yours or not, is on the
+  <a href="/nfts">NFTs</a> page.</p>
+{{ notord.pieces() }}
+
+<p class="muted" id="shut" hidden style="font-size:.86rem">
+  Your wallet is locked. Press Unlock at the top of the page, or just carry on: anything that needs your key asks for your password first.
+  <a href="/me">Open it</a> and come back.</p>
+
+<div class="msg err" id="trouble" hidden></div>
+<div class="msg ok" id="news" hidden></div>
+
+<div id="chains" data-client></div>
+
+<div class="panel empty" id="nothing" hidden>
+  <p>Nothing yet.</p>
+  <p class="muted" style="font-size:.86rem">Be sent one, buy one from the
+    <a href="/exchange?tab=market">Exchange</a>, or inscribe one below.</p>
+</div>
+
+{% include "_account_inscribe.html" %}
+
+<div class="panel" id="pricing" data-client hidden>
+  <h3 style="margin:0 0 6px" id="pricing-what">Put a price on it</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    Nothing moves and nothing is held: the piece stays where it is and the
+    price is honoured only while you still hold it. Anybody's node can read
+    it, so it appears in the <a href="/exchange?tab=market">Exchange</a> and
+    in its collection.</p>
+  <div class="row">
+    <div style="flex:1"><input autocomplete="off" id="price" class="mono"
+      spellcheck="false" inputmode="decimal" placeholder="how much"></div>
+    <button type="button" id="price-it">Price it</button>
+    <button type="button" class="ghost" id="price-cancel">Cancel</button>
+  </div>
+  <div class="confirm" id="price-confirm" hidden>
+    <p id="price-says"></p>
+    <button class="btn primary" id="price-yes">Yes</button>
+    <button class="btn" id="price-no">No</button>
+  </div>
+</div>
+
+<span id="listing-home" hidden></span>
+<div class="panel" id="listing" data-client hidden>
+  {# One "Sell" (2026-09-26): a sale this tab signs now, at your price,
+     which anybody can complete while you are away. Nothing is broadcast to list
+     it; cancelling it is one small transaction that spends the coins it was
+     signed over, which is the only way a signature is taken back. #}
+  <div class="row" style="gap:10px;align-items:center;margin:0 0 6px">
+    <img id="listing-img" alt="" hidden
+         style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex:none">
+    <h3 style="margin:0" id="listing-what">Sell it</h3>
+  </div>
+  {% if node_trades() %}
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    Name your price. Anybody can buy it at that price, even when you are
+    offline, for the next 30 days. Listing costs nothing. You can cancel it
+    any time before it sells, and sending the piece away cancels it too.</p>
+  {% else %}
+  {# Node-facilitated trades are off (the default, 2026-10-13): a sale that waits for a
+     buyer while you are away would need this node to hold your signature. #}
+  <p class="msg info" style="font-size:.86rem;margin:0 0 10px">
+    This arcade trades only while both people are here. Somebody who wants this piece
+    makes an offer; you answer it from your tab, and the trade is signed in both
+    browsers &mdash; this node is trusted with nothing. (Selling while you are away is
+    switched off by this arcade's operator.)</p>
+  {% endif %}
+  <div class="row">
+    <div style="flex:1"><input autocomplete="off" id="list-price" class="mono"
+      spellcheck="false" inputmode="decimal" placeholder="price"></div>
+    <input autocomplete="off" id="list-token" class="mono" inputmode="numeric"
+      placeholder="token # (blank = coins)" style="flex:0 0 150px"
+      title="Leave blank to sell for coins, or give a token's number to sell for that token">
+    <button type="button" id="list-it"{% if not node_trades() %} disabled title="Selling while you are away is off on this arcade"{% endif %}>Sell</button>
+    <button type="button" class="ghost" id="list-cancel">Cancel</button>
+  </div>
+  {# A claim (2026-09-28): the same signed sale, hidden, and completed
+     only by whoever says the phrase -- for an interactive NFT to hand out. #}
+  <label class="muted" style="display:flex;gap:8px;align-items:center;font-size:.86rem;margin:10px 0 0">
+    <input type="checkbox" id="claim-on" style="width:auto;margin:0"> Hide it behind a phrase (a claim)</label>
+  <div id="claim-box" hidden style="margin-top:8px">
+    <input autocomplete="off" id="claim-phrase" spellcheck="false"
+           placeholder="the phrase that claims it" style="width:100%;box-sizing:border-box">
+    <p class="muted" style="font-size:.8rem;margin:6px 0 0">Nobody sees it for sale. Whoever
+      has the phrase can buy it at your price, usually from an interactive NFT
+      that gives the phrase out: a puzzle's answer, a secret, a prize. Keep the
+      price small, and the phrase long enough not to guess.</p>
+  </div>
+  <div id="claim-made" hidden class="msg ok" style="margin-top:10px;font-size:.86rem"></div>
+</div>
+
+<div class="panel" id="sending" data-client hidden>
+  <h3 style="margin:0 0 6px" id="sending-what">Send it</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    This cannot be undone by sending it back unless whoever receives it
+    agrees to. Check the name.</p>
+  <div class="row">
+    <div style="flex:1"><input autocomplete="off" id="to" class="mono"
+      spellcheck="false" placeholder="@name or address"></div>
+    <button type="button" id="offer">Send it</button>
+    <button type="button" class="ghost" id="cancel">Cancel</button>
+  </div>
+  <div class="confirm" id="confirm" hidden>
+    <p id="confirm-says"></p>
+    <button class="btn primary" id="yes">Yes, send it</button>
+    <button class="btn" id="no">No</button>
+  </div>
+</div>
+
+<style>
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#to{width:100%;padding:10px 12px;border:1px solid var(--line);
+  border-radius:8px;background:var(--panel);color:var(--fg);font:inherit}
+.chain-head{display:flex;align-items:baseline;gap:10px;margin:18px 0 8px}
+.chain-head h2{margin:0;font-size:1.05rem}
+</style>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+
+let keys = null, chosen = null, waiting = null;
+const justListed = {};
+let cancelling = {};
+try { cancelling = JSON.parse(sessionStorage.getItem("arcade.cancelling") || "{}") || {}; } catch (e) {}
+
+const commas = (n) => Number(n || 0).toLocaleString();
+
+function card(piece, chain) {
+  const box = document.createElement("div");
+  box.className = "card";
+
+  const top = document.createElement("div");
+  top.className = "row";
+  top.style.alignItems = "baseline";
+  const number = document.createElement("strong");
+  number.textContent = "#" + commas(piece.number);
+  const kind = document.createElement("span");
+  kind.className = "muted";
+  kind.textContent = piece.content_type || "";
+  const size = document.createElement("span");
+  size.className = "muted";
+  size.style.marginLeft = "auto";
+  size.textContent = commas(piece.content_len) + " bytes";
+  top.append(number, kind, size);
+  box.appendChild(top);
+
+  if ((piece.content_type || "").startsWith("image/")) {
+    const look = document.createElement("a");
+    look.className = "media";
+    look.href = `/content/${piece.txid}?download=1`;
+    const picture = document.createElement("img");
+    picture.src = `/content/${piece.txid}`;
+    picture.alt = "inscription " + piece.number;
+    picture.loading = "lazy";
+    picture.style.cssText = "max-width:100%;border-radius:8px;margin:8px 0";
+    look.appendChild(picture);
+    box.appendChild(look);
+  }
+
+  const facts = document.createElement("table");
+  const line = (label, value) => {
+    const tr = document.createElement("tr");
+    const left = document.createElement("td");
+    left.className = "muted";
+    left.style.width = "74px";
+    left.textContent = label;
+    const right = document.createElement("td");
+    right.style.wordBreak = "break-all";
+    if (value instanceof Node) right.appendChild(value);
+    else right.textContent = value;
+    tr.append(left, right);
+    facts.appendChild(tr);
+  };
+  line("Block", commas(piece.block_height));
+  if (piece.collection) {
+    const where = document.createElement("a");
+    where.href = `/collections/${encodeURIComponent(piece.creator)}`
+               + `/${encodeURIComponent(piece.collection)}`;
+    where.textContent = piece.collection
+      + (piece.edition === null || piece.edition === undefined
+         ? "" : ` #${piece.edition}`);
+    line("Collection", where);
+  }
+  box.appendChild(facts);
+
+  const cancelled = piece.listing && cancelling[piece.txid]
+                    && Date.now() - cancelling[piece.txid] < 30 * 60e3;
+  if (!piece.listing && cancelling[piece.txid]) delete cancelling[piece.txid];
+  if (cancelled) {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.style.margin = "6px 0 0";
+    note.textContent = "Cancelling… it's gone from the market when the next block lands.";
+    box.appendChild(note);
+  } else if (piece.listing || piece.ask) {
+    const forSale = document.createElement("p");
+    forSale.style.margin = "6px 0 0";
+    const pill = document.createElement("span");
+    pill.className = "pill ok";
+    pill.textContent = piece.listing ? (piece.listing.claim ? "claim" : "for sale") : "asking";
+    const price = document.createElement("strong");
+    price.textContent = " " + (piece.listing ? piece.listing.price + (String(piece.listing.price) === "1" ? " coin" : " coins")
+                                              : piece.ask);
+    const when = document.createElement("span");
+    when.className = "muted";
+    when.style.fontSize = ".8rem";
+    when.textContent = piece.listing ? ` · open ${piece.listing.left}`
+                                       + (piece.listing.claim ? ` · id ${piece.listing.id}` : "")
+                                     : " · an older price on the chain, which nobody can Buy. Press Sell to list it for Buy.";
+    forSale.append(pill, price, when);
+    box.appendChild(forSale);
+  }
+
+  const doing = document.createElement("div");
+  doing.className = "row";
+  doing.style.marginTop = "8px";
+  const open = document.createElement("a");
+  open.className = "btn ghost small";
+  open.href = `/inscriptions/${piece.txid}/view`;
+  open.textContent = "Open";
+  const sell = document.createElement("button");
+  sell.className = "btn small";
+  sell.textContent = piece.listing ? "Change the price" : "Sell";
+  sell.onclick = () => listing(piece, chain, box);
+  const send = document.createElement("button");
+  send.className = "btn ghost small";
+  send.textContent = "Send";
+  send.onclick = () => choose(piece, chain);
+  const share = document.createElement("button");
+  share.type = "button";
+  share.className = "btn ghost small";
+  share.textContent = "Share";
+  share.dataset.shareNft = piece.txid;
+  share.dataset.piece = pieceName(piece);
+  share.dataset.kind = piece.content_type || "";
+  doing.append(open, sell, send, share);
+  if (cancelled) {
+    sell.disabled = true;
+  } else if (piece.listing) {
+    const off = document.createElement("button");
+    off.className = "btn ghost small";
+    off.textContent = "Cancel listing";
+    off.onclick = () => cancelListing(piece, chain);
+    doing.appendChild(off);
+  } else if (piece.ask) {
+    const off = document.createElement("button");
+    off.className = "btn ghost small";
+    off.textContent = "Take the old price off";
+    off.onclick = () => unlist(piece, chain);
+    doing.appendChild(off);
+  }
+  box.appendChild(doing);
+  if (justListed[piece.txid] && piece.listing) {
+    const ok = document.createElement("p");
+    ok.className = "msg ok";
+    ok.style.margin = "6px 0 0";
+    ok.textContent = piece.listing.claim ? "Hidden. Whoever has the phrase can claim it now."
+                                         : "Listed. Anybody can buy it now.";
+    box.appendChild(ok);
+  }
+  return box;
+}
+
+function choose(piece, chain) {
+  say(""); news("");
+  chosen = {piece, chain};
+  $("sending-what").textContent =
+    `Send #${commas(piece.number)} on ${chain.label}`;
+  $("confirm").hidden = true;
+  $("pricing").hidden = true;
+  $("sending").hidden = false;
+  $("to").value = "";
+  $("to").focus();
+  $("sending").scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+$("cancel").onclick = () => { $("sending").hidden = true; chosen = null; };
+$("price-cancel").onclick = () => {
+  $("pricing").hidden = true; chosen = null;
+};
+
+function pricing(piece, chain) {
+  say(""); news("");
+  chosen = {piece, chain};
+  $("pricing-what").textContent =
+    `Price #${commas(piece.number)} on ${chain.label}`;
+  $("price-confirm").hidden = true;
+  $("sending").hidden = true;
+  $("pricing").hidden = false;
+  $("price").value = "";
+  $("price").focus();
+}
+
+/* --- selling it without being there to complete it ----------------------
+ *
+ * Two presses, and only the second one uses the key. The first asks this
+ * node for the leg and then reads it here: `wallet.checkedListing` decodes
+ * the transaction's own bytes, works out both digests for itself and
+ * refuses anything that does not add up, so the sentence below is what this
+ * tab derived rather than what this node summarised. `leg.what` is not
+ * printed anywhere on this page for that reason -- it is a string written
+ * beside the bytes, not one taken out of them.
+ *
+ * Nothing on this path goes near `confirm` or `signOffer`. Those sign every
+ * input with SIGHASH_ALL and hand the result to `/account/sign`, which
+ * broadcasts, and a listing is precisely the thing that must not be
+ * broadcast: it is one side of a swap whose other side is a buyer that does
+ * not exist yet. `wallet.list` is the only thing that signs it, with
+ * SINGLE|ANYONECANPAY, and the only thing it sends anywhere is the
+ * signature.
+ */
+
+function listing(piece, chain, box) {
+  say(""); news("");
+  waiting = null;
+  chosen = {piece, chain};
+  // Right under the piece being sold, with its picture (a tester, 2026-09-26:
+  // it opened at the foot of the page, below Inscribe, with nothing to show which).
+  if (box) box.after($("listing"));
+  const img = $("listing-img");
+  img.hidden = !String(piece.content_type || "").startsWith("image/");
+  if (!img.hidden) img.src = "/content/" + piece.txid;
+  $("listing-what").textContent = piece.listing
+    ? `Change the price of ${pieceName(piece)}`
+    : `Sell ${pieceName(piece)}`;
+  $("sending").hidden = true;
+  $("pricing").hidden = true;
+  $("listing").hidden = false;
+  $("list-price").value = "";
+  $("claim-made").hidden = true;
+  $("list-price").focus();
+}
+
+$("list-cancel").onclick = () => {
+  $("listing").hidden = true; chosen = null; waiting = null;
+};
+
+
+$("claim-on").onchange = () => { $("claim-box").hidden = !$("claim-on").checked; };
+
+/** What an interactive NFT sends to hand this claim to whoever is looking. */
+function claimSnippet(id, phrase) {
+  return `parent.postMessage({arcade: "claim", seq: 1, listing: ${JSON.stringify(id)}, `
+    + `secret: ${JSON.stringify(phrase)}}, "*")`;
+}
+
+$("list-it").onclick = async () => {
+  say(""); news("");
+  if (!chosen) return;
+  const amount = $("list-price").value.trim();
+  const {piece, chain} = chosen;
+  const phrase = $("claim-on").checked ? $("claim-phrase").value.trim() : "";
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    if (!(Number(amount) > 0)) throw new Error("a price above zero, please");
+    if ($("claim-on").checked && phrase.length < 8)
+      throw new Error("a claim phrase of at least 8 characters, please");
+    const again = !!piece.listing;
+    const ok = await arcadeAsk(phrase
+      ? `Hide ${pieceName(piece)} behind a phrase, for ${amount} ${Number(amount) === 1 ? "coin" : "coins"}?`
+      : `Sell ${pieceName(piece)} for ${amount} ${Number(amount) === 1 ? "coin" : "coins"}?`,
+      (phrase ? "Nobody sees it for sale. Whoever has the phrase can buy it at that price, "
+                + "even when you're offline, for 30 days. "
+              : "Anybody can buy it at that price, even when you're offline, for 30 days. ")
+      + "Listing costs nothing: it is your signature, not a transaction. "
+      + (again ? `Your listing at ${piece.listing.price} coins is cancelled first, `
+                 + "which is one small transaction. "
+               : "Cancel the listing any time before it sells. "),
+      again ? "Change the price" : "Sell it");
+    if (!ok) return;
+    if (again) {
+      // The old signature stays good until its coins are spent: spend them first.
+      const offer = await cancelOffer(piece, chain);
+      await wallet.checked(offer, keys);
+      await wallet.confirm(keys, offer);
+    }
+    const leg = await wallet.offerListing(piece.txid, amount, chain.network,
+                                          Number(($("list-token").value || "").replace(/^#/, "")) || 0);
+    await wallet.checkedListing(leg, keys);
+    const filed = await wallet.list(keys, leg, {days: 30, claim: phrase});
+    if (phrase) {
+      // Said once, here: the node keeps only the phrase's hash, so this is the
+      // one place the id and the phrase are shown together.
+      const made = $("claim-made");
+      made.hidden = false;
+      made.textContent = "";
+      made.append(`${pieceName(piece)} is hidden behind your phrase. Claim id: `);
+      const code = document.createElement("code");
+      code.textContent = filed.listed;
+      made.append(code, ". In an interactive NFT, this line hands it to whoever is looking:");
+      const pre = document.createElement("pre");
+      pre.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;font-size:.78rem;margin:6px 0 0";
+      pre.textContent = claimSnippet(filed.listed, phrase);
+      made.append(pre);
+      $("claim-on").checked = false; $("claim-box").hidden = true; $("claim-phrase").value = "";
+      justListed[piece.txid] = true;
+      await draw();
+      return;
+    }
+    $("listing").hidden = true;
+    news(`${pieceName(piece)} is for sale at ${amount} coins. Anybody can buy it `
+      + "from its page or its collection, even while you're away.");
+    justListed[piece.txid] = true;
+    await draw();
+  } catch (e) {
+    const why = String(e.message || e);
+    say(/coin to spend|Split it first|needs two/i.test(why)
+      ? "Selling needs two small coins to sign over, and this account has fewer "
+        + "free right now. If you just cancelled or sold something, try again "
+        + "once its block lands; otherwise send yourself 1 coin (Wallet → Send "
+        + "to your own @name) to split one, then sell."
+      : why);
+  }
+};
+
+async function cancelOffer(piece, chain) {
+  const asked = await fetch("/account/list/cancel", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({piece: piece.txid, chain: chain.network})});
+  const offer = await asked.json();
+  if (!asked.ok) throw new Error(offer.detail || "that listing cannot be cancelled");
+  return offer;
+}
+
+async function cancelListing(piece, chain) {
+  say(""); news("");
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const offer = await cancelOffer(piece, chain);
+    const shown = await wallet.checked(offer, keys);
+    const ok = await arcadeAsk(`Cancel the listing of ${pieceName(piece)}?`,
+      "Nobody can buy it after this. A listing is a signature, and the way to take "
+      + "one back is to spend the coins it was signed over, back to yourself: one "
+      + `small transaction, ${shown.coinsOf(shown.fee)} in fees.`, "Cancel listing");
+    if (!ok) return;
+    await wallet.confirm(keys, offer);
+    news(`The listing of ${pieceName(piece)} is cancelled. It drops off the `
+      + "exchange within a minute.");
+    // Until its block lands the card must not offer Cancel again: that is a
+    // second paid transaction (a tester, 2026-09-26).
+    cancelling[piece.txid] = Date.now();
+    try { sessionStorage.setItem("arcade.cancelling", JSON.stringify(cancelling)); } catch (e) {}
+    await draw();
+  } catch (e) { say(String(e.message || e)); }
+}
+
+/** Ask for an offer, say what THIS BROWSER read off it, and sign it if
+ *  they say yes.
+ *
+ * The `says` callback is handed the checked offer rather than the raw one:
+ * the fee, the outputs and the change it may quote are the ones this tab
+ * derived from the transaction's bytes. `offer.fee` is the node's number,
+ * and a confirmation that repeats it proves nothing.
+ */
+async function offerAndConfirm(where, body, says, done) {
+  say(""); news("");
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const asked = await fetch(where, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that cannot be done");
+    // The arcade's own card, naming the piece and the price (a tester,
+    // 2026-09-26: a native confirm() read "price inscription #53? It costs…").
+    const card = says(await wallet.checked(offer, keys), offer);
+    if (!(await arcadeAsk(card[0], card[1], card[2]))) return;
+    const out = await wallet.confirm(keys, offer);
+    news(done(out, offer));
+    $("pricing").hidden = true;
+    await draw();
+  } catch (e) { say(String(e.message || e)); }
+}
+
+$("price-it").onclick = async () => {
+  if (!chosen) return;
+  await offerAndConfirm("/account/nft/sell",
+    {piece: chosen.piece.txid, amount: $("price").value.trim(),
+     kind: "coins", chain: chosen.chain.network},
+    shown => [`Sell ${pieceName(chosen.piece)} for ${$("price").value.trim()} coins?`,
+      `Your price goes on the chain for everyone to see. Buyers offer it and you `
+      + `accept. Putting it there costs ${shown.coinsOf(shown.fee)} in fees, worked `
+      + "out in this browser from the transaction itself.", "Put it up"],
+    (out) => `Priced: ${out.txid.slice(0, 16)}… It is for sale from the `
+      + "block it lands in.");
+};
+
+function pieceName(piece) {
+  return piece.collection
+    ? `${piece.collection} #${piece.edition || "?"}`
+    : `#${commas(piece.number)}`;
+}
+
+async function unlist(piece, chain) {
+  chosen = {piece, chain};
+  await offerAndConfirm("/account/nft/sell",
+    {piece: piece.txid, unlist: true, chain: chain.network},
+    shown => [`Take ${pieceName(piece)} off sale?`,
+      `Your price comes off the chain. It costs ${shown.coinsOf(shown.fee)} in `
+      + "fees, worked out in this browser from the transaction itself.", "Take it off"],
+    (out) => `Taken off: ${out.txid.slice(0, 16)}…`);
+}
+
+$("offer").onclick = async () => {
+  say(""); news("");
+  if (!chosen) return;
+  try {
+    const asked = await fetch("/account/nft/send", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({piece: chosen.piece.txid, to: $("to").value.trim(),
+                            chain: chosen.chain.network}),
+    });
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that cannot be sent");
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const shown = await wallet.checked(offer, keys);
+    $("confirm-says").textContent =
+      `#${commas(offer.number)} goes to ${offer.to}, and it cannot be taken `
+      + "back. " + shown.says + " Worked out in this browser from the "
+      + "transaction's own bytes, not from what this node says it does.";
+    $("confirm").hidden = false;
+    $("yes").onclick = async () => {
+      $("confirm").hidden = true;
+      try {
+        if (!keys) keys = await arcadeKeys(CHAIN);
+        const done = await wallet.confirm(keys, offer);
+        news(`Sent: ${done.txid.slice(0, 16)}… It moves when its block does.`);
+        $("sending").hidden = true;
+        await draw();
+      } catch (e) { say(String(e.message || e)); }
+    };
+    $("no").onclick = () => { $("confirm").hidden = true; };
+  } catch (e) { say(String(e.message || e)); }
+};
+
+async function draw() {
+  // The Sell panel may be sitting inside a card; it goes home before the cards
+  // are cleared, or it would be cleared with them.
+  const said = await (await fetch("/account/nfts")).json();
+  const chains = said.chains || [];
+  // Home at the moment the cards are cleared, not before the fetch: a Sell
+  // pressed while the fetch was out moved the panel back into a card, and the
+  // clearing then took it with it (the page lost its Sell panel for good).
+  $("listing-home").after($("listing"));
+  $("chains").innerHTML = "";
+  let any = 0;
+  for (const chain of chains) {
+    if (!chain.pieces.length) continue;
+    any += chain.pieces.length;
+    const head = document.createElement("div");
+    head.className = "chain-head";
+    const title = document.createElement("h2");
+    // Which coin as well as which net (2026-10-13): the letter in its network color.
+    const netl = document.createElement("b");
+    netl.className = "netl " + (chain.network === "doge" ? "dogecoin" : chain.mainnet ? "mainnet" : "testnet");
+    netl.textContent = chain.network === "doge" ? "D" : "P";
+    title.replaceChildren(netl, " " + (chain.mainnet || chain.network === "doge" ? "main" : "test"));
+    const where = document.createElement("span");
+    where.className = "muted mono";
+    where.style.fontSize = ".78rem";
+    where.textContent = chain.address;
+    head.append(title, where);
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    for (const piece of chain.pieces) cards.appendChild(card(piece, chain));
+    $("chains").append(head, cards);
+  }
+  $("nothing").hidden = any > 0;
+  if (!any) {
+    $("sending").hidden = true; $("pricing").hidden = true;
+    $("listing").hidden = true;
+  }
+}
+
+/* The inscribe and the collection run live in _account_inscribe.html, in one
+ * copy, because the public /nfts page offers them too and an inscription is
+ * not something to have two slightly different ways of making. */
+
+keys = await wallet.opened(CHAIN);
+// Said before anything is pressed. A page that only mentions a shut
+// wallet at the confirmation is a page that wasted somebody's decision.
+$("shut").hidden = !!keys;
+await draw();
+document.body.dataset.nftsReady = "yes";
+</script>
+{% endblock %}

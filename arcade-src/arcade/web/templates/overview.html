@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% import "_chains.html" as chains %}
+{% block title %}Overview · {{ brand.name }}{% endblock %}
+{% block body %}
+{# The first thing a new wallet is asked, and the only thing it is asked.
+   Everything else here comes from the node; this is the one fact only the
+   person knows (D-131). #}
+{% if state.unlocked and not my_tag %}
+<div class="panel" style="margin-bottom:18px;border-color:var(--accent)">
+  <h2 style="margin-top:0">What should people call you?</h2>
+  {% if claiming %}
+    <p>Claiming <strong>@{{ claiming }}</strong> — it is on its way and will be
+       yours when its block lands. Nothing else to do.</p>
+  {% else %}
+    <p style="max-width:62ch">Pick a <strong>@tag</strong>. It is how everybody
+       else sees you — in their address book, on anything you sell, beside every
+       offer you make — instead of a 34-character address. It is claimed on the
+       chain, so <strong>first claim wins</strong> and it is yours until you
+       hand it on.</p>
+    <form method="post" action="/publish" class="row" style="gap:8px;align-items:center">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div style="flex:0 0 240px">
+        <input autocomplete="off" name="tag" placeholder="yourname" autofocus
+               maxlength="24" pattern="@?[A-Za-z0-9_]{2,24}" required
+               title="letters, digits and underscore, 2 to 24 characters"></div>
+      <button type="submit">Claim it</button>
+      <span class="muted" style="font-size:.86rem">letters, digits and
+        underscore &middot; this also publishes your key, so people can write
+        to you</span>
+    </form>
+  {% endif %}
+</div>
+{% endif %}
+<h1>Overview</h1>
+<p class="sub" style="margin-top:-4px">This node at a glance. Seats, limits, trading, safety, the network and
+  every switch are in <a href="/admin">Admin</a>.</p>
+
+<div class="chainbar">
+  {{ chains.card(state.messaging, messaging, "Messenger — messages are conversational, and test chains get reset.",
+                 None) }}
+  {{ chains.card(state.ledger, ledger, "Tokens, NFTs and PEP — assets belong on a chain nobody resets.",
+                 "Read-only until a wallet is enabled here." if not ledger.wallet else None) }}
+  {% if doge %}
+  {# The third network (2026-10-13), from the start, opening when synced. #}
+  {{ chains.card(state.doge, doge, "Dogecoin — DOGE tips, tokens, NFTs and coins.",
+                 None if doge_sync.ready else
+                 "Opens when its node has synced: " ~ ('%.1f' % (100 * (doge_sync.progress or 0))) ~ "% so far.") }}
+  {% endif %}
+  {% if ltc %}
+  {# Litecoin (2026-10-17, SadFrog's side): an add-on chain the operator hosts, opening when synced. #}
+  {{ chains.card(state.ltc, ltc, "Litecoin — LTC, tokens, NFTs and Doginals-format inscriptions.",
+                 None if ltc_sync.ready else
+                 "Opens when its node has synced: " ~ ('%.1f' % (100 * (ltc_sync.progress or 0))) ~ "% so far.") }}
+  {% endif %}
+  {% if ltc_test %}
+  {# Litecoin testnet, "L test" (2026-10-17): test LTC, beside L main. #}
+  {{ chains.card(state.ltc_test, ltc_test, "Litecoin testnet — LTC TEST, worth nothing: where the arcade tries Litecoin first.",
+                 None if ltc_test_sync.ready else
+                 "Opens when its node has synced: " ~ ('%.1f' % (100 * (ltc_test_sync.progress or 0))) ~ "% so far.") }}
+  {% endif %}
+</div>
+
+<div class="grid">
+  <div class="stat"><div class="k">Other arcades running</div>
+    <div class="v">{{ arcades.running }}</div>
+    <div class="n">{{ arcades.linked }} linked to this one &middot; <a href="/instances">who they are</a></div></div>
+  <div class="stat"><div class="k">Seats open</div>
+    <div class="v">{{ seats_free }} <span style="font-size:.9rem;font-weight:500">of {{ seats_total }}</span></div>
+    <div class="n"><a href="/admin#people">seats and limits</a> &middot; <a href="/join">sign-up page</a></div></div>
+  <div class="stat"><div class="k">Messages</div>
+    <div class="v">{{ stats.get('messages', 0) }}</div>
+    <div class="n">{{ stats.get('unread', 0) }} unread &middot; <a href="/messages">open</a></div></div>
+  <div class="stat"><div class="k">Known contacts</div>
+    <div class="v">{{ stats.get('keys', 0) }}</div>
+    <div class="n"><a href="/contacts">address book</a></div></div>
+  <div class="stat"><div class="k">Spendable (test)</div>
+    {% if messaging.online and messaging.funding %}
+      <div class="v">{{ "{:,.2f}".format(messaging.funding.spendable) }}</div>
+      <div class="n">
+        {% if messaging.funding.funded %}<span class="pill ok">ready</span>
+        {% elif messaging.funding.pending %}<span class="pill warn">{{ messaging.funding.blocks_to_maturity }} blocks</span>
+        {% else %}<span class="pill bad">no coins</span>{% endif %}</div>
+    {% else %}<div class="v">—</div>{% endif %}</div>
+  <div class="stat"><div class="k">Messaging</div>
+    <div class="v" style="font-size:1rem">{{ "ready" if state.unlocked else "not ready" }}</div>
+    <div class="n">{% if state.unlocked %}nothing to set up{% else %}waiting for the node{% endif %}</div></div>
+</div>
+
+<h2>Your messaging address <span class="tag testnet">test</span></h2>
+<div class="panel">
+{% if state.unlocked %}
+  <p>This is how people reach you. Give it to anyone who wants to message you, by
+     any means at all — it is just an address.</p>
+  <div class="phrase" style="font-size:.95rem" id="myaddr">{{ my_address }}</div>
+  <div class="row" style="margin:10px 0 0">
+    <button type="button" class="ghost" data-copy="myaddr">Copy my address</button>
+    <a class="ghost btn" href="/contacts">Address book</a>
+    <a class="ghost btn" href="/backup">Back up my wallet</a>
+  </div>
+
+  {% if not announced %}
+  <div class="msg info" style="margin-top:14px">
+    Your address is not published on the chain yet, so someone who has only your
+    address has nothing to encrypt to. Either
+    <a href="/contacts">publish it once</a> and your address works on its own,
+    or send the full contact code below instead.
+  </div>
+  {% endif %}
+
+  <details style="margin-top:16px">
+    <summary class="muted" style="cursor:pointer;font-size:.88rem">Full contact code</summary>
+    <p class="muted" style="font-size:.87rem;margin:10px 0 8px">
+      Contains your address <em>and</em> your public key, so someone can write to
+      you before your key has been seen on the chain. Longer, but works immediately.</p>
+    <div class="phrase" style="font-size:.82rem" id="contact">{{ contact_code }}</div>
+    <button type="button" class="ghost" style="margin-top:9px"
+            data-copy="contact">Copy</button>
+  </details>
+
+  <div class="note" style="margin-top:16px">
+    <strong>Your wallet is your identity.</strong> There is no passphrase and
+    nothing to write down. Back up <code>wallet.dat</code> and everything comes
+    back with it — your coins and your messages both.
+    <a href="/backup">Back it up now</a>.
+  </div>
+{% else %}
+  <p>Messaging sets itself up the moment the testnet node is reachable. There is
+     nothing to choose and nothing to write down &mdash; your identity comes from
+     your wallet, so <code>wallet.dat</code> is the only thing you ever need to keep.</p>
+  <form method="post" action="/setup-identity">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" {{ 'disabled' if not messaging.online }}>Set up messaging</button>
+  </form>
+  {% if not messaging.online %}
+  <p class="muted" style="margin-top:11px;font-size:.88rem">
+    The testnet node is not answering yet. It usually starts within a minute of a
+    reboot; this page will offer the button as soon as it does.</p>
+  {% endif %}
+</div>
+{% endif %}
+</div>
+
+{# 2026-10-19 (the operator: "the overview page needs to be re-organized"): what one account may do, extra room
+   for sale, selling and filling, the cut of trades and updates moved to Admin (People, Trading, Overview tabs). #}
+<div class="panel" style="margin-top:12px">
+  <strong>Settings</strong> &middot;
+  <a href="/admin#people">what each account may do and extra room for sale</a> &middot;
+  <a href="/admin#trading">selling, filling and your cut of trades</a> &middot;
+  <a href="/admin#overview">updates</a>
+</div>
+
+<h2>Scan <span class="tag testnet">test</span></h2>
+<div class="panel row">
+  <form method="post" action="/scan"><input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" {{ 'disabled' if not messaging.online }}>Check for new messages</button></form>
+  <span class="muted" style="font-size:.88rem">
+    Messages are found by trying to open every candidate — which is why nobody can
+    tell that any of them were meant for you.</span>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+function copyOf(id, ev){
+  const t = document.getElementById(id).textContent.trim();
+  navigator.clipboard.writeText(t).then(function(){
+    const b = ev.target, old = b.textContent;
+    b.textContent = 'Copied'; setTimeout(function(){ b.textContent = old; }, 1400);
+  });
+}
+// The Copy buttons name what they copy (data-copy); a listener, not an inline handler (the script policy, 2026-11-09).
+document.querySelectorAll('[data-copy]').forEach(function(b){
+  b.addEventListener('click', function(ev){ copyOf(b.getAttribute('data-copy'), ev); });
+});
+</script>
+{% endblock %}

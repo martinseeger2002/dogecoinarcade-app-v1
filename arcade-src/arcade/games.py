@@ -1,0 +1,207 @@
+"""Games: inscribed pages that say they are one, listed on the Games tab.
+
+2026-09-30: "the game Builder could inscribe an HTML file referencing
+to their games that has something in json that indexes it as a game. The Games
+place list in the Games tab can have the same sorting as collections and the
+same ability for people to comment like or tip."
+
+So a game is an inscription that is a page (text/html) and whose JSON carries
+a `game` object. Nothing new goes on the chain and nobody registers anything:
+the index already holds every inscription's JSON, and this reads it. The page
+is what a player opens to play -- the whole game, or a small launcher that
+loads its parts from other inscriptions.
+
+    {"game": {"name": "ASHVALE",                       required, 1-60 characters
+              "description": "A small valley RPG.",    up to 280
+              "version": "1.2",                        up to 20
+              "players": "1-50",                       up to 20, said as the maker likes
+              "multiplayer": true,                     plays with others (arcade.realtime)
+              "family": "ashvale",                     what its versions share (rooms too)
+              "cover": "<inscription txid>",           a picture for the card
+              "play": "<inscription txid>",            the page Play opens, if not this one
+              "wallet": true,                          uses the player's wallet (trades, pays, signs)
+              "minimized": {"timeout": 300},           seconds it keeps running minimized; 0 no limit; 15 min unsaid
+              "tdeck": "<inscription txid>",           its T-Deck build: a JavaScript inscription, same creator
+              "tdeck_icon": "globe",                   the T-Deck tile's built-in icon (else the app's letter)
+              "genre": "rpg"}}                         up to 24
+
+**Minimized** (the installed app's home screen, 2026-10-24; the operator: "App builders should be able to decide their apps
+do when they are minimized that should be stored in the game card ... remain in the server and active in a game for
+five minutes before they time out. Other apps could have a different timeout or no timeout"; "If an app doesn't have a
+timeout specified, it should default to 15 minutes. A specified timeout of zero should be an unlimited timeout").
+`timeout` is seconds the app keeps running after it is minimized; then the arcade closes it (it hears "closing" first).
+Not said: 15 minutes. 0: no limit, kept until the player closes it. At most a day. A bare number means the same as
+`{"timeout": n}`. Either way the app is told (arcade.app, /r/app.js) when it is minimized and restored.
+
+**One card per game.** The newest inscription per creator and name is the
+game; inscribing a new version with the same name replaces the card, and
+the likes and comments of the old one stay with the old one, as a mintpad's
+do. Only the creator can replace a game, because the key is the creator's
+address -- somebody else's page with the same name is somebody else's game.
+
+**Play opens the game itself.** A game inscribed before this tab cannot gain
+JSON, so its card is a small page of its own. With `play` naming the real
+game, Play and the discussion's link open THAT inscription, in its own frame
+with its own identity: its storage, its page-bound prize pools and its referee
+claims all keep working, which a page that merely redirects to it would break
+(the viewer answers for the page it showed, not for where that page went).
+`play` counts only when the same creator inscribed both, so a card cannot
+borrow somebody else's game.
+
+**Read, never trusted.** Everything here is somebody's words on the chain, so
+each field is cut to its length and anything malformed is simply absent: a
+`game` that is not an object, or has no usable name, is not a game.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+MARK = "game"
+# The tab is Apps since 2026-10-23 (the operator: "Change the games tab to the apps tab", "application agnostic"): a card
+# may say {"app": {...}} instead; every card inscribed as {"game": ...} stays one.
+MARKS = (MARK, "app")
+_TXID = re.compile(r"^[0-9a-f]{64}$")
+_FAMILY = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+LIMITS = {"name": 60, "description": 280, "version": 20, "players": 20, "genre": 24}
+
+
+def _text(value: Any, limit: int) -> str:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return ""
+    text = " ".join(str(value).split())
+    return text[:limit]
+
+
+def parse(json_text: Any) -> dict | None:
+    """The `game` an inscription's JSON declares, cleaned, or None."""
+    if isinstance(json_text, (bytes, bytearray)):
+        json_text = json_text.decode("utf-8", "replace")
+    try:
+        said = json.loads(json_text) if isinstance(json_text, str) else json_text
+    except ValueError:
+        return None
+    if not isinstance(said, dict):
+        return None
+    game = next((said[k] for k in MARKS if isinstance(said.get(k), dict)), None)
+    if game is None:
+        return None
+    out = {key: _text(game.get(key), limit) for key, limit in LIMITS.items()}
+    if not out["name"]:
+        return None
+    out["multiplayer"] = game.get("multiplayer") is True
+    # Said by the maker, so it only ever adds a gate: a game that uses the wallet without saying so is stopped the
+    # first time it asks (base.html, arcadeGameGate), and from then on, in that browser, before it starts.
+    out["wallet"] = game.get("wallet") is True
+    # A game that uses the camera or microphone (a video call, 2026-10-22) says so: its card shows the
+    # Camera & microphone switch from the start (base.html, CAMERA & MICROPHONE, PER GAME).
+    out["media"] = game.get("media") is True
+    # An app that draws the room's pictures itself (Spatial World's 3D screens, 2026-11-02) says so: its card shows the
+    # Pictures in the app switch, off until the player turns it on (base.html, PICTURES IN THE APP).
+    out["pictures"] = game.get("pictures") is True
+    # An app that rings players while it is closed (a call) says so: its card shows the Notifications switch.
+    out["notify"] = game.get("notify") is True
+    # An app that reads the player's address book (arcade.contacts.list) says so: its card shows the Contacts switch.
+    out["contacts"] = game.get("contacts") is True
+    # An app that opens the player's group chats (arcade.groups) says so: its card shows the Group chats switch.
+    out["groups"] = game.get("groups") is True
+    out["minimized_timeout"] = minimized_timeout(game.get("minimized"))
+    family = game.get("family")
+    out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""
+    cover = str(game.get("cover") or "").lower()
+    out["cover"] = cover if _TXID.match(cover) else ""
+    play = str(game.get("play") or "").lower()
+    out["play"] = play if _TXID.match(play) else ""
+    # The app's T-Deck build (2026-10-26: apps "that you can add from the App Store ... over Wi-Fi"): a script
+    # the DogecoinArcade T-Deck firmware runs; listed at /r/tdeck/apps only when the card's creator inscribed it too.
+    tdeck = str(game.get("tdeck") or "").lower()
+    out["tdeck"] = tdeck if _TXID.match(tdeck) else ""
+    # one of the firmware's own icons for the T-Deck's home tile (2026-10-26: the Mesh Browser's mesh globe)
+    icon = str(game.get("tdeck_icon") or "").lower()
+    out["tdeck_icon"] = icon if re.fullmatch(r"[a-z]{1,16}", icon) else ""
+    return out
+
+
+#: How long a minimized app keeps running when its card does not say (15 minutes), and the longest a card may ask
+#: for (a day). A card's 0 is no limit.
+MINIMIZED_DEFAULT = 900
+MINIMIZED_MOST = 86400
+
+
+def minimized_timeout(said: Any) -> int | None:
+    """The seconds a card's app is kept running while minimized, or None for no limit (the card said 0)."""
+    if isinstance(said, dict):
+        said = said.get("timeout")
+    if isinstance(said, bool) or not isinstance(said, (int, float)) or said != said or said < 0:
+        return MINIMIZED_DEFAULT
+    if said == 0:
+        return None
+    return int(min(max(said, 1), MINIMIZED_MOST))
+
+
+def is_page(content_type: Any) -> bool:
+    return str(content_type or "").lower().startswith("text/html")
+
+
+def newest_per_game(rows: list[dict]) -> list[dict]:
+    """Rows newest first in, one per (creator, name) out: a re-inscribed game
+    replaces its older self. Each row needs `creator` and a parsed `game`."""
+    seen, out = set(), []
+    for row in rows:
+        key = (row["creator"], row["game"]["name"].casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def app_key(creator: str, name: Any) -> str:
+    """What a star on an app's card is kept under: its maker and name, the same for every version of it."""
+    return f"app:{creator}:{slug(name)[:80] or 'app'}"
+
+
+def slug(name: Any) -> str:
+    """A game's name as it is typed in a link: "Ghost Fleet" -> "ghost-fleet"."""
+    return re.sub(r"[^a-z0-9]+", "-", str(name or "").casefold()).strip("-")
+
+
+#: The colours a game's front door (/play/<game>) is drawn in, by `family`.
+#: A game with none here gets DOOR_DEFAULT; its name and cover still make it
+#: the game's own page rather than the arcade's.
+DOOR_DEFAULT = {"bg": "#16171c", "panel": "#22242c", "fg": "#ecebe6",
+                "muted": "#a3a19a", "line": "#3a3d48", "accent": "#d9a520",
+                "accent_fg": "#1b1a17", "title": "#f2d27a",
+                "font": "Georgia, 'Times New Roman', serif"}
+DOOR_SKINS = {
+    # Ashvale: dark stone, wood and parchment, like its own site
+    "ashvale": {"bg": "#1b1813", "panel": "#d9c8a0", "fg": "#2b1d0e",
+                "muted": "#5a4426", "line": "#b9a173", "accent": "#3f7a2a",
+                "accent_fg": "#fff6d8", "title": "#f2c35a",
+                "font": "'Crimson Text', Georgia, serif"},
+}
+
+
+#: What a game's maker wants said on its front door before anybody signs up, by
+#: `family`: plain text, one paragraph per entry.
+DOOR_NOTICES = {
+    "ashvale": [
+        "Every Ashvale asset, including items, gear and GOLD, lives on a test network "
+        "and has no monetary value.",
+        "Some of these assets can be exchanged for assets on other chains. Any value that "
+        "anyone places on them is their own, and Ashvale and its makers take no "
+        "responsibility for it.",
+        "We are not responsible for lost items or assets for any reason, including bugs, "
+        "glitches, outages or mistakes on our side. Play for fun.",
+    ],
+}
+
+
+def door_notice(game: dict) -> list[str]:
+    return DOOR_NOTICES.get(str(game.get("family") or "").lower(), [])
+
+
+def door_skin(game: dict) -> dict:
+    return DOOR_SKINS.get(str(game.get("family") or "").lower(), DOOR_DEFAULT)

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "_chains.html" as chains %}
+{% import "_token_confirm.html" as tk %}
+{% block title %}Collections · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Collections {{ tk.chain_switch(chain, other_chains, csrf, "/collections", public) }}</h1>
+<p class="sub">Sets of inscriptions, filed by what their own JSON says:
+  a name like <code>Doge Punks #12</code> and an <code>edition</code>.</p>
+
+<div class="chainbar">
+  {# hide_wallet for visitors and accounts: the Balance here is the NODE's wallet (2026-09-25). #}
+  {{ chains.card(chain, node, "Collections live here.", hide_wallet=public) }}
+</div>
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+<div class="row" style="margin-bottom:14px">
+  <a class="btn ghost small" href="/inscriptions">All inscriptions</a>
+  {% if not public %}
+  <a class="btn small" href="/inscriptions/collection">Inscribe a collection</a>
+  {% endif %}
+</div>
+
+{% if not collections %}
+  <p class="muted">No collections indexed on {{ chain.label }} yet.</p>
+{% else %}
+<div class="cards">
+  {% for c in collections %}
+  <div class="card">
+    {% if c.cover_txid and c.cover_type and c.cover_type.startswith('image/') %}
+      <a href="/collections/{{ c.creator }}/{{ c.collection|urlencode }}">
+        <img src="/content/{{ c.cover_txid }}" alt="{{ wall_text(c.collection, 'A collection') }}"
+             loading="lazy"
+             style="max-width:100%;border-radius:8px;margin-bottom:8px"></a>
+    {% endif %}
+    <div class="row" style="align-items:baseline">
+      <strong>{{ wall(c.collection, 'collection name') }}</strong>
+      <span class="muted" style="margin-left:auto">{{ "{:,}".format(c.count) }} of {{ "{:,}".format(c.supply) if c.supply else "∞" }}</span>
+    </div>
+    <table>
+      <tr><td class="muted" style="width:74px">By</td>
+          <td class="mono" style="word-break:break-all">
+             {{ c.creator|who }}</td></tr>
+      <tr><td class="muted">Numbers</td>
+          <td>#{{ "{:,}".format(c.first_number) }} to #{{ "{:,}".format(c.last_number) }}</td></tr>
+    </table>
+    <div class="row" style="margin-top:8px">
+      <a class="btn ghost small" href="/collections/{{ c.creator }}/{{ c.collection|urlencode }}">Open</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% if pages > 1 %}
+<nav class="pager">
+  {% if page > 1 %}<a class="btn ghost small" href="/collections?page={{ page - 1 }}">Newer</a>{% endif %}
+  <span class="muted">page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn ghost small" href="/collections?page={{ page + 1 }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

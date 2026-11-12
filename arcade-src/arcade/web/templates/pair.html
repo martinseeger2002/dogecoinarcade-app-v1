@@ -1,0 +1,782 @@
+{% extends "base.html" %}
+{% import "_chart.html" as chart %}
+{% import "_exui.html" as ex %}
+{% block title %}{{ wall_text(prop.name, 'A token') }}/{{ chain.params.coin }} · Exchange · {{ brand.name }}{% endblock %}
+{% block body %}
+<div id="live" data-generation="{{ state.generation }}" class="live" data-live-fast></div>
+<a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
+
+{{ ex.style() }}{{ ex.fav_script() }}{{ ex.market_css() }}
+{% set coin_name = chain.params.coin %}
+{# The market's face, its price big, and the day's move (the Exchange redesign,
+   2026-10-09); the rest of the day's numbers in one quiet line under it. #}
+<div class="ex-hero">
+  {%- set pf = pair_faces('/exchange/pair/' ~ prop.property_id, chain.network if chain is defined and chain else "") %}
+  {%- if pf[0] %}{{ ex.pair_icon_css() }}{{ ex.pair_icon(pf[0], pf[1], 46) }}
+  {%- elif face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px">
+  {% else %}<span class="ex-tic" style="width:46px;height:46px">{{ (wall_text(prop.name, '?') or '?')[:1]|upper }}</span>{% endif %}
+  <div style="min-width:0">
+    <h1>{{ wall(prop.name, 'token name') }}<span class="muted" style="font-weight:600"> / {{ coin_name }}</span>
+      {{ net_badge(chain) }}{{ supply_badge(prop) }}</h1>
+    <div class="muted" style="font-size:.78rem;overflow-wrap:anywhere">#{{ prop.property_id }}
+      {%- if face.about %} &middot; {{ wall(face.about, 'description') }}{% endif %}
+      {%- if face.url %} &middot; <a href="{{ face.url }}" rel="noopener noreferrer nofollow" target="_blank">link</a>{% endif %}</div>
+  </div>
+  {{ ex.fav_button(fav_key('/exchange/pair/' ~ prop.property_id, chain.network)) }}
+</div>
+<div class="ex-price">
+  {%- if day.last is not none %}<b>{{ ex.px(day.last) }}</b><span class="unit">{{ coin_name }}</span>{{ ex.chg(day.change, day.new) }}
+  {%- else %}<b>&mdash;</b><span class="unit">no trades yet</span>{% endif %}
+</div>
+<div class="ex-stats">
+  <span>24h high <b>{% if day.high is not none %}{{ ex.px(day.high) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h low <b>{% if day.low is not none %}{{ ex.px(day.low) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h volume <b>{{ "%.4f"|format(day.coins) }}</b> {{ coin_name }}</span>
+  {# Whose holdings that is: the reader's, so a stranger looking at a public copy
+     gets no number about somebody this page cannot see. #}
+  {% if viewer == 'wallet' or account_address %}<span>You hold <b>{{ held }}</b></span>{% endif %}
+</div>
+
+<div class="pairgrid">
+  <div>
+    <div class="panel">
+      {% set periods = {'15m': '15-minute period', '1h': 'hour', '4h': '4-hour period', '1d': 'day'} %}
+      <div class="row tfs" style="gap:4px;margin:0 0 8px" role="group" aria-label="Candle size">
+        {% for t in timeframes %}
+        <a class="btn small {{ '' if t == tf else 'ghost' }}" href="?tf={{ t }}"
+           {% if t == tf %}aria-current="true"{% endif %}>{{ t }}</a>
+        {% endfor %}
+      </div>
+      {{ chart.candles(slots, coin_name ~ ' each', period=periods[tf]) }}
+    </div>
+
+    {#- Same layout as a swap market (2026-10-17): order book above Buy/Sell. #}
+    <div class="panel">
+      <h3 style="margin:0 0 2px">Order book</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ coin_name }} {{ net_badge(chain) }}</p>
+      {% if viewer != 'nobody' and fills_ready and (book.asks or book.bids) %}
+      <p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>{% endif %}
+      {% if not book.asks and not book.bids %}
+        <p class="muted" style="margin:0">Nothing on either side yet.</p>
+      {% endif %}
+
+      {% if token_pads %}
+      <p class="muted" style="font-size:.86rem;margin:0 0 8px">Also sold a lot at a time from a
+        mintpad: {% for tp in token_pads %}<a href="/inscriptions/{{ tp.txid }}/view">{{ tp.lot }} per mint from {{ tp.seller|who_text }}</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}.</p>
+      {% endif %}
+      {# The book, as simple as a phone needs it (2026-09-28: "reformat
+         them so that they look better on a mobile and as simple as possible"):
+         two lists, best price first, one line each -- price, how much and
+         whose, and Buy, whose amount box opens only when Buy is pressed. #}
+      {% if book.asks %}
+      <div class="obhead">Selling</div>
+      {% for o in book.asks %}
+      <div class="obrow ask{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%"
+           title="{{ o.tokens_shown }} for {{ o.coins_shown }} coins">
+        <span class="obprice mono">{{ o.price_shown }}</span>
+        <span class="obamt"><span class="mono">{{ o.free_shown }}</span>
+          <small class="muted">{% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
+            {%- if o.pending %} &middot; waiting for its block{% endif %}
+            {%- if o.taking %} &middot; {{ o.taking_shown }} being bought{% endif %}</small></span>
+        <span class="obdo">
+          {%- if o.mine and not o.pending and viewer == 'account' %}<button type="button" class="ghost small"
+              data-cancel-side="ask" data-cancel-price="{{ o.price_shown }}">Cancel</button>
+          {%- elif o.mine and not o.pending and viewer == 'wallet' %}<form method="post" action="/exchange/order/cancel" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="property_id" value="{{ prop.property_id }}">
+            <input type="hidden" name="side" value="ask"><input type="hidden" name="price" value="{{ o.price_shown }}">
+            <button type="submit" class="ghost small">Cancel</button></form>
+          {%- elif o.taking and not o.free %}<span class="muted" style="font-size:.74rem">being bought</span>
+          {%- elif not o.mine and not o.pending and fills_ready and viewer == 'account' %}
+          <input class="take-amount" data-order="{{ o.txid }}" hidden
+                 value="{{ o.free_shown }}" inputmode="decimal" autocomplete="off"
+                 aria-label="how many to buy">
+          <button type="button" class="small take-price" data-order="{{ o.txid }}"
+                  data-price="{{ o.price_shown }}">Buy</button>
+          {%- elif not o.mine and not o.pending and fills_ready and viewer == 'wallet' %}
+          <form method="post" action="/exchange/fill" class="row" style="gap:4px;margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <input type="hidden" name="order" value="{{ o.txid }}">
+            <input type="hidden" name="property_id" value="{{ prop.property_id }}">
+            <input name="amount" value="{{ o.tokens_shown }}" inputmode="decimal" autocomplete="off">
+            <button type="submit" class="small">Take</button>
+          </form>
+          {%- endif %}</span>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      <div class="obmid">
+        {% if crossed %}
+          <strong>Crossed</strong> <span class="muted">&mdash; ready to trade: a buy order
+            meets a sell order{% if viewer != 'nobody' and fills_ready %}. Press Buy on the
+            sell order if you have the coins{% endif %}.</span><br>
+          Best ask <strong class="mono">{{ book.asks[0].price_shown }}</strong> &middot;
+          best bid <strong class="mono">{{ book.bids[0].price_shown }}</strong>
+        {% elif book.asks and book.bids %}
+          Best ask <strong class="mono">{{ book.asks[0].price_shown }}</strong> &middot;
+          best bid <strong class="mono">{{ book.bids[0].price_shown }}</strong>
+        {% elif day.last is not none %}
+          Last traded at <strong class="mono">{{ "%.8f"|format(day.last) }}</strong>
+        {% elif book.asks or book.bids %}
+          <span class="muted">Only one side has orders so far.</span>
+        {% endif %}
+      </div>
+
+      {% if book.bids %}
+      <div class="obhead">Buying</div>
+      {% for o in book.bids %}
+      <div class="obrow bid{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%"
+           title="{{ o.tokens_shown }} for {{ o.coins_shown }} coins">
+        <span class="obprice mono">{{ o.price_shown }}</span>
+        <span class="obamt"><span class="mono">{{ o.tokens_shown }}</span>
+          <small class="muted">{% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
+            {%- if o.pending %} &middot; waiting for its block{% endif %}
+            {%- if o.standing %} &middot; {{ 'fills while they are away' if o.away else 'fills when they are back' }}{% endif %}</small></span>
+        <span class="obdo">{%- if o.mine and o.standing %}<button type="button" class="ghost small"
+              data-standing-cancel="{{ o.standing }}">Cancel</button>
+          {%- elif o.mine and not o.pending and viewer == 'account' %}<button type="button" class="ghost small"
+              data-cancel-side="bid" data-cancel-price="{{ o.price_shown }}">Cancel</button>
+          {%- elif o.mine and not o.pending and viewer == 'wallet' %}<form method="post" action="/exchange/order/cancel" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="property_id" value="{{ prop.property_id }}">
+            <input type="hidden" name="side" value="bid"><input type="hidden" name="price" value="{{ o.price_shown }}">
+            <button type="submit" class="ghost small">Cancel</button></form>
+          {%- elif o.mine and o.clears_now %}<span class="muted"
+              style="font-size:.74rem">your bid reaches the ask</span>
+          {%- elif not o.mine and viewer == 'account' %}<button type="button" class="ghost small"
+              data-sell-into="{{ o.price_shown }}" data-units="{{ o.tokens_shown }}">Sell</button>{% endif %}</span>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% if not fills_ready %}
+      <p class="muted" style="font-size:.76rem;margin:10px 0 0">Taking a price off
+        the book starts at block {{ "{:,}".format(fills_from) }}{% if height %} and
+        this chain is at {{ "{:,}".format(height) }}{% endif %}. Until then an ask
+        holds its tokens and can only be cancelled by whoever placed it.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      {% if viewer == 'account' and account_address %}
+      <div class="ex-trade" id="ex-trade">
+        <div class="ex-seg" role="radiogroup" aria-label="Buy or sell" style="margin-bottom:12px">
+          <label><input type="radio" name="book-side" value="bid" checked><span>Buy</span></label>
+          <label><input type="radio" name="book-side" value="ask"><span>Sell</span></label>
+        </div>
+        {#- Always "set my price" (2026-10-17): to fill an order, press it in the order book. #}
+        <div class="ex-box"><label for="book-amount"><span>Amount</span><span>You hold {{ held }}</span></label>
+          <div class="line"><input autocomplete="off" id="book-amount" inputmode="decimal" placeholder="0">
+            <span class="unit">{{ wall(prop.name, 'token name') }}</span></div></div>
+        <div class="ex-box"><label for="book-price"><span>Price each</span><span>Total <b data-ex-total>0</b> {{ coin_name }}</span></label>
+          <div class="line"><input autocomplete="off" id="book-price" inputmode="decimal" placeholder="0.00000000">
+            <span class="unit">{{ coin_name }}</span></div></div>
+        <div class="ex-quote"></div>
+        <button type="button" id="book-order" class="ex-cta">Enter an amount</button>
+      </div>
+      {% else %}
+      <h3 style="margin:0 0 10px">Buy and sell {{ wall_text(prop.name, 'this token') }}</h3>
+      {% endif %}
+      {% if viewer == 'account' %}
+      {% if account_address %}
+      {# Only where this node may fill for an absent buyer (node-facilitated trades,
+         off by default, 2026-10-13). Off, a buy order is told when it can fill. #}
+      {% if node_trades() %}
+      <label id="book-away-row" class="muted" style="display:flex;gap:8px;align-items:flex-start;font-size:.84rem;margin:10px 0 0">
+        <input type="checkbox" id="book-away" checked style="width:auto;margin:3px 0 0">
+        <span>Let this server fill it while I'm away. It holds a signature for each small lot,
+          which can spend no more than that lot's price. Untick to fill it yourself: your phone
+          is told when it can fill, and the app does it the next time you open it.</span></label>
+      {% endif %}
+      <p class="msg err" id="book-trouble" hidden></p>
+      <p class="msg ok" id="book-news" hidden></p>
+      <p class="ex-note">Settles on {{ chain.label|lower }} in the block your order lands in: no deposit, nobody
+        holding your coins. You hold {{ held }} {{ wall_text(prop.name, 'this token') }} and
+        {{ "%.4f"|format(coins) }} {{ coin_name }}. A sell holds its tokens back until it trades or you cancel it.</p>
+      <script nonce="{{ csp_nonce }}">
+      exTrade(document.getElementById("ex-trade"), {hint: {asks: [{% for o in book.asks %}Number(String({{ o.price_shown|tojson }}).replace(/,/g, "")),{% endfor %}], bids: [{% for o in book.bids %}Number(String({{ o.price_shown|tojson }}).replace(/,/g, "")),{% endfor %}], last: {{ (day.last)|tojson }}},
+    sideName: "book-side", buyValue: "bid",
+        amount: "book-amount", price: "book-price", button: "book-order",
+        // What can be taken: not your own orders, not ones still waiting for their block.
+        asks: [{% for o in book.asks if not o.mine and not o.pending %}[{{ o.price_shown|tojson }}, {{ o.free_shown|tojson }}],{% endfor %}]
+          .map(function (l) { return [Number(String(l[0]).replace(/,/g, "")), Number(String(l[1]).replace(/,/g, ""))]; })
+          .filter(function (l) { return l[1] > 0; }),
+        bids: [{% for o in book.bids if not o.mine and not o.pending %}[{{ o.price_shown|tojson }}, {{ o.tokens_shown|tojson }}],{% endfor %}]
+          .map(function (l) { return [Number(String(l[0]).replace(/,/g, "")), Number(String(l[1]).replace(/,/g, ""))]; }),
+        coin: {{ coin_name|tojson }}, token: {{ wall_text(prop.name, 'token')|tojson }}});
+      </script>
+      <script type="module" nonce="{{ csp_nonce }}">
+      /* An order on the book, from the account's side of it.
+
+         The same two integers the operator's form sends, and the same
+         `MetaDExTrade` lands on the chain whichever form it came from. What
+         differs is whose coins pay for it and whose key signs it:
+         `/account/order` builds the transaction out of this address's own
+         inputs and stops there, so nothing is spent until this tab signs it,
+         and no block lands at all until the person watching presses the button.
+         `wallet.checked` is what says so out loud rather than printing the
+         node's summary of its own work: it reads the transaction back out of
+         the bytes and works the fee and the hashes out of them.
+      */
+      import * as wallet from "/wallet.js";
+
+      const $ = (id) => document.getElementById(id);
+      const say = (t) => { $("book-trouble").textContent = t;
+                           $("book-trouble").hidden = !t;
+                           if (t) $("book-news").hidden = true; };
+      const news = (t) => { $("book-news").textContent = t;
+                            $("book-news").hidden = !t;
+                            if (t) $("book-trouble").hidden = true; };
+      const CHAIN = {network: "{{ chain.network }}",
+                     version: {{ chain.params.pubkeyhash_version }}};
+      const TOKEN = {{ prop.property_id }};
+      const side = () => (document.querySelector(
+        "input[name=book-side]:checked") || {value: "bid"}).value;
+
+      const awayRow = $("book-away-row");
+      const showAway = () => { if (awayRow) awayRow.hidden = side() !== "bid"; };
+      document.querySelectorAll("input[name=book-side]").forEach((r) => r.addEventListener("change", showAway));
+      showAway();
+
+      /* A buy order is held by this node (arcade/standing.py, 2026-09-28):
+         with the box ticked, one transaction sets its lots aside and each lot is
+         signed SINGLE|ANYONECANPAY over the buyer's own change; unticked, it just
+         stands, and fills when the buyer is back. */
+      async function placeBuy(amount, price) {
+        const held = await wallet.opened(CHAIN);
+        if (!held) throw new Error("your wallet is not open in this tab");
+        const away = !!($("book-away") && $("book-away").checked);
+        const asked = await fetch("/account/standing", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({property_id: TOKEN, amount, price, away, chain: CHAIN.network})});
+        const said = await asked.json();
+        if (!asked.ok) throw new Error(said.detail || "that buy order cannot be placed");
+        if (!away) {
+          news(`Your buy order for ${said.standing.amount} ${said.standing.name} at ${said.standing.price} `
+               + "stands. When a sell order meets it, your phone is told, and it fills the next "
+               + "time you open the app.");
+          setTimeout(() => location.reload(), 1500);
+          return;
+        }
+        const shown = await wallet.checked(said, held);
+        // One sentence for the lots, from the transaction as this browser read it:
+        // the outputs back to this address, less the change (a tester: "0.0312 to
+        // ... (back to you)" ten times over was unreadable).
+        const set = shown.pays.filter((p) => p.mine).slice(0, said.lots);
+        const aside = set.reduce((n, p) => n + p.value, 0);
+        if (!(await arcadeAsk(`Buy ${said.standing.amount} ${said.standing.name} at ${said.standing.price} while you're away?`,
+            `This sets aside ${shown.coinsOf(aside)} coins of yours in ${set.length} lot`
+            + `${set.length === 1 ? "" : "s"}, still at your own address, and signs each one ahead so this `
+            + "server can fill the order while you're away: each lot can spend no more than its own price, "
+            + "and you trust this server with that much until the order fills or you cancel it (cancelling "
+            + `moves the lots back to you). Network fee ${shown.coinsOf(shown.fee)}.`, "Set it up"))) return;
+        await wallet.confirm(held, said);
+        const lots = await (await fetch("/account/standing/lots", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({standing: said.standing.id})})).json();
+        const signatures = await wallet.signLots(held, lots.lots || []);
+        const done = await fetch("/account/standing/sign", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({standing: said.standing.id, signatures})});
+        if (!done.ok) throw new Error((await done.json()).detail || "the lots could not be kept");
+        news(`Your buy order stands. It fills from sell orders at or under ${said.standing.price}, `
+             + "even while you're away.");
+        setTimeout(() => location.reload(), 1500);
+      }
+
+      for (const b of document.querySelectorAll("[data-standing-cancel]")) {
+        b.onclick = async () => {
+          b.disabled = true;
+          const r = await fetch("/account/standing/cancel", {method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({standing: b.dataset.standingCancel})});
+          const said = await r.json();
+          if (!r.ok) { b.disabled = false; say(said.detail); return; }
+          // The order is stopped. Its lots were signed ahead, and a signature is only undone when its coin moves:
+          // one small transaction back to this address (2026-10-27).
+          if (said.offer) {
+            try {
+              const held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN);
+              const shown = await wallet.checked(said, held);
+              if (await arcadeAsk("Move the order's coins back to you?",
+                  "The buy order is cancelled. Its lots were signed ahead of time, and the way to undo a "
+                  + "signature for good is to move the coins it was made over, back to yourself: one small "
+                  + `transaction, ${shown.coinsOf(shown.fee)} in fees.`, "Move them back"))
+                await wallet.confirm(held, said);
+            } catch (e) { say(e.message || String(e)); }
+          }
+          location.reload();
+        };
+      }
+      // Arriving from Offers' "Sell to them": the sell form, filled in.
+      {
+        const q = new URLSearchParams(location.search);
+        if (q.get("sell") && $("book-price")) {
+          const ask = document.querySelector("input[name=book-side][value=ask]");
+          if (ask) { ask.checked = true; showAway(); }
+          $("book-price").value = q.get("sell");
+          $("book-amount").value = q.get("amount") || "";
+          setTimeout(() => $("book-amount").scrollIntoView({block: "center"}), 200);
+          news("A sell order at their price fills their buy order.");
+        }
+      }
+      for (const b of document.querySelectorAll("[data-sell-into]")) {
+        b.onclick = () => {
+          const ask = document.querySelector("input[name=book-side][value=ask]");
+          if (ask) { ask.checked = true; showAway(); }
+          $("book-price").value = b.dataset.sellInto;
+          $("book-amount").value = b.dataset.units;
+          $("book-amount").scrollIntoView({block: "center"});
+          news("A sell order at their price fills their buy order.");
+        };
+      }
+
+      $("book-order").onclick = async () => {
+        say(""); news("");
+        if (side() === "bid") {
+          $("book-order").disabled = true;
+          try { await placeBuy($("book-amount").value.trim(), $("book-price").value.trim()); }
+          catch (e) { say(String(e.message || e)); }
+          finally { $("book-order").disabled = false; }
+          return;
+        }
+        $("book-order").disabled = true;
+        // Read once, here: the offer is built from these two, and the card that
+        // asks about it opens a moment later. What is signed has to be what the
+        // boxes said when the numbers were worked out, so they are kept to be
+        // compared again after the answer, not read a second time from the page.
+        const amount = $("book-amount").value.trim();
+        const price = $("book-price").value.trim();
+        try {
+          const held = await wallet.opened(CHAIN);
+          if (!held) throw new Error("your wallet is not open in this tab");
+          const asked = await fetch("/account/order", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({property_id: TOKEN, side: side(),
+                                  amount: amount, price: price,
+                                  chain: CHAIN.network}),
+          });
+          const offer = await asked.json();
+          if (!asked.ok) throw new Error(offer.detail || "that cannot be ordered");
+          const shown = await wallet.checked(offer, held);
+          if (!(await arcadeAsk(shown.what,
+            `It costs ${shown.coinsOf(shown.fee)} in fees, and it stands until `
+            + "you cancel it. An ask holds its tokens back when its block "
+            + "lands; a bid holds nothing, because coins cannot be reserved. "
+            + shown.says,
+            "Place it"))) {
+            $("book-order").disabled = false;
+            return;
+          }
+          if ($("book-amount").value.trim() !== amount
+              || $("book-price").value.trim() !== price)
+            throw new Error("you changed a box while the card was open — put it "
+                            + "on the book again to see what the new numbers make");
+          await wallet.confirm(held, offer);
+          news("Asked of your key. It reaches the book with its block, and this "
+               + "page shows it as yours from then on.");
+        } catch (e) {
+          say(String(e.message || e));
+        } finally {
+          $("book-order").disabled = false;
+        }
+      };
+
+      /* Taking orders off the book, which is a wider cut than it looks.
+
+         `MetaDExCancelPair` names a pair and a side and cannot name an order,
+         because an order is a transaction and nothing anywhere keeps a list of
+         them (D-042). So one press takes down every ask this account has
+         resting on this token &mdash; including one made from another browser
+         with another key on another machine. The route cannot offer better than
+         the protocol can, so what it owes is a sentence said before the press
+         rather than a row that vanished quietly from the book.
+      */
+      /* One order at a time (2026-09-28: "cancel individual bids and asks
+         instead of all of them at once"): a row's Cancel is MetaDExCancelPrice at
+         that row's price -- the finest the wire can name, so it also takes any
+         other order of yours at exactly that price, and says so. */
+      for (const btn of document.querySelectorAll("[data-cancel-price]")) {
+        btn.onclick = async () => {
+          say(""); news("");
+          btn.disabled = true;
+          const which = btn.dataset.cancelSide, price = btn.dataset.cancelPrice;
+          try {
+            const held = await wallet.opened(CHAIN) || await arcadeKeys(CHAIN);
+            const asked = await fetch("/account/order/cancel", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({property_id: TOKEN, side: which, price, chain: CHAIN.network})});
+            const offer = await asked.json();
+            if (!asked.ok) throw new Error(offer.detail || "that cannot be cancelled");
+            const shown = await wallet.checked(offer, held);
+            if (!(await arcadeAsk(`Cancel your ${which === "ask" ? "sell" : "buy"} order at ${price}?`,
+                `Just this one${which === "ask" ? "; its tokens come back to you when the block lands" : ""}. `
+                + `(Any other ${which === "ask" ? "sell" : "buy"} order of yours at exactly ${price} goes too: `
+                + `the chain cancels by price.) Network fee ${shown.coinsOf(shown.fee)}.`, "Cancel it"))) {
+              btn.disabled = false; return;
+            }
+            await wallet.confirm(held, offer);
+            const row = btn.closest(".obrow"); if (row) row.style.opacity = ".4";
+            btn.replaceWith(Object.assign(document.createElement("span"),
+                            {className: "muted", textContent: "cancelling…"}));
+            news("Cancelled. It leaves the book when its block lands.");
+          } catch (e) {
+            btn.disabled = false;
+            say(String(e.message || e));
+          }
+        };
+      }
+
+      for (const which of ["ask", "bid"]) {
+        const btn = $("pull-" + which);
+        if (!btn) continue;                 // no orders of yours on this pair
+        btn.onclick = async () => {
+          say(""); news("");
+          btn.disabled = true;
+          try {
+            const held = await wallet.opened(CHAIN);
+            if (!held) throw new Error("your wallet is not open in this tab");
+            const asked = await fetch("/account/order/cancel", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({property_id: TOKEN, side: which,
+                                    chain: CHAIN.network}),
+            });
+            const offer = await asked.json();
+            if (!asked.ok) throw new Error(offer.detail || "that cannot be cancelled");
+            const shown = await wallet.checked(offer, held);
+            if (!(await arcadeAsk(shown.what,
+              "All of them at once: the chain names a pair and a side, not one "
+              + `order. It costs ${shown.coinsOf(shown.fee)} in fees. `
+              + shown.says,
+              "Cancel them"))) {
+              btn.disabled = false;
+              return;
+            }
+            await wallet.confirm(held, offer);
+            news("Asked of your key. An ask gives its tokens back when the "
+                 + "cancel's block lands.");
+          } catch (e) {
+            say(String(e.message || e));
+          } finally {
+            btn.disabled = false;
+          }
+        };
+      }
+
+      /* Taking a price off the book, which is two transactions and one question.
+
+         The row says a price. `/account/take` says what that price comes to,
+         which order the queue chose -- the maker that queued first at it --
+         and which key the question has to be sealed to, which is a key
+         in this node's address book and so the one thing on this page a tab
+         cannot look up for itself. The question then goes out as this account's
+         own, and the answer comes back sealed to this key: this node never
+         holds it, so reading it happens in this browser and nowhere else.
+      */
+      /* Taking a price with its maker away (2026-09-27; type 29, D-189):
+         one transaction of this account's own, paying the maker what their own
+         order says, and the tokens come out of the reserve their ask holds.
+         No question, no waiting for an answer. The route refuses anything that
+         could leave the payment stranded before this tab signs a thing. */
+      for (const btn of document.querySelectorAll("button.take-price")) {
+        btn.onclick = async () => {
+          say(""); news("");
+          const order = btn.dataset.order;
+          const box = document.querySelector(`.take-amount[data-order="${order}"]`);
+          // First press: how many? (prefilled with all that is left). Second: buy.
+          if (box && box.hidden) {
+            box.hidden = false; box.focus(); box.select();
+            btn.textContent = "Buy now";
+            return;
+          }
+          const amount = (box ? box.value : "").trim();
+          btn.disabled = true;
+          try {
+            const held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN);
+            const asked = await fetch("/account/order/take", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({order, amount, chain: CHAIN.network}),
+            });
+            const terms = await asked.json();
+            if (!asked.ok) throw new Error(terms.detail || "that cannot be taken");
+            const shown = await wallet.checked(terms, held);
+            const who = terms.maker_tag ? "@" + terms.maker_tag : "the seller";
+            if (!(await arcadeAsk(`Buy ${terms.amount} ${terms.name} for ${terms.coins} coins?`,
+                  `${terms.coins} coins go to ${who} at the price on their order, and `
+                  + `the tokens come to you when the block lands. They don't need to be `
+                  + `online. Network fee ${shown.coinsOf(shown.fee)}. `
+                  + (parseFloat(String(terms.left || "0").replace(/,/g, "")) > 0
+                     ? `The other ${terms.left} stay on the book at `
+                       + (btn.dataset.price ? `${btn.dataset.price} each.` : "the same price.")
+                                            : "That is the whole order."),
+                  `Buy for ${terms.coins} coins`))) {
+              btn.disabled = false;
+              return;
+            }
+            await wallet.confirm(held, terms);
+            news(`Bought ${terms.amount} ${terms.name}. It's yours when its block lands, `
+                 + "usually within a minute or two.");
+            btn.textContent = "Bought ✓";
+          } catch (e) {
+            btn.disabled = false;
+            say(String(e.message || e));
+          }
+        };
+      }
+
+      /* The earlier way, kept for a node whose chain has no takes yet: ask the
+         maker's node, which answers with its half. Nothing binds to it here. */
+      for (const btn of document.querySelectorAll("button.take-price-asked")) {
+        btn.onclick = async () => {
+          say(""); news("");
+          const order = btn.dataset.order;
+          const box = document.querySelector(
+            `.take-amount[data-order="${order}"]`);
+          const amount = (box ? box.value : "").trim();
+          btn.disabled = true;
+          try {
+            const held = await wallet.opened(CHAIN);
+            if (!held) throw new Error("your wallet is not open in this tab");
+            const asked = await fetch("/account/take", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({order, amount, chain: CHAIN.network}),
+            });
+            const terms = await asked.json();
+            if (!asked.ok) throw new Error(terms.detail || "that cannot be taken");
+            const who = terms.maker_tag ? "@" + terms.maker_tag : terms.maker;
+            if (!(await arcadeAsk(
+                  `Ask ${who} to fill ${terms.amount} of ${terms.name}`,
+                  `That is the price on the row, and their node works it out `
+                  + `from their own order, not from this page. The order being `
+                  + `asked about is ${terms.order.slice(0, 12)}…`
+                  + (terms.moved
+                     ? ", the one that queued first at that price." : ".")
+                  + " Asking costs one message fee. Their answer comes back "
+                  + "sealed to your key, and only then does this tab build, "
+                  + "sign and send back your half. Nothing moves until both "
+                  + "halves do.",
+                  "Ask them"))) {
+              btn.disabled = false;
+              return;
+            }
+            news("Asking their node…");
+            const question = await wallet.askTheBook(held, terms.to, {
+              swap: "fill", swapv: terms.swapv, order: terms.order,
+              tokens: terms.tokens, buyer: terms.buyer});
+            // A busy maker, a block in the way, an answer that has not landed
+            // yet: the question is on the chain whatever happens here, so what
+            // this says is where the answer will be, not a promise that this
+            // tab is still open when it arrives.
+            let answer = null;
+            for (let waited = 0; waited < 120 && !answer; waited += 4) {
+              await new Promise((r) => setTimeout(r, 4000));
+              answer = await wallet.bookAnswers(held, question.txid);
+            }
+            if (!answer) {
+              news("Asked, and not answered yet. Their node answers when it is "
+                   + "online, and the answer will be here when you reload.");
+              return;
+            }
+            if (!answer.ok) throw new Error(answer.error || "they did not answer");
+            const built = await wallet.bookTakeBuild(answer.leg, CHAIN.network);
+            const shown = await wallet.checked(built, held);
+            if (!(await arcadeAsk(shown.what,
+                  `Their half is signed and it arrived. Yours costs `
+                  + `${shown.coinsOf(shown.fee)} in fees, and the price is the `
+                  + "one on their order, not the one on this page. Signing it "
+                  + "does not finish the trade: their node signs its own half "
+                  + "and broadcasts the two together. If a block landed while "
+                  + "this was being read, this is refused rather than traded at "
+                  + "a different price.", "Sign it"))) {
+              news("Not signed. The order stands, and so does your question.");
+              return;
+            }
+            news("Sending your half to their node…");
+            const done = await wallet.signTake(held, built);
+            news(`Sent back, message ${done.message}. Their node `
+                 + "signs its half and broadcasts the trade, which is the "
+                 + "transaction that moves the tokens and the coins and is NOT "
+                 + "this id — watch this row: it fills when that block lands.");
+          } catch (e) {
+            say(String(e.message || e));
+          } finally {
+            btn.disabled = false;
+          }
+        };
+      }
+      </script>
+      {% else %}
+      <p class="muted" style="font-size:.82rem;margin:0">This account has no
+        {{ chain.label }} address here yet, so there is nothing to place an order
+        with. The wallet page makes one, and making one costs nothing.</p>
+      {% endif %}
+      {% elif viewer == 'nobody' %}
+      <p class="muted" style="font-size:.86rem;margin:0">Sign in to put an order
+        on the book. An order is a transaction on the chain, paid for and signed
+        by the wallet that places it &mdash; which this page is not holding.</p>
+      {% else %}
+      <form method="post" action="/exchange/order" class="trade">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="property_id" value="{{ prop.property_id }}">
+        <div class="sides">
+          <label><input type="radio" name="side" value="bid" checked><span>Buy</span></label>
+          <label><input type="radio" name="side" value="ask"><span>Sell</span></label>
+        </div>
+        <div class="row" style="gap:10px;align-items:flex-end">
+          <div class="field" style="flex:1 1 150px;margin:0"><label>Amount of {{ wall_text(prop.name, 'this token') }}</label>
+            <input autocomplete="off" name="amount" inputmode="decimal" placeholder="0"></div>
+          <div class="field" style="flex:1 1 150px;margin:0"><label>Price, coins each</label>
+            <input autocomplete="off" name="price" inputmode="decimal" placeholder="0.00000000"></div>
+          <button type="submit" class="{{ 'danger' if chain.is_mainnet }}"
+                  style="flex:0 0 auto">Put it on the book</button>
+        </div>
+      </form>
+      <p class="muted" style="font-size:.78rem;margin:10px 0 0">You hold {{ held }}
+        {{ wall_text(prop.name, 'this token') }} and {{ "%.4f"|format(coins) }} coins. The order goes on the
+        chain and stands until you cancel it. Selling holds the tokens back until
+        then; a bid holds nothing, because nothing on this chain can reserve coins
+        and still let a wallet spend.</p>
+      {% endif %}
+    </div>
+
+    {% if viewer != 'nobody' %}<a class="btn small ghost" style="margin:0 0 12px;display:inline-block" href="/exchange/history?base={{ (chain.network ~ '-token-' ~ prop.property_id)|urlencode }}&amp;quote={{ (chain.network ~ '-coin')|urlencode }}">Trade history</a>{% endif %}
+  </div>
+
+  <div>
+    {# Yours first, then the book, then what traded (2026-09-28). #}
+    {% if mine %}
+    <div class="panel">
+      <h3 style="margin:0 0 8px">Your orders</h3>
+      <table>
+        {% for o in mine %}
+        <tr><td class="muted" style="font-size:.8rem">
+              {{ 'sell' if o.sale_property else 'buy' }}</td>
+            <td class="mono" style="font-size:.8rem">{{ o.txid[:12] }}…</td>
+            <td class="muted" style="font-size:.8rem">
+              {%- if o.pending %}in the mempool{% else %}block {{ "{:,}".format(o.block_height) }}{% endif %}
+              {%- if o.sale_property and not o.askable %}
+              <span class="pill bad" title="A taker's node asks the maker's node before it trades, and an address with no published key has nobody to answer.">cannot be asked</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table>
+      {# The pass-over, said where the passed-over person is looking. A taker's
+         queue steps past an unreachable maker rather than refusing the press,
+         which is right for the market and invisible to the maker: their order
+         stands, looks exactly like everybody's, and never gets the question it
+         is waiting to answer. a tester S-work-2. #}
+      {% if mine | selectattr('sale_property') | rejectattr('askable') | list %}
+      <p class="muted" style="font-size:.78rem;margin:10px 0 0">These are on the
+        book, and a taker's node steps past them &mdash; before a trade it asks
+        the maker's node, and an address with no published key has nobody to
+        answer it. {% if viewer == 'account' %}Publish a key on your wallet page
+        and they become askable: the orders themselves do not change, and
+        nothing is placed again.{% else %}Publish one from the address book and
+        they become askable: the orders themselves do not change, and nothing is
+        placed again.{% endif %}</p>
+      {% endif %}
+      {# Which sides this account actually has resting, because a cancel is a
+         transaction and an empty one still costs its fee. `mine` is per order
+         and says nothing about the side, so the two are asked separately. #}
+      {% set resting = {'ask': mine | selectattr('sale_property') | list,
+                        'bid': mine | rejectattr('sale_property') | list} %}
+      {% if resting.ask or resting.bid %}
+      <div class="row" style="gap:6px;margin-top:10px">
+        {% for side, what in (('ask', 'sells'), ('bid', 'buys')) %}
+        {% if resting[side] %}
+        {% if viewer == 'account' %}
+        <button class="ghost small" type="button" id="pull-{{ side }}">Cancel all my {{ what }}</button>
+        {% else %}
+        <form method="post" action="/exchange/order/cancel" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="property_id" value="{{ prop.property_id }}">
+          <input type="hidden" name="side" value="{{ side }}">
+          <button class="ghost small" type="submit">Cancel my {{ what }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if fills %}
+    <div class="panel">
+      <h3 style="margin:0 0 8px">Prices you have taken</h3>
+      <table>
+        {% for f in fills %}
+        <tr><td class="mono" style="font-size:.8rem">{{ f.order[:10] }}…</td>
+            <td style="font-size:.8rem">{{ f.tokens_shown or f.tokens }}</td>
+            <td style="text-align:right">
+              {%- if f.status == 'asked' %}<span class="pill warn">waiting for their node</span>
+              {%- elif f.status == 'unanswered' %}<span class="pill bad">no answer</span>
+              {%- elif f.status == 'signed' %}<span class="pill ok">signed</span>
+              {%- elif f.status == 'sent' %}<span class="pill ok">sent</span>
+              {%- else %}<span class="pill bad">{{ f.status }}</span>{% endif %}
+              {%- if f.error %}<div class="muted" style="font-size:.74rem">{{ f.error }}</div>{% endif %}
+            </td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+
+    {% if recent %}
+    <div class="panel">
+      <h3 style="margin:0 0 2px">Recent trades</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ coin_name }}</p>
+      <table>
+        <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
+          <td>Price</td><td style="text-align:right">Amount</td>
+          <td style="text-align:right">{{ coin_name }}</td><td style="text-align:right">Block</td></tr>
+        {% for t in recent %}
+        <tr class="tradelink" data-href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" title="Who traded"><td class="mono"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "%.8f"|format(t.price) }}</a></td>
+            <td class="mono" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</a></td>
+            <td class="mono muted" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "%.4f"|format(t.price * t.size) }}</a></td>
+            <td class="muted" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "{:,}".format(t.height) }}</a></td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  .markethead{display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+    border:1px solid var(--line);border-radius:12px;background:var(--panel);
+    padding:12px 14px;margin:0 0 16px}
+  .ticks{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
+    gap:10px 18px;flex:1 1 380px}
+  .tick b{display:block;font-size:.98rem;font-variant-numeric:tabular-nums}
+  .tick span{font-size:.66rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .up{color:var(--ok)} .down{color:var(--bad)}
+  .pairgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,360px);gap:16px}
+  @media (max-width:880px){.pairgrid{grid-template-columns:minmax(0,1fr)}}
+  .obhead{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:10px 0 4px}
+  .obrow{position:relative;display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;min-width:0}
+  .obrow::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--depth);border-radius:8px}
+  .obrow.ask::before{background:rgba(224,112,112,.12)}.obrow.bid::before{background:rgba(91,189,133,.12)}
+  .obrow>*{position:relative}
+  .obrow.mine{box-shadow:inset 0 0 0 1px var(--line)}
+  .obprice{font-weight:700;min-width:5em}.obrow.ask .obprice{color:var(--bad)}.obrow.bid .obprice{color:var(--ok)}
+  .obamt{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}.obamt small{display:block;font-size:.72rem}
+  .obdo{flex:none;display:flex;gap:6px;align-items:center;justify-content:flex-end}
+  .obdo input{width:5.5em;padding:4px 6px;font-size:.84rem}
+  .obmid{text-align:center;padding:8px 4px;margin:6px 0;border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);font-size:.86rem}
+  .obmid:empty{display:none}
+  .book{width:100%}
+  .book td{padding:3px 6px 3px 0;font-size:.84rem;position:relative}
+  /* The depth bar is behind the row, not a column of its own: the numbers
+     stay where they are and the size is read without counting digits. */
+  .book tr.ask td:first-child::before,.book tr.bid td:first-child::before{
+    content:"";position:absolute;inset:0 auto 0 -4px;width:var(--depth);
+    pointer-events:none;border-radius:3px}
+  .book tr.ask td:first-child::before{background:rgba(224,112,112,.14)}
+  .book tr.bid td:first-child::before{background:rgba(91,189,133,.14)}
+  .book tr.mine{background:var(--code)}
+  .spread{display:flex;gap:8px;align-items:baseline;justify-content:center;
+    padding:8px 0;margin:6px 0;border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);font-size:.9rem}
+  .sides{display:flex;gap:16px;margin-bottom:12px}
+  .sides label{display:inline-flex;align-items:center;gap:6px;margin:0;
+    font-size:.95rem;color:var(--fg);cursor:pointer}
+  .sides input{width:auto;margin:0}
+</style>
+{% endblock %}

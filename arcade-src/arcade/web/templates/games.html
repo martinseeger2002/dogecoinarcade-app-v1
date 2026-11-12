@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% import "_tip.html" as tipui with context %}
+{% import "_exui.html" as exui %}
+{% block title %}Apps · {{ brand.name }}{% endblock %}
+{% block body %}
+{# Every inscribed game on the chain (arcade/games.py): a page whose JSON says
+   {"game": ...}. Ranked like the mintpads -- Popular is what people said about
+   it, Latest is newest first -- with the feed's own buttons aimed at the game's
+   txid, so a like, a comment or a tip here is the same transaction it is on
+   the feed. An account's tab signs its own (script below). #}
+{% set acts = viewer == 'wallet' or (mine_tag) %}
+<h1 style="margin-bottom:4px">Apps</h1>
+<p class="sub" style="margin-top:0">Games, calls and other apps people have inscribed on any chain.
+  Press Open to start one full screen in a new tab. An app that needs your wallet asks for it when it does, over the app;
+  <a href="/me/access">Game access</a> lists every app you allowed.</p>
+
+<div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
+  <a class="btn small {{ 'on' if sort != 'new' else 'ghost' }}" href="/apps">Popular</a>
+  <a class="btn small {{ 'on' if sort == 'new' else 'ghost' }}" href="/apps?sort=new">Latest</a>
+  <button class="btn small ghost" style="margin-left:auto" type="button"
+          data-toggle="howto">List your app</button>
+</div>
+
+<div class="panel" id="howto" hidden>
+  <p style="margin-top:0"><strong>Any HTML page you inscribe can be an app here.</strong>
+    Put an <code>app</code> object (or <code>game</code>, as older cards do) in the inscription's JSON and it appears on this tab on
+    every arcade, ranked by what people say about it. Inscribe a new version with the
+    same name to replace the card.</p>
+<pre style="white-space:pre-wrap;font-size:.82rem">{
+  "app": {
+    "name": "My App",
+    "description": "One line about it.",
+    "version": "1.0",
+    "players": "1-8",
+    "multiplayer": true,
+    "wallet": true,
+    "media": true,
+    "family": "my-app",
+    "cover": "&lt;txid of a picture you inscribed&gt;",
+    "genre": "puzzle",
+    "minimized": {"timeout": 300}
+  }
+}</pre>
+  <p class="muted" style="font-size:.86rem;margin-bottom:0">Only <code>name</code> is
+    required. A multiplayer app uses <code>arcade.realtime</code> to meet other players.
+    An app that trades, pays, sends, mints or signs with the player's wallet says
+    <code>"wallet": true</code>: Open then waits until the player ticks Wallet access on its
+    card. An app that uses the wallet without saying so is stopped the first time it asks.
+    An app that uses the camera or microphone (a video call) says <code>"media": true</code>: its
+    card shows a Camera &amp; microphone switch, off until the player turns it on.
+    <code>"minimized": {"timeout": 300}</code> keeps it running five minutes after a player minimizes it on the
+    installed app's home screen (0: no limit; left out: 15 minutes); it hears about it through
+    <code>arcade.app</code>.
+    The step-by-step guide is <a href="/docs/games.md">Apps: making one and listing it</a>.</p>
+</div>
+
+<p class="msg" id="games-news" hidden></p>
+
+{% if not games %}
+<div class="panel empty"><p>No apps are on any chain yet.</p>
+  <p class="muted" style="font-size:.86rem">Be the first: inscribe an HTML page with an
+    <code>app</code> in its JSON (<a href="/docs/games.md">how</a>).</p></div>
+{% endif %}
+
+{{ exui.fav_script() }}
+<div id="gamelist">
+{% for it in games %}
+{% set g = it.game %}
+<div class="panel gamecard" id="game-{{ it.txid }}" data-star="{{ it.star_key }}">
+  <a class="gamecover" target="_blank" rel="noopener" href="/inscriptions/{{ g.opens or it.txid }}/full" title="Play {{ g.name }}"
+     data-play="{{ g.opens or it.txid }}"{% if g.wallet %} data-wallet="1"{% endif %}>
+    {% if g.cover %}
+    <img src="/content/{{ g.cover }}" alt="" loading="lazy">
+    {% else %}
+    <span class="gamename">{{ wall(g.name, 'name') }}</span>
+    {% endif %}
+  </a>
+  <div class="gamebody">
+    {# A star (2026-10-23): starred apps come first; kept under the app's maker and name, so it stays on
+       across its versions (gameslib.app_key). #}
+    <div style="margin:0 0 4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">{{ exui.fav_button(it.star_key, small=true, what='app') }}<strong style="font-size:1.05rem">{{ wall(g.name, 'name') }}</strong>
+      {% if g.multiplayer %}<span class="pill">multiplayer</span>{% endif %}
+      {% if g.genre %}<span class="pill">{{ g.genre }}</span>{% endif %}
+      {% if it.tdeck %}<span class="pill tdeck" title="Also runs on the DogecoinArcade T-Deck: get it from the T-Deck's App Store">T-Deck</span>{% endif %}
+      {% if it.net %}{{ net_badge(it.net) }}{% endif %}</div>
+    <div class="muted" style="font-size:.84rem">by {{ it.creator|who }}
+      &middot; {{ when(it.time) if it.time else 'just now' }}
+      {%- if g.version %} &middot; v{{ g.version }}{% endif %}
+      {%- if g.players %} &middot; {{ g.players }}{% if 'player' not in g.players|lower %} {{ 'player' if g.players.strip() == '1' else 'players' }}{% endif %}{% endif %}
+      {%- if it.tips %} &middot; tipped {{ it.tips }} time{{ '' if it.tips == 1 else 's' }}{% endif %}</div>
+    {% if g.description %}<p style="margin:6px 0 0">{{ g.description }}</p>{% endif %}
+
+    <div class="row lacts" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+      <a class="btn small" target="_blank" rel="noopener" href="/inscriptions/{{ g.opens or it.txid }}/full"
+         data-play="{{ g.opens or it.txid }}"{% if g.wallet %} data-wallet="1"{% endif %}>Open</a>
+      {# Wallet access, per game (2026-10-18; base.html WALLET ACCESS, PER GAME): off until the player turns it
+         on after checking the publisher, beside whether the wallet is open in this browser now. #}
+      {# Each switch shows on a card that says it uses that thing, or once this browser saw the app ask, or while it is
+         on (the Cul-de-sac session 2026-10-23: Video Call showed Wallet access though it never touches the wallet). #}
+      <span class="walletbits" data-walletbits="{{ g.opens or it.txid }}"
+            style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"{% if not g.wallet %} hidden{% endif %}>
+      <label class="gameaccess" title="Let this app ask your wallet to trade, pay and sign"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-access="{{ g.opens or it.txid }}" data-game="{{ g.name }}"
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Wallet access</label>
+      <span class="pill gameuses" data-uses="{{ g.opens or it.txid }}"{% if not g.wallet %} hidden{% endif %}
+            title="This app uses your wallet: tick Wallet access to open it">uses your wallet</span>
+      <span class="pill walletlock" data-walletlock>&#128274; wallet locked</span>
+      </span>
+      {# Contacts, per app (2026-10-23: "Allow access to Contacts should be another box on the card"). #}
+      <label class="gamecontacts" title="Let this app read the names and addresses in your address book"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-contacts="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.contacts %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Contacts</label>
+      {# Group chats, per app (arcade.groups, 2026-10-31): shown on a card that says "groups": true. #}
+      <label class="gamegroups" title="Let this app read your group chats, post in them as you, and see your address book"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-groups="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.groups %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Group chats</label>
+      {# Camera & microphone, per game (2026-10-22: "in the same way that they allow an app Wallet access on the
+         game card"): shown on a card that says "media": true, or once this browser saw the game ask. #}
+      <label class="gamemedia" title="Let this app use your camera and microphone"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-media="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.media %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Camera &amp; microphone</label>
+      {# Pictures in the app, per app (2026-11-02, Spatial World): the app draws the room's pictures itself. Only on a
+         card that says "pictures": true. #}
+      <label class="gamepictures" title="Let this app draw the cameras and shared screens in its rooms itself"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-pictures="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.pictures %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Pictures in the app</label>
+      {# Notifications, per app (arcade/ring.py, 2026-10-23): people in your address book can ring you in it
+         while it is closed. Per account, kept on its node; shown on a card that says "notify": true, or once on. #}
+      {% if viewer == 'account' and mine_tag %}
+      <label class="gamenotify" title="Let the people in your address book ring you in this app while it is closed"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-notify="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.notify %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Notifications</label>
+      {% endif %}
+      {% if acts %}
+      <form method="post" action="/feed/{{ it.txid }}/{{ 'unlike' if it.liked else 'like' }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="back" value="/apps{{ '?sort=new' if sort == 'new' else '' }}">
+        <button class="small ghost likebtn{{ ' liked' if it.liked }}" type="submit" data-count="{{ it.likes }}">{{ '♥' if it.liked else '♡' }} {{ it.likes }}</button></form>
+      <form method="post" action="/feed/{{ it.txid }}/{{ 'undislike' if it.disliked else 'dislike' }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="back" value="/apps{{ '?sort=new' if sort == 'new' else '' }}">
+        <button class="small ghost dislikebtn{{ ' disliked' if it.disliked }}" type="submit" data-count="{{ it.dislikes }}">&#128078; {{ it.dislikes }}</button></form>
+      <button class="small ghost" type="button" data-toggle="c-{{ it.txid }}">&#128172; {{ it.comments }}</button>
+      {# The same inline tip for the operator, sent by the node (2026-10-19). #}
+      <button class="small ghost" type="button" data-tip-for="{{ it.txid }}"
+              data-toggle="t-{{ it.txid }}">Tip</button>
+      {% else %}
+      <span class="pill">&#9829; {{ it.likes }}</span>
+      <span class="pill">&#128078; {{ it.dislikes }}</span>
+      <span class="pill">&#128172; {{ it.comments }}</span>
+      <a class="muted" style="font-size:.84rem" href="/join?next=/apps">Sign in to react or tip</a>
+      {% endif %}
+      {% if acts and it.mine %}
+      <form method="post" action="/feed/{{ it.txid }}/delete" style="display:inline;margin-left:auto"
+            {% if viewer == 'wallet' %}data-ask="Remove this app from the Apps tab? The inscription stays on the chain and still plays from its own link, but no arcade lists this card any more."{% endif %}>
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="back" value="/apps{{ '?sort=new' if sort == 'new' else '' }}">
+        <button class="small ghost" type="submit" title="Take this card off the Apps tab">Remove</button></form>
+      <a class="small" href="/inscriptions/{{ g.opens or it.txid }}/view">Details</a>
+      {% else %}
+      <a class="small" style="margin-left:auto" href="/inscriptions/{{ g.opens or it.txid }}/view">Details</a>
+      {% endif %}
+    </div>
+
+    {% for c in it.comment_rows %}
+    <div class="muted" style="font-size:.86rem;margin-top:6px"><strong>{{ c.author|who }}</strong> {{ c.text }}</div>
+    {% endfor %}
+    <a class="small" style="display:inline-block;margin-top:6px" href="/games/{{ it.txid }}">
+      {%- if it.comments %}All {{ it.comments }} comment{{ '' if it.comments == 1 else 's' }} and replies &rarr;
+      {%- else %}Discuss it &rarr;{% endif %}</a>
+
+    {% if acts %}
+    <form method="post" action="/feed/{{ it.txid }}/reply" id="c-{{ it.txid }}" hidden
+          class="row" style="gap:8px;margin-top:8px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="/apps{{ '?sort=new' if sort == 'new' else '' }}">
+      <div style="flex:1"><input autocomplete="off" name="text" maxlength="200" placeholder="say something about it"></div>
+      <button class="small" type="submit">Comment</button>
+    </form>
+    <form method="post" action="/feed/{{ it.txid }}/tip" id="t-{{ it.txid }}" hidden
+          class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap" data-author-name="{{ it.creator|who_text }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="/apps{{ '?sort=new' if sort == 'new' else '' }}">
+      {# The same four choices as the feed (2026-10-13). #}
+      {{ tipui.tip_pay() }}
+      <div style="flex:1 1 120px"><input autocomplete="off" name="amount" inputmode="decimal"
+        placeholder="How many?" maxlength="24"></div>
+      <button class="small" type="submit">Send the tip</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+</div>
+<script nonce="{{ csp_nonce }}">
+// A button shows or hides the form or panel its data-toggle names (the script policy, 2026-11-09: a listener, not
+// an inline onclick). On the document, so what the in-place refresh puts back still answers.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("button[data-toggle]");
+  if (!b) return;
+  var f = document.getElementById(b.dataset.toggle);
+  if (f) f.hidden = !f.hidden;
+});
+// Remove asks first on the node's own page (the question is the form's data-ask).
+document.addEventListener("submit", function (e) {
+  var form = e.target;
+  if (form.matches && form.matches("form[data-ask]") && !confirm(form.dataset.ask)) e.preventDefault();
+});
+/* Starred apps first, as soon as a star changes (and for a visitor whose stars live in this browser). */
+(function () {
+  var list = document.getElementById('gamelist');
+  if (!list || !window.arcadeFavs) return;
+  var order = Array.prototype.slice.call(list.querySelectorAll(':scope > .gamecard'));
+  arcadeFavs.onChange(function (set) {
+    order.filter(function (c) { return set.indexOf(c.dataset.star) >= 0; })
+      .concat(order.filter(function (c) { return set.indexOf(c.dataset.star) < 0; }))
+      .forEach(function (c) { list.appendChild(c); });
+  });
+})();
+</script>
+
+<style>
+  .gamecard{display:flex;gap:14px;margin:0 0 14px;min-width:0;align-items:flex-start}
+  .gamecover{flex:0 0 132px;aspect-ratio:1;border-radius:12px;overflow:hidden;display:grid;
+             place-items:center;background:linear-gradient(135deg,var(--accent,#c9a227),#6b4ea3);
+             color:#fff;text-decoration:none}
+  /* contain, not cover: a wide cover with its title on it was cut to the middle of
+     the title ("CE CONDITI"). Letterboxed on the square, full width on a phone. */
+  .gamecover img{width:100%;height:100%;object-fit:contain;display:block;background:#111}
+  .gamename{font-weight:700;font-size:1.05rem;padding:10px;text-align:center;line-height:1.2;
+            word-break:break-word}
+  .gamebody{flex:1;min-width:0}
+  @media(max-width:560px){.gamecard{flex-direction:column}.gamecover{flex:none;width:100%;aspect-ratio:16/9}}
+</style>
+
+<script nonce="{{ csp_nonce }}">
+/* The cards' wallet access switches and the wallet's lock status (base.html, WALLET ACCESS, PER GAME). */
+(function () {
+  function draw() {
+    document.querySelectorAll('.gameaccess').forEach(function (l) {
+      l.querySelector('input').checked = arcadeGameAllowed(l.dataset.access);
+    });
+    document.querySelectorAll('[data-uses]').forEach(function (p) {
+      if (arcadeGameUses(p.dataset.uses)) p.hidden = false;
+    });
+    document.querySelectorAll('[data-walletbits]').forEach(function (b) {
+      var id = b.dataset.walletbits;
+      if (arcadeGameAllowed(id) || arcadeGameUses(id)) b.hidden = false;
+    });
+    document.querySelectorAll('.gamegroups').forEach(function (l) {
+      var on = arcadeGroupsAllowed(l.dataset.groups);
+      l.querySelector('input').checked = on;
+      if (on || arcadeGroupsUses(l.dataset.groups)) l.hidden = false;
+    });
+    document.querySelectorAll('.gamecontacts').forEach(function (l) {
+      var on = arcadeContactsAllowed(l.dataset.contacts);
+      l.querySelector('input').checked = on;
+      if (on || arcadeContactsUses(l.dataset.contacts)) l.hidden = false;
+    });
+    document.querySelectorAll('.gamemedia').forEach(function (l) {
+      var on = arcadeMediaAllowed(l.dataset.media);
+      l.querySelector('input').checked = on;
+      if (on || arcadeMediaUses(l.dataset.media)) l.hidden = false;
+    });
+    document.querySelectorAll('.gamepictures').forEach(function (l) {
+      var on = arcadePicturesAllowed(l.dataset.pictures);
+      l.querySelector('input').checked = on;
+      if (on || arcadePicturesUses(l.dataset.pictures)) l.hidden = false;
+    });
+  }
+  // Play no longer holds a game that uses the wallet (2026-10-23, base.html, ASKED IN THE GAME): it opens, and the
+  // wallet access card comes up over the game when it first reaches for the wallet. The box here still allows it
+  // ahead of time, and turns it off.
+  function lock() {
+    arcadeWalletOpen().then(function (open) {
+      document.querySelectorAll('[data-walletlock]').forEach(function (p) {
+        p.textContent = open ? '\u{1F513} wallet unlocked' : '\u{1F512} wallet locked';
+        p.title = open ? 'Your wallet is open in this browser: an app with wallet access can ask it to sign'
+                       : 'Your wallet is locked: nothing can sign until you unlock it';
+      });
+    });
+  }
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gameaccess'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadeGameAllow(l.dataset.access, false); return; }
+    box.checked = false;
+    arcadeAccessAsk(l.dataset.access, l.dataset.game, l.dataset.publisher, l.dataset.address).then(function (yes) {
+      var say = yes && l.closest('.gamecard') && l.closest('.gamecard').querySelector('.gamegate-say');
+      if (say) say.remove();
+      draw();
+    });
+  });
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamemedia'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadeMediaAllow(l.dataset.media, false); return; }
+    box.checked = false;
+    arcadeMediaAsk(l.dataset.media, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
+  document.addEventListener('arcade:access', draw);
+  document.addEventListener('arcade:media', draw);
+  document.addEventListener('arcade:pictures', draw);
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamepictures'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadePicturesAllow(l.dataset.pictures, false); return; }
+    box.checked = false;
+    arcadePicturesAsk(l.dataset.pictures, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
+  document.addEventListener('arcade:contacts', draw);
+  document.addEventListener('arcade:groups', draw);
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamegroups'); if (!l) return;
+    var box = l.querySelector('input');
+    if (!box.checked) { arcadeGroupsAllow(l.dataset.groups, false); return; }
+    box.checked = false;
+    arcadeGroupsAsk(l.dataset.groups, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamecontacts'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadeContactsAllow(l.dataset.contacts, false); return; }
+    box.checked = false;
+    arcadeContactsAsk(l.dataset.contacts, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
+  // Notifications: the account's switches, from its node.
+  var ringApps = [];
+  function drawRing() {
+    document.querySelectorAll('.gamenotify').forEach(function (l) {
+      var on = ringApps.indexOf(l.dataset.notify) >= 0;
+      l.querySelector('input').checked = on;
+      if (on) l.hidden = false;
+    });
+  }
+  if (document.querySelector('.gamenotify')) {
+    fetch('/account/ring/apps', {cache: 'no-store', credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : {apps: []}; })
+      .then(function (j) { ringApps = j.apps || []; drawRing(); }).catch(function () {});
+  }
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamenotify'); if (!l) return;
+    var box = e.target, id = l.dataset.notify;
+    var card = l.closest('.gamecard') || document, say = card.querySelector('.gamenotify-say');
+    function tell(text) {
+      if (!say && text) {
+        say = document.createElement('p'); say.className = 'msg gamenotify-say'; say.style.margin = '8px 0 0';
+        l.closest('.lacts').after(say);
+      }
+      if (say) { say.textContent = text; say.hidden = !text; }
+    }
+    if (!box.checked) {
+      arcadeRingOff(id).then(function () { ringApps = ringApps.filter(function (a) { return a !== id; }); drawRing(); tell(''); });
+      return;
+    }
+    box.checked = false;
+    arcadeRingAsk(id, l.dataset.game, l.dataset.publisher, l.dataset.address).then(function (why) {
+      if (!why) { ringApps.push(id); drawRing(); tell('Your contacts can ring you in it now, on this device and your other ones with notifications on.'); }
+      else if (why !== 'no') tell(why);
+    });
+  });
+  document.addEventListener('arcade:unlocked', lock);
+  // After the page has parsed: base.html's arcadeGameAllowed and arcadeWalletOpen are defined below this script, so
+  // drawing at once threw and every box came back unticked on each visit (2026-10-20: a ticked box "should
+  // stay on that game card").
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { draw(); lock(); });
+  else { draw(); lock(); }
+})();
+</script>
+
+{% if viewer == 'account' and mine_tag %}
+<script type="module" nonce="{{ csp_nonce }}">
+/* An account's tab signs its own like, dislike, comment or tip, as on the feed. */
+import * as wallet from "/wallet.js";
+const CHAIN = {network: "{{ state.messaging.network }}",
+               version: {{ state.messaging.params.pubkeyhash_version }}};
+const KINDS = {{ kinds|tojson }};
+wallet.tipPicker();
+const news = document.getElementById("games-news");
+const say = (t, bad) => { news.textContent = t; news.hidden = !t;
+                          news.className = "msg " + (bad ? "err" : "ok"); };
+const opening = wallet.opened(CHAIN);
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  const one = (form.getAttribute("action") || "").match(
+    /^\/feed\/([0-9a-f]{64})\/(like|unlike|dislike|undislike|reply|tip|delete)$/);
+  if (!one) return;
+  event.preventDefault();
+  if (one[2] === "delete" && !(await arcadeAsk("Remove this app?",
+      "The inscription stays on the chain and still plays from its own link, but no "
+      + "arcade lists this card on the Apps tab any more.", "Remove"))) return;
+  const flip = (one[2] === "tip" || one[2] === "delete") ? null : window.arcadePress(form, one[2]);
+  const held = (await opening) || await arcadeKeys(CHAIN).catch(() => null);
+  if (!held) { if (flip) flip.undo(); say("Unlock your wallet to do that.", true); return; }
+  const [, txid, doing] = one;
+  const button = form.querySelector("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    let out;
+    if (doing === "tip") {
+      // PEP or a token, on either chain: the feed's own flow (wallet.tip).
+      out = await wallet.tip(held, form, txid, KINDS, arcadeAsk);
+      if (!out) return;
+      form.reset();
+      form.elements.token.hidden = true;
+        form.elements.net.dispatchEvent(new Event("change", {bubbles: true}));   // the coin named for the network again
+      form.hidden = true;
+      const opener = document.querySelector(`[data-tip-for="${txid}"]`);
+      if (opener) { opener.textContent = "Tipped ✓ waiting for its block"; opener.disabled = true; }
+    } else {
+      out = await wallet.react(held, txid, KINDS[doing], (form.elements.text || {}).value || "");
+      if (form.elements.text) { form.elements.text.value = ""; form.hidden = true; }
+    }
+    say(`Sent (${out.txid.slice(0, 12)}…). It counts here when its block lands.`);
+  } catch (e) {
+    if (flip) flip.undo();
+    say(String(e.message || e), true);
+  } finally { if (button) button.disabled = false; }
+});
+</script>
+{% endif %}
+{% if viewer == 'wallet' %}
+{# The operator's tip form posts to the node (tip_send); this only fills its token list from the node's wallet. #}
+<script type="module" nonce="{{ csp_nonce }}">import {tipPicker} from "/wallet.js"; tipPicker(document, "/node/wallet/tokens");</script>
+{% endif %}
+{% endblock %}

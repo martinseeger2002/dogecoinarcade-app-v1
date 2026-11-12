@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Run your own · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Run your own</h1>
+<p class="sub">Everything needed to stand up another arcade is served from
+  this one: the program, and a copy of its index so you do not start by
+  re-reading the chain from the beginning.</p>
+
+<div class="panel">
+  <h2 style="margin-top:0">Install it</h2>
+  <pre class="clone">curl -O {{ here }}/source.tar.gz
+curl -O {{ here }}/source.tar.gz.sha256
+sha256sum -c source.tar.gz.sha256
+tar xzf source.tar.gz
+python3 installer/install.py{% if first_peer %} --first-peer {{ first_peer }}{% endif %}</pre>
+  <p class="muted" style="font-size:.86rem">
+    The installer fetches Pepecoin Core for the testnet, the message chain,
+    verifies its checksum and its signature, registers the services and starts
+    everything. It needs Python and nothing else. Your arcade joins
+    {% if first_peer %}this one{% else %}the other arcades{% endif %} at once and
+    borrows every other chain over the mesh until you install it yourself.
+  </p>
+  {% if source %}
+  <table>
+    <tr><th>Revision</th><td class="mono">{{ source.revision }}</td></tr>
+    <tr><th>Size</th><td>{{ "{:,}".format(source.bytes) }} bytes</td></tr>
+    <tr><th>SHA-256</th><td class="mono" style="word-break:break-all">{{ source.sha256 }}</td></tr>
+  </table>
+  {# What the number can and cannot prove (docs/multi-user.md, "What the checksum can
+     and cannot do"). A checksum people believe in is worse than none: it manufactures
+     confidence exactly where there is none. So the page says both halves. #}
+  <div class="note" style="margin:14px 0 0">
+    <strong>What this number proves, and what it does not.</strong>
+    <p style="margin:6px 0">It is worked out by this instance, over the code this instance
+      has checked out. So it <b>does</b> catch honest mistakes: a download that came through
+      damaged, a copy that is out of date, an operator who changed the code and did not
+      hide it &mdash; all of those give a different number.</p>
+    <p style="margin:6px 0">It <b>cannot</b> prove that this site is honest, or that it runs
+      the code it hands you. A dishonest copy controls every byte it sends, this number
+      included: it can serve the genuine program and the genuine number while running
+      something else. Asking a site to vouch for itself is not checking it.</p>
+    <p style="margin:6px 0 0">What you <b>can</b> do: compare the revision and the number
+      above with the ones on <a href="https://dogecoinarcade.com">dogecoinarcade.com</a>,
+      typed in yourself rather than followed from a link. If they differ, this copy is not
+      running the published code. If they match, you know the download is the published
+      one &mdash; and still nothing about what this server does with it.</p>
+  </div>
+  {% elif packing %}
+  <p class="muted">This arcade was just updated and is packing the download now. Reload this page in a minute for
+    its size and checksum; the commands above already work.</p>
+  {% else %}
+  <p class="muted">This instance cannot pack its own source, so install from
+    wherever you found it.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Start from a copy of the index</h2>
+  <p class="muted" style="font-size:.9rem">
+    Reading a chain from its floor is correct and slow, and every node has
+    already done it. These are copies of this node's indexes &mdash; derived
+    state, so the same blocks read by the same rules give the same rows on
+    any machine.
+  </p>
+  {% if copies %}
+  <p class="muted" style="font-size:.9rem">
+    <strong>It is a convenience, not an authority.</strong> A downloaded
+    index is somebody else's claim about the chain. Each one says the height
+    it was taken at and carries two digests of what it holds; re-read from
+    the floor yourself and compare them, and you have proved it rather than
+    trusted it.
+  </p>
+  {% for copy in copies %}
+  <div class="panel" style="margin:12px 0 0">
+    <div class="row" style="align-items:baseline">
+      <strong>{{ copy.chain.label }}</strong>
+      <span class="muted">block {{ "{:,}".format(copy.snap.height) }}</span>
+      <a class="btn small" style="margin-left:auto"
+         href="/bootstrap/{{ copy.chain.network }}.sqlite.gz">Download
+        ({{ "{:,}".format(copy.snap.bytes // 1024) }} KB)</a>
+    </div>
+    <table style="margin-top:8px">
+      <tr><th>Floor</th><td>{{ copy.snap.floor if copy.snap.floor else "—" }}</td></tr>
+      <tr><th>Consensus hash</th>
+          <td class="mono" style="word-break:break-all">{{ copy.snap.consensus }}</td></tr>
+      <tr><th>Index digest</th>
+          <td class="mono" style="word-break:break-all">{{ copy.snap.index }}</td></tr>
+      <tr><th>SHA-256</th>
+          <td class="mono" style="word-break:break-all">{{ copy.snap.sha256 }}</td></tr>
+      <tr><th>Manifest</th>
+          <td><a href="/bootstrap/{{ copy.chain.network }}.json">{{ copy.chain.network }}.json</a></td></tr>
+    </table>
+    <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+      Unpack it to <code>~/.dogecoinarcade/{{ copy.chain.network }}-ledger.sqlite</code>
+      before the first start. The node carries on from that height.
+    </p>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="muted">This node has no index to copy yet.</p>
+  {% endif %}
+  <p class="muted" style="font-size:.86rem;margin-top:12px">
+    What is <em>not</em> in it: messages, the address book, and any key.
+    Those are private to the node that holds them, and a bootstrap that
+    carried them would publish somebody's conversations.
+  </p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Running it for other people</h2>
+  <ol class="steps-plain">
+    <li><b>Put it on a domain of your own</b>, one that says who you are. Not a look-alike
+      of this one, and not a numbered one like dogecoinarcade2 or 7: nobody can own that
+      pattern, so the first thing that happens is somebody registers the next number and
+      borrows the trust. People should know your arcade by who runs it, not by its shape.</li>
+    <li><b>Tell the node its public name.</b> Put your domain in <code>public_hosts</code>
+      in <code>~/.dogecoinarcade/settings.json</code>, so visitors get the public side and
+      never your own wallet.</li>
+    <li><b>Set your cut</b> on your Overview page. It is paid to your node's own wallet, on
+      the trades your node builds.</li>
+    <li><b>Publish your revision</b> (the table above) where your users can see it, and keep
+      it current: it is how they can tell your copy is the published code.</li>
+    <li><b>Tell your people the one rule that protects them</b>: their twelve words are
+      typed when the wallet is made, and after that only on Restore, reached from Sign in
+      when the password is gone, which checks them in the browser and never sends them.
+      Anything else that asks for the twelve words, for any reason, is stealing them &mdash; and
+      they should only ever sign in on a domain they typed themselves.</li>
+  </ol>
+  <p class="muted" style="font-size:.86rem">Coming: an instance will be able to sign its
+    domain with the key behind its fee address and announce it on the chain, so anybody
+    can check who runs a copy without trusting a list (docs/multi-user.md, "Identity by key").</p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Then it is yours</h2>
+  <p class="muted">
+    You set the fee, you keep the node runner's cut on what is built through
+    your node, and you seat your own {{ seats }} people. Your users' names,
+    coins and posts are on the chain, so nothing about an account is tied to
+    the machine it was made on &mdash; and your clone serves the program and
+    the index in turn, so somebody can clone you.
+  </p>
+</div>
+
+<style>
+.clone{background:var(--code);border-radius:8px;padding:12px 14px;overflow-x:auto}
+.steps-plain{margin:0 0 12px;padding-left:20px}
+.steps-plain li{margin:0 0 10px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem}
+</style>
+{% endblock %}

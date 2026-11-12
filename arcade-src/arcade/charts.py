@@ -1,0 +1,327 @@
+"""Prices, drawn from what actually traded.
+
+There is no order book here (D-037), so there is no book to draw. What there
+is is every swap the chain has read: two legs and a block time. A price is
+one leg divided by the other, and a candle is the open, high, low and close
+of the prices inside one span of time.
+
+The gaps matter as much as the trades. A day with no trade is drawn as a day
+with no trade -- an empty slot, not a line ruled to the next one -- because a
+chart that interpolates is telling you about a price nobody paid (D-039).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Iterable
+
+from . import inscriptions as I
+from .ledger import COIN
+
+#: How many candles a chart has, and how long each one is. A month of days,
+#: which is what a chain this quiet can fill without the chart being mostly
+#: empty; a busier chain would want an hour a candle and the same code.
+DEFAULT_BUCKETS = 30
+DAY = 86_400
+
+#: The pair chart's timeframes (a tester, 2026-09-27): key, seconds per
+#: candle, candles shown. A young chain trades in bursts, and thirty daily
+#: candles put a whole week of trading in one or two bars.
+TIMEFRAMES = (("15m", 900, 48), ("1h", 3_600, 48), ("4h", 14_400, 42), ("1d", DAY, 30))
+
+
+def pick_timeframe(points, now: float | None = None) -> str:
+    """The coarsest timeframe whose history still spans eight candles or more,
+    so the chart shows the whole story in bars that each say something. A
+    history shorter than two hours is drawn in the finest timeframe."""
+    now = time.time() if now is None else now
+    whens = [int(p["when"] or 0) for p in points if p.get("when")]
+    if not whens:
+        return "1d"
+    age = max(0, now - min(whens))
+    for key, span, _ in reversed(TIMEFRAMES):
+        if age >= 8 * span:
+            return key
+    return TIMEFRAMES[0][0]
+
+
+def timeframe(key: str) -> tuple[str, int, int]:
+    return next((t for t in TIMEFRAMES if t[0] == key), TIMEFRAMES[-1])
+
+
+def _units(leg: Any, divisible: bool = True) -> float:
+    """A leg as a number, in whole coins or whole tokens.
+
+    A divisible token counts in hundred-millionths, exactly like a coin, so its
+    leg divides the same way. An indivisible one already counts in whole tokens,
+    and dividing it by COIN a second time reads two tokens as `0.00000002` and
+    prices the trade a hundred million times too high. Nothing in the leg says
+    which of the two it is -- only the token does -- so the caller says it.
+    """
+    amount = leg.amount or 0
+    return amount / COIN if divisible else float(amount)
+
+
+def token_prices(trades: Iterable[dict], property_id: int,
+                 divisible: bool = True) -> list[dict]:
+    """Every trade of this token against coins, as coins per token.
+
+    `divisible` is the token's own flag, and every page that draws one of these
+    charts already has it in hand: it is what one unit of a leg's `amount`
+    means, and a chart that guesses it is wrong by eight zeros on one kind of
+    token -- the other half of what the pair page's book rows learned on 2026-09-27.
+
+    A token swapped for another token has no price in coins and is left out
+    rather than guessed at.
+    """
+    out = []
+    for trade in trades:
+        legs = (trade["give"], trade["take"])
+        token = next((l for l in legs if l.kind == I.LEG_TOKEN
+                      and l.property_id == property_id), None)
+        coins = next((l for l in legs if l.kind == I.LEG_COINS), None)
+        if token is None or coins is None or not token.amount:
+            continue
+        out.append({"when": trade["when"], "height": trade["height"],
+                    "price": _units(coins) / _units(token, divisible),
+                    "size": _units(token, divisible), "txid": trade["txid"]})
+    return out
+
+
+def pair_prices(trades: Iterable[dict], base_divisible: bool = True,
+                quote_divisible: bool = True) -> list[dict]:
+    """A token/token pair's trades (Ledger.pair_trades) as QUOTE per BASE, each
+    amount in its own token's units -- the same points token_prices draws."""
+    out = []
+    for t in trades:
+        b = t["base"] / COIN if base_divisible else float(t["base"])
+        q = t["quote"] / COIN if quote_divisible else float(t["quote"])
+        if b > 0:
+            out.append({"when": t["when"], "height": t["height"], "price": q / b,
+                        "size": b, "txid": t["txid"]})
+    return out
+
+
+#: Passed as `collection` to mean "the pieces that belong to no collection",
+#: which None cannot mean because None already means "every piece".
+STANDALONE = object()
+
+
+def nft_prices(trades: Iterable[dict], index: Any,
+               collection: Any = None,
+               property_id: int | None = None) -> list[dict]:
+    """Every NFT sale, as what one piece went for in ONE currency.
+
+    One currency, because putting coins and tokens on one axis is adding
+    pounds to metres. `property_id` prices in that token; without it, in
+    coins. Filtered to one collection when asked, which is what a
+    collection's own chart is.
+    """
+    out = []
+    for trade in trades:
+        legs = (trade["give"], trade["take"])
+        piece = next((l for l in legs if l.kind == I.LEG_INSCRIPTION), None)
+        if piece is None:
+            continue
+        if property_id is None:
+            paid = next((l for l in legs if l.kind == I.LEG_COINS), None)
+        else:
+            paid = next((l for l in legs if l.kind == I.LEG_TOKEN
+                         and l.property_id == property_id), None)
+        if paid is None:
+            continue
+        if collection is not None:
+            try:
+                row = index.inscription(piece.txid.hex()) if index else None
+            except Exception:
+                row = None
+            has = (row or {}).get("collection") or None
+            if collection is STANDALONE:
+                if has is not None:
+                    continue
+            elif has != collection:
+                continue
+        out.append({"when": trade["when"], "height": trade["height"],
+                    "price": _units(paid), "size": 1, "txid": trade["txid"]})
+    return out
+
+
+def nft_markets(trades: Iterable[dict], index: Any) -> list[dict]:
+    """One market per (collection, currency) that has actually traded.
+
+    A collection is a market: what a Goofball goes for says nothing about
+    what a Doge Punk goes for, and one chart of both is a chart of neither.
+    Pieces that belong to no collection are a market of their own -- they
+    are single things, and that is what they have in common (D-040).
+    """
+    seen: dict[tuple[str | None, str, int | None], int] = {}
+    for trade in trades:
+        legs = (trade["give"], trade["take"])
+        piece = next((l for l in legs if l.kind == I.LEG_INSCRIPTION), None)
+        if piece is None:
+            continue
+        collection = None
+        try:
+            row = index.inscription(piece.txid.hex()) if index else None
+            collection = (row or {}).get("collection") or None
+        except Exception:
+            collection = None
+        for leg in legs:
+            if leg.kind == I.LEG_COINS:
+                key = (collection, "coins", None)
+            elif leg.kind == I.LEG_TOKEN:
+                key = (collection, "token", leg.property_id)
+            else:
+                continue
+            seen[key] = seen.get(key, 0) + 1
+    return [{"collection": collection, "kind": kind, "property_id": pid,
+             "trades": n}
+            for (collection, kind, pid), n in sorted(seen.items(),
+                                                     key=lambda kv: -kv[1])]
+
+
+def nft_currencies(trades: Iterable[dict]) -> list[dict]:
+    """What NFTs have been paid for with, most traded first.
+
+    A chain where every piece sold for one token should chart that token
+    rather than draw an empty coins chart and call it the market.
+    """
+    counts: dict[tuple[str, int | None], int] = {}
+    for trade in trades:
+        legs = (trade["give"], trade["take"])
+        if not any(l.kind == I.LEG_INSCRIPTION for l in legs):
+            continue
+        for leg in legs:
+            if leg.kind == I.LEG_COINS:
+                counts[("coins", None)] = counts.get(("coins", None), 0) + 1
+            elif leg.kind == I.LEG_TOKEN:
+                key = ("token", leg.property_id)
+                counts[key] = counts.get(key, 0) + 1
+    return [{"kind": kind, "property_id": pid, "trades": n}
+            for (kind, pid), n in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
+def candles(points: Iterable[dict], buckets: int = DEFAULT_BUCKETS,
+            span: int = DAY, now: float | None = None) -> list[dict]:
+    """Open, high, low, close and volume per span, oldest first.
+
+    Every bucket is returned, traded or not. An empty one carries `count` 0
+    and no prices at all -- the drawing decides how to say "nothing here",
+    and cannot accidentally say "the price was flat".
+    """
+    now = time.time() if now is None else now
+    points = list(points)
+    # A block may carry a time ahead of this clock (consensus allows two hours; a regtest chain mined fast runs further
+    # ahead): the window ends at the newest trade if that is later, or that trade would fall off the right edge and the
+    # chart would say "No trades yet" with one on the chain (2026-10-14, test_account_order in a full run).
+    newest = max((int(p["when"] or 0) for p in points), default=0)
+    end = (int(max(now, newest)) // span + 1) * span
+    start = end - buckets * span
+    slots: list[dict] = [{"start": start + n * span, "span": span,
+                          "open": None, "high": None, "low": None,
+                          "close": None, "volume": 0.0, "count": 0}
+                         for n in range(buckets)]
+    for point in sorted(points, key=lambda p: (p["when"], p.get("height", 0))):
+        when = int(point["when"] or 0)
+        if when < start or when >= end:
+            continue
+        slot = slots[min(buckets - 1, (when - start) // span)]
+        price = float(point["price"])
+        if slot["count"] == 0:
+            slot.update(open=price, high=price, low=price)
+        slot["high"] = max(slot["high"], price)
+        slot["low"] = min(slot["low"], price)
+        slot["close"] = price
+        slot["volume"] += float(point.get("size") or 0)
+        slot["count"] += 1
+    return slots
+
+
+def last_and_change(points: list[dict], now: float | None = None,
+                    window: int = DAY) -> dict[str, Any]:
+    """The last price, and how far it has moved in a day.
+
+    The comparison is the last trade BEFORE the window, not the first inside
+    it: a pair that traded once yesterday and once today has moved, and a
+    pair whose only trade is inside the window has not moved at all -- it has
+    a price and nothing to compare it with (D-048).
+    """
+    import time as _time
+
+    if not points:
+        return {"last": None, "change": None, "trades": 0, "volume": 0.0}
+    now = _time.time() if now is None else now
+    ordered = sorted(points, key=lambda p: (p["when"], p.get("height", 0)))
+    inside = [p for p in ordered if p["when"] >= now - window]
+    before = [p for p in ordered if p["when"] < now - window]
+    last = ordered[-1]["price"]
+    was = before[-1]["price"] if before else (inside[0]["price"] if inside else None)
+    # Nothing traded inside the window, so there is no move to report. Without
+    # the `inside` test this compared the last trade with ITSELF -- it is the
+    # last element of `before` too -- and a market that had not traded for days
+    # showed a confident +0.0% beside its own chart saying -60% (a test machine).
+    change = None if not was or not before or not inside else (last - was) / was * 100
+    return {"last": last, "change": change, "trades": len(inside),
+            "volume": sum(float(p.get("size") or 0) for p in inside)}
+
+
+def table_move(points: list[dict], change: float | None,
+               now: float | None = None, window: int = DAY) -> tuple[float | None, bool]:
+    """What a market TABLE prints for the day's move, and whether it is "new".
+
+    `last_and_change` (D-048) needs a trade on both sides of the window and
+    says None otherwise. A table row always says something (the operator,
+    2026-09-28), and the two other cases are still facts: a market that traded
+    before the window and not inside it has not moved (0.0), and a market
+    younger than the window has moved since its own first trade, which the
+    row marks as new rather than passing it off as a day's move.
+    """
+    import time as _time
+
+    if change is not None or not points:
+        return change, False
+    now = _time.time() if now is None else now
+    ordered = sorted(points, key=lambda p: (p["when"], p.get("height", 0)))
+    inside = [p for p in ordered if p["when"] >= now - window]
+    if not inside:
+        return 0.0, False
+    if len(inside) == len(ordered) and inside[0]["price"]:
+        first, last = inside[0]["price"], inside[-1]["price"]
+        return (last - first) / first * 100, True
+    return None, False
+
+
+def day(points: list[dict], now: float | None = None,
+        window: int = DAY) -> dict[str, Any]:
+    """The numbers a market table quotes: last, move, high, low, what traded.
+
+    `last_and_change` decides the first two and is left to (D-048); this adds
+    the day's range and its two volumes. `volume` is in the thing being sold
+    -- tokens, or pieces -- and `coins` is what was paid for them, because a
+    market is read in both and one cannot be worked out from the other when
+    the price moved.
+    """
+    stats = dict(last=None, change=None, trades=0, volume=0.0,
+                 high=None, low=None, coins=0.0)
+    stats.update(last_and_change(points, now=now, window=window))
+    import time as _time
+
+    now = _time.time() if now is None else now
+    inside = [p for p in points if p["when"] >= now - window]
+    if inside:
+        prices = [p["price"] for p in inside]
+        stats["high"], stats["low"] = max(prices), min(prices)
+        stats["coins"] = sum(float(p.get("size") or 0) * p["price"] for p in inside)
+    return stats
+
+
+def summary(points: list[dict]) -> dict[str, Any]:
+    """What the chart says in words: last, and the move over its span."""
+    if not points:
+        return {"last": None, "first": None, "change": None, "trades": 0}
+    ordered = sorted(points, key=lambda p: (p["when"], p.get("height", 0)))
+    first, last = ordered[0]["price"], ordered[-1]["price"]
+    change = None if not first else (last - first) / first * 100
+    return {"last": last, "first": first, "change": change,
+            "trades": len(ordered),
+            "volume": sum(float(p.get("size") or 0) for p in ordered)}

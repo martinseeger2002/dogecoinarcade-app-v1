@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+{% block title %}Address book · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Address book</h1>
+<p class="sub">People you know, by the name they claimed on the chain. Stored
+  only on this computer.</p>
+
+{# --- you ------------------------------------------------------------------
+   Minimal on purpose. Your addresses and your key are on the Wallet and the
+   overview; what belongs here is the name people look you up by, and the one
+   button that puts it on the chain (D-137). #}
+<div class="panel" style="margin-bottom:18px">
+  {% if state.unlocked %}
+  <form method="post" action="/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="row" style="align-items:center;gap:10px">
+      <div>
+        <div class="muted" style="font-size:.8rem">You are</div>
+        <div style="font-size:1.25rem;font-weight:600">
+          {% if mine.tag %}@{{ mine.tag }}{% else %}<span class="muted"
+            style="font-weight:400">nobody yet</span>{% endif %}</div>
+      </div>
+      {% if announced %}<span class="pill ok" title="Your key is on the chain, so
+        people can write to you">published</span>
+      {% else %}<span class="pill warn" title="Until this is published, somebody
+        who has only your tag has nothing to encrypt to">not published</span>{% endif %}
+      <div style="flex:1 1 180px;margin-left:auto">
+        <input autocomplete="off" name="tag" spellcheck="false" class="mono"
+               value="{{ tag_wanted if tag_wanted is not none else (mine.tag or '') }}"
+               placeholder="{{ 'a different name' if mine.tag else 'the name people will see' }}"
+               maxlength="{{ mine.max }}"></div>
+      <button type="submit">{{ 'Publish again' if announced else 'Publish' }}</button>
+    </div>
+  </form>
+  <p class="muted" style="font-size:.84rem;margin:10px 0 0">
+    Publishing puts three things on the chain under that name: your
+    <strong>{{ mine.chain.label }} address</strong>, your
+    <strong>Pepecoin main address</strong>, and your <strong>key</strong>, so anybody
+    who searches for @{{ mine.tag or 'you' }} can pay you on either chain and
+    message you without asking for anything. First claim wins, and what goes on
+    the chain is public and permanent.</p>
+
+  {% else %}
+  <p class="muted" style="margin:0">Waiting for the Pepecoin test node. Nothing to do.</p>
+  {% endif %}
+
+  {# Your face: any piece this wallet holds, on either chain. Published with
+     the tag, and honoured only while the chain says you still hold it
+     (D-138). #}
+  <details style="margin-top:10px">
+    <summary class="muted" style="cursor:pointer;font-size:.84rem">
+      Profile picture{% if my_face %} &mdash; set{% endif %}</summary>
+    <form method="post" action="/profile/picture" style="margin-top:10px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      {# An id, not a picker. The same answer token icons and collection
+         thumbnails arrived at: a list of what this wallet holds is a second
+         way to say one thing, and the field takes the id either way. #}
+      <div class="row">
+        <div style="flex:1"><input autocomplete="off" name="piece" class="mono"
+          spellcheck="false" value="{{ my_face or '' }}"
+          placeholder="the inscription id of a piece you hold"></div>
+        <button type="submit" class="small">Publish this picture</button>
+      </div>
+      {% if my_face %}
+      <div class="row" style="margin-top:10px;align-items:center;gap:10px">
+        <img src="/content/{{ my_face }}" alt="" loading="lazy"
+             style="width:56px;height:56px;border-radius:50%;object-fit:cover">
+        <span class="muted" style="font-size:.82rem">This is your face while
+          the chain says you hold it. Empty the box to take it down.</span>
+      </div>
+      {% endif %}
+      <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+        Any piece you hold, on either chain &mdash; including a file you
+        posted to the <a href="/feed">feed</a>. This publishes your tag again
+        with the new picture on it: your name does not change, and everybody
+        who draws your posts picks it up. Empty the box to take it down.</p>
+    </form>
+  </details>
+
+  {# A line about yourself and a link, published with the tag. Both are what
+     YOU said -- a wallet repeating somebody's own words is not vouching for
+     them (D-145). #}
+  <details style="margin-top:10px">
+    <summary class="muted" style="cursor:pointer;font-size:.84rem">
+      Bio and link{% if my_bio or my_url %} &mdash; set{% endif %}</summary>
+    <form method="post" action="/profile/about" style="margin-top:10px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="field">
+        <input autocomplete="off" name="bio" maxlength="160"
+               value="{{ my_bio or '' }}"
+               placeholder="a line about you, shown on your feed"></div>
+      <div class="row">
+        <div style="flex:1"><input autocomplete="off" name="url" maxlength="120"
+          class="mono" spellcheck="false" value="{{ my_url or '' }}"
+          placeholder="https://somewhere-of-yours"></div>
+        <button type="submit" class="small">Publish</button>
+      </div>
+      <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+        Both go on the chain under your tag, so anybody who finds you sees
+        them without asking this node anything. A link has to start with
+        https:// &mdash; it is shown on your page as words to read and copy,
+        never as something to click.</p>
+    </form>
+  </details>
+
+  <details style="margin-top:10px">
+    <summary class="muted" style="cursor:pointer;font-size:.84rem">What a tag
+      does and does not promise</summary>
+    <div class="msg info" style="margin:10px 0 0;font-size:.84rem">
+      <strong>A tag points where its holder points it, and nowhere else.</strong>
+      Nobody can move <strong>{{ '@' ~ mine.tag if mine.tag else 'your tag' }}</strong>
+      to their own address while you hold it. What you can do is let go of it:
+      {% if mine.tag %}claiming a different name frees <strong>@{{ mine.tag }}</strong>
+      the moment the change is mined{% else %}claiming a different name later
+      frees the one you have now{% endif %}, and the next person to claim it
+      gets it &mdash; along with anything anyone sends to that name from then
+      on. That is worth knowing before you change it, because the people who have your tag written down will not hear that you did.
+      Somebody who saved you here is safe: this book stores the address a tag
+      named, not the name.
+      <div style="margin-top:8px">Your addresses and your key are on the
+        <a href="/wallet">Wallet</a> page. What is published is
+        <span class="mono" style="font-size:.78rem">{{ mine.address or '—' }}</span>
+        and <span class="mono" style="font-size:.78rem">{{ other_address or 'no Pepecoin main address in this wallet' }}</span>.</div>
+    </div>
+  </details>
+</div>
+
+{% if tag_error %}<div class="msg err">{{ tag_error }}</div>{% endif %}
+{% if publish_error %}<div class="msg err">{{ publish_error }}</div>{% endif %}
+{% if published_txid %}<div class="msg ok"><strong>Published.</strong>
+  It is on its way; anybody scanning finds you once its block lands.</div>{% endif %}
+
+{# --- the way in ----------------------------------------------------------- #}
+<div class="panel" style="margin-bottom:18px">
+  <h3 style="margin:0 0 10px">Add somebody by @tag</h3>
+  <form method="get" action="/contacts">
+    <div class="row">
+      <div style="flex:1"><input autocomplete="off" name="find" class="mono"
+        spellcheck="false" value="{{ find or '' }}" placeholder="their name"></div>
+      <button type="submit">Search</button>
+      {% if find %}<a class="muted" href="/contacts" style="font-size:.88rem">Clear</a>{% endif %}
+    </div>
+  </form>
+  {% if find %}
+    {% if not matches %}
+      <p class="muted" style="font-size:.88rem;margin:12px 0 0">Nothing claimed
+        matching <strong>{{ find }}</strong> on this node. A tag exists here once
+        its claim is in a block this node has read.</p>
+    {% else %}
+    <table style="margin-top:12px">
+      {% for m in matches %}
+      <tr>
+        <td><strong>@{{ m.tag }}</strong></td>
+        <td style="text-align:right;white-space:nowrap">
+          {% if m.known %}<span class="muted" style="font-size:.84rem">already in your book</span>
+          {% else %}
+          <form method="post" action="/contacts/save" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <input type="hidden" name="name" value="{{ m.tag }}">
+            <input type="hidden" name="testnet_address" value="@{{ m.tag }}">
+            <button type="submit" class="small">Add</button>
+          </form>
+          {% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted" style="font-size:.8rem;margin:10px 0 0">Adding one saves
+      what that name points at right now &mdash; both addresses and the key, if
+      they have published. If they later claim a different name you still pay
+      the same person.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted" style="font-size:.88rem;margin:12px 0 0">A name you can
+      check beats a name you typed, so this is the only way in: everybody in
+      this book has said who they are where anybody can look. Somebody who has
+      not claimed a tag cannot be added &mdash; ask them to publish one from
+      their own address book, which is one button.</p>
+  {% endif %}
+  {# Said here, where somebody is deciding to trust a name, and said whether
+     or not this wallet has a node: a claim proves control of an address and
+     nothing else. First claim wins is the other half -- what a name commits
+     its holder to -- and both are true before anybody presses anything. #}
+  <p class="muted" style="font-size:.82rem;margin:10px 0 0">
+    <strong>First claim wins.</strong> A tag belongs to whoever claimed it
+    first and nobody else can take it. What a claim proves is control of an
+    address at that moment &mdash; it says nothing about who they are, so
+    confirm a name with the person before you trust it with anything that
+    matters.</p>
+</div>
+
+{# --- people you have already met ------------------------------------------ #}
+{% if published %}
+<div class="panel" style="margin-bottom:18px">
+  <div class="row" style="align-items:baseline">
+    <h3 class="row-title" style="margin:0">Seen on the chain</h3>
+    <form method="post" action="/contacts/scan" style="margin-left:auto">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button class="ghost small" type="submit">Look again</button></form>
+  </div>
+  <p class="muted" style="font-size:.84rem;margin:8px 0 10px">Published a tag
+    and a key, and not in your book yet.</p>
+  <table>
+    {% for k in published %}{% if k.tag %}
+    <tr>
+      <td><strong>@{{ k.tag }}</strong>
+        <span class="muted" style="font-size:.8rem">{{ when(k.height) }}</span></td>
+      <td style="text-align:right">
+        <form method="post" action="/contacts/save" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="name" value="{{ k.tag }}">
+          <input type="hidden" name="testnet_address" value="@{{ k.tag }}">
+          <button type="submit" class="small">Add</button></form></td>
+    </tr>
+    {% endif %}{% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{# --- the book ------------------------------------------------------------- #}
+{% if people %}
+<div class="cards">
+  {% for p in people %}
+  {% set handle = (tags.get(p['testnet_address']) or tags.get(p['mainnet_address']))
+                  if tags else None %}
+  <div class="card{{ ' editing' if editing and editing['id'] == p['id'] }}">
+    <div class="row" style="align-items:baseline">
+      {# The tag, read from the chain every time this page is drawn, so
+         somebody who claims a new one appears under it here without telling
+         you. The name you typed only stands in when the chain says nothing. #}
+      <h3 class="row-title">{% if handle %}@{{ handle }}{% else %}{{ p['name'] or 'Unnamed' }}
+        <span class="muted" style="font-size:.78rem;font-weight:400">no @tag</span>{% endif %}</h3>
+      {# What you called them, when that is not simply the tag back again. A
+         name of your own is yours and the page should not lose it; the tag is
+         what the page is organised by. #}
+      {% if handle and p['name'] and p['name'] != handle %}<span class="muted"
+        style="font-size:.84rem">{{ p['name'] }}</span>{% endif %}
+      {% if p['hex'] %}<span class="pill ok" title="You can message this contact">messaging</span>
+      {% else %}<span class="pill warn" title="They have not published a key, so
+        there is nothing to encrypt to">no key</span>{% endif %}
+    </div>
+
+    {% if p['notes'] %}<p class="notes">{{ p['notes'] }}</p>{% endif %}
+
+    {# Addresses are for machines. They are here, one click away, because
+       sometimes you do need to read one -- but the name is what the page is
+       about (D-137). #}
+    <details style="margin-top:8px">
+      <summary class="muted" style="cursor:pointer;font-size:.84rem">Addresses and key</summary>
+      <dl class="addrs" style="margin-top:8px">
+        <dt><span class="tag testnet">test</span></dt>
+        <dd>{% if p['testnet_address'] %}<code class="addr" data-copy
+              title="Click to copy">{{ p['testnet_address'] }}</code>{% else %}<span class="muted">—</span>{% endif %}</dd>
+        <dt><span class="tag mainnet">main</span></dt>
+        <dd>{% if p['mainnet_address'] %}<code class="addr" data-copy
+              title="Click to copy">{{ p['mainnet_address'] }}</code>{% else %}<span class="muted">—</span>{% endif %}</dd>
+        <dt class="muted" style="font-size:.8rem">key</dt>
+        <dd>{% if p['hex'] %}<code class="addr" data-copy
+              title="Click to copy" style="font-size:.72rem">{{ p['hex'] }}</code>
+            {% else %}<span class="muted">not published</span>{% endif %}</dd>
+      </dl>
+    </details>
+
+    <div class="row" style="margin-top:12px;gap:6px">
+      {% if p['hex'] %}
+        <a class="ghost btn" href="/messages/{{ p['hex'] }}">Message</a>
+      {% endif %}
+      <a class="ghost btn" href="/contacts?edit={{ p['id'] }}">Notes</a>
+      <form method="post" action="/contacts/{{ p['id'] }}/delete" style="margin-left:auto"
+            data-ask="Remove {{ (handle and '@' ~ handle) or p['name']|e }} from the address book? Messages already received are kept.">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="ghost" type="submit">Remove</button></form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel empty">
+  <p>The address book is empty.</p>
+  <p class="muted">Search for somebody's @tag above. What gets saved is what
+     their name points at &mdash; both addresses and their key &mdash; so you
+     choose a name rather than checking a string of characters.</p>
+</div>
+{% endif %}
+
+{% if editing %}
+<div class="panel" style="margin-top:18px">
+  <form method="post" action="/contacts/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="contact_id" value="{{ editing['id'] }}">
+    <h3 style="margin:0 0 4px">Notes on {{ editing['name'] or 'this contact' }}</h3>
+    <p class="muted" style="font-size:.84rem;margin:0 0 12px">The name and the
+      addresses come from the chain and are not edited here.</p>
+    <input type="hidden" name="name" value="{{ editing['name'] }}">
+    <div class="field"><label>Notes</label>
+      <textarea autocomplete="off" name="notes" rows="3" autofocus
+        placeholder="How you know them, what they are for, anything worth remembering."
+        >{{ editing['notes'] }}</textarea></div>
+    <div class="row">
+      <button type="submit">Save</button>
+      <a href="/contacts" class="muted" style="font-size:.88rem">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="note" style="margin-top:20px">
+  This book never leaves this computer. It is not published, not on any chain, and
+  not visible to anyone you message &mdash; but anyone who can log in here can read it.
+</div>
+
+<script nonce="{{ csp_nonce }}">
+function copyAddr(el){
+  navigator.clipboard.writeText(el.textContent.trim()).then(function(){
+    el.classList.add('copied');
+    setTimeout(function(){ el.classList.remove('copied'); }, 1200);
+  });
+}
+// Attached here, not written into the markup (the script policy, 2026-11-09): an address copies on a click, and
+// Remove asks first -- the question is the form's data-ask, escaped as the page wrote it.
+document.addEventListener('click', function(e){
+  var el = e.target.closest && e.target.closest('code.addr[data-copy]');
+  if (el) copyAddr(el);
+});
+document.addEventListener('submit', function(e){
+  var form = e.target;
+  if (form.matches && form.matches('form[data-ask]') && !confirm(form.dataset.ask)) e.preventDefault();
+});
+</script>
+{% include "_blocked.html" %}
+{% endblock %}

@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+{% import "_chart.html" as chart %}
+{% import "_exui.html" as ex %}
+{% set bname = wall_text(b.name, 'an asset') %}
+{% set qname = wall_text(q.name, 'an asset') %}
+{% set whole = b.kind in ('nft', 'doginal') %}
+{% set unit = 'for it' if whole else 'each' %}
+{% block title %}{{ bname }}/{{ qname }} · Exchange · {{ brand.name }}{% endblock %}
+{% block body %}
+{# Every cross-chain market (2026-10-15: "I want all pairs to be established the same
+   way ... Every doge/pep and doge/test pep and pep/test and tokens"): a coin, token or piece on
+   one chain priced in a coin or token on another, out of the swaps every arcade lists. Nobody
+   holds anything: each swap is taken whole and settled through lock scripts on both chains
+   (arcade/trade.py).
+   Laid out like the token/coin page, pair.html (2026-10-17: "All pairings should look like
+   it looks ... from top to bottom"): face, price, the day's line, chart, one Buy/Sell box, the
+   book. The box drives the swap forms and Take buttons that _tab_swaps.html binds, kept below it. #}
+<div id="live" data-generation="{{ state.generation }}" class="live" data-live-fast></div>
+<a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
+{{ ex.style() }}{{ ex.fav_script() }}{{ ex.market_css() }}
+
+<div class="ex-hero">
+  {%- set pf = pair_faces(here, chain.network if chain is defined and chain else "") %}
+  {%- if pf[0] %}{{ ex.pair_icon_css() }}{{ ex.pair_icon(pf[0], pf[1], 46) }}
+  {%- elif face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px;object-fit:cover">
+  {% else %}<span class="ex-tic" style="width:46px;height:46px">{{ (bname or '?')[:1]|upper }}</span>{% endif %}
+  <div style="min-width:0">
+    <h1>{{ wall(b.name, 'token name') }}<span class="muted" style="font-weight:600"> / {{ wall(q.name, 'token name') }}</span>
+      {{ net_badge(b.network) }}{% if q.network != b.network %}{{ net_badge(q.network) }}{% endif %}{% if b.kind == 'token' %}{{ supply_badge(b.prop) }}{% endif %}</h1>
+    <div class="muted" style="font-size:.78rem;overflow-wrap:anywhere">
+      {%- if b.kind == 'token' %}#{{ b.asset }}{% if face.about %} &middot; {{ wall(face.about, 'description') }}{% endif %}
+        {%- if face.url %} &middot; <a href="{{ face.url }}" rel="noopener noreferrer nofollow" target="_blank">link</a>{% endif %} &middot; <a href="/tokens/{{ b.asset }}">token page</a>
+      {%- elif b.kind == 'nft' %}<a href="/inscriptions/{{ b.asset }}">{{ bname }}</a>
+      {%- elif b.kind == 'doginal' %}<a href="{{ doginal_content(b.asset) }}" target="_blank" rel="noopener">{{ bname }}</a>
+      {%- else %}{{ bname }} priced in {{ qname }}{% endif %}
+      &middot; <span class="ex-pill done">Lock scripts</span></div>
+  </div>
+  {{ ex.fav_button(fav_key(here)) }}
+</div>
+<div class="ex-price">
+  {%- if last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">{{ qname }} {{ unit }}</span>{% if day.change is not none %}{{ ex.chg(day.change, day.new) }}{% endif %}
+  {%- elif best is not none %}<b>{{ ex.px(best) }}</b><span class="unit">{{ qname }} {{ unit }}, {{ 'lowest ask' if asks else 'highest bid' }}</span>
+  {%- else %}<b>&mdash;</b><span class="unit">no trades yet</span>{% endif %}
+</div>
+<div class="ex-stats">
+  <span>24h high <b>{% if day.high is not none %}{{ ex.px(day.high) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h low <b>{% if day.low is not none %}{{ ex.px(day.low) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h volume <b>{{ "%.4f"|format(day.coins) }}</b> {{ qname }}</span>
+  {% if held is not none %}<span>You hold <b>{{ held }}</b></span>{% endif %}
+</div>
+
+{% if b.kind == 'doginal' and q.network == 'doge' %}
+<p class="ex-note" style="margin:0 0 10px">Offers in DOGE live here. To sell it at a price you name, in one transaction,
+  <a href="/exchange?tab=doginals">list it on the Doginals tab</a>.</p>
+{% endif %}
+{% if held_open %}
+<div class="ex-card"><p class="muted" style="margin:0">You still have an order on the node-held book for this asset.
+  <a href="{{ held_url }}">Manage it there</a> (cancel to get your deposit back).</p></div>
+{% endif %}
+{% if not open_here %}
+<div class="ex-card"><p class="msg err" style="margin:0">This node does not run both chains yet{% if b.network == 'doge' or q.network == 'doge' %} -- Dogecoin is still catching up{% endif %}.
+  The market opens here when it has.</p></div>
+{% endif %}
+
+<div class="pairgrid">
+  <div>
+    <div class="panel">
+      {% set periods = {'15m': '15-minute period', '1h': 'hour', '4h': '4-hour period', '1d': 'day'} %}
+      <div class="row tfs" style="gap:4px;margin:0 0 8px" role="group" aria-label="Candle size">
+        {% for t in timeframes %}
+        <a class="btn small {{ '' if t == tf else 'ghost' }}" href="?tf={{ t }}"
+           {% if t == tf %}aria-current="true"{% endif %}>{{ t }}</a>
+        {% endfor %}
+      </div>
+      {{ chart.candles(slots, qname ~ ' ' ~ unit, period=periods[tf]) }}
+    </div>
+
+    {#- The order book above the Buy/Sell card (2026-10-17). #}
+    <div class="panel" id="swap-pair" data-base="{{ b.key }}" data-quote="{{ q.key }}"
+         data-base-div="{{ '1' if b.divisible else '0' }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
+         data-whole="{{ '1' if whole else '0' }}" data-quote-name="{{ qname }}" data-base-name="{{ bname }}">
+      <h3 style="margin:0 0 2px">Order book</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(q.network) }}</p>
+      {% if asks or bids %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>
+      {% else %}<p class="muted" style="margin:0" id="book-empty">Nothing on either side yet.</p>{% endif %}
+      {% for side_, rows, word in (('ask', asks, 'Selling ' ~ bname), ('bid', bids, 'Buying ' ~ bname)) %}
+      {% if rows %}
+      <div class="obhead">{{ word }}</div>
+      {% for o in rows %}
+      <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%">
+        <span class="obprice mono">{{ ex.px(o.price) }}</span>
+        <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
+          <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
+        <span class="obdo">
+          {%- if o.mine and viewer == 'account' %}<button type="button" class="ghost small" data-mine-id="{{ o.id }}"
+                  data-cancel-order="{{ o.id }}">Cancel</button>
+          {%- elif o.mine and o.id %}<form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
+            <input type="hidden" name="order" value="{{ o.id }}"><button type="submit" class="ghost small">Cancel</button></form>
+          {%- elif o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
+          {%- elif can_trade_orders %}
+          <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
+            <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+            <button type="submit" class="small{{ '' if side_ == 'ask' else ' ghost' }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button></form>
+          {%- elif viewer == 'account' and open_here %}
+          <button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-take-id="{{ o.id }}"
+                  data-take-side="{{ side_ }}" data-take-order="{{ o|tojson|forceescape }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>
+          {%- endif %}</span>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% if side_ == 'ask' %}
+      <div class="obmid">
+        {%- if asks and bids %}Best ask <strong class="mono">{{ ex.px(asks[0].price) }}</strong> &middot;
+          best bid <strong class="mono">{{ ex.px(bids[0].price) }}</strong>
+        {%- elif last is not none %}Last traded at <strong class="mono">{{ ex.px(last) }}</strong>
+        {%- elif asks or bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    <div class="panel">
+      {% if open_here and viewer == 'account' and can_list_orders %}
+      <div class="ex-trade" id="ex-trade">
+        <div class="ex-seg" role="radiogroup" aria-label="Buy or sell" style="margin-bottom:12px">
+          <label><input type="radio" name="swap-side" value="buy" {% if side != 'sell' %}checked{% endif %}><span>Buy</span></label>
+          <label><input type="radio" name="swap-side" value="sell" {% if side == 'sell' %}checked{% endif %}><span>Sell</span></label>
+        </div>
+        {#- Always "set my price" (2026-10-17): to fill an order, press it in the order book. #}
+        <div class="ex-box" id="swap-amount-box"{% if whole %} hidden{% endif %}><label for="swap-amount"><span>Amount</span>
+            <span>{% if held is not none %}You hold {{ held }}{% endif %}</span></label>
+          <div class="line"><input autocomplete="off" id="swap-amount" inputmode="decimal" placeholder="0" value="{{ '1' if whole else '' }}">
+            <span class="unit">{{ wall(b.name, 'token name') }}</span></div></div>
+        <div class="ex-box" id="swap-price-box"><label for="swap-price"><span>{{ 'Price' if whole else 'Price each' }}</span><span>Total <b data-ex-total>0</b> {{ qname }}</span></label>
+          <div class="line"><input autocomplete="off" id="swap-price" inputmode="decimal" placeholder="0.00000000">
+            {#- Priced in any coin, or any token you hold (2026-10-17: "make an offer in any coin or token you
+                hold. Just like token pairs"): each is its own market, so picking one opens it. #}
+            {%- if quotes %}
+            <select class="unit ex-quote-pick" aria-label="Priced in"
+                    data-market="/exchange/swap/{{ b.key|urlencode }}/">
+              <option value="{{ q.key }}" selected>{{ qname }}</option>
+              {%- for o in quotes if not o.on %}<option value="{{ o.key }}">{{ o.label }}</option>{% endfor %}
+            </select>
+            {%- else %}<span class="unit">{{ qname }}</span>{% endif %}</div></div>
+      <style>
+        .ex-quote-pick{background:transparent;border:0;color:inherit;font:inherit;font-weight:700;text-align:right;
+          max-width:52%;padding:2px 0;cursor:pointer;box-shadow:none}
+      </style>
+        <div class="ex-quote"></div>
+        <button type="button" id="swap-go" class="ex-cta">Enter an amount</button>
+      </div>
+      <p class="msg err" id="swap-trouble" hidden></p>
+      <a class="btn small ghost" style="margin:10px 0 0;display:inline-block"
+         href="/exchange/history?base={{ b.key|urlencode }}&amp;quote={{ q.key|urlencode }}">Trade history</a>
+      <p class="ex-note">A swap settles on both chains at once: either both sides get paid, or both get their own back.
+        Nobody holds anybody's coins, and each swap is taken whole: press an order in the book to take it, or set your
+        price here to list yours for anyone to take. You confirm once, when you buy or list; every step
+        after that happens by itself and pops up as it does. Network fees are about 0.01 of each chain's coin per lock.</p>
+      {# What the box sends: the same swap forms as before (_tab_swaps.html binds them), out of sight. #}
+      {% for side_ in ('sell', 'buy') %}
+      <form class="cp-form" hidden data-pair-side="{{ side_ }}" data-base="{{ b.network }}" data-quote="{{ q.network }}"
+            data-base-kind="{{ b.kind }}" data-base-asset="{{ b.asset }}" data-base-div="{{ '1' if b.divisible else '0' }}"
+            data-base-label="{{ bname }}"
+            data-quote-kind="{{ q.kind }}" data-quote-asset="{{ q.asset }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
+            data-quote-label="{{ qname }}">
+        <input name="amount" autocomplete="off"><input name="price" autocomplete="off"><button type="submit">go</button>
+      </form>
+      {% endfor %}
+      <script nonce="{{ csp_nonce }}">
+      (function () {
+        var root = document.getElementById("ex-trade"); if (!root) return;
+        var $ = function (id) { return document.getElementById(id); };
+        // Picking another coin or token to price in opens that market (a listener, not an inline handler: the script
+        // policy, 2026-11-09).
+        var quotePick = root.querySelector(".ex-quote-pick");
+        if (quotePick) quotePick.addEventListener("change", function () {
+          location.href = quotePick.getAttribute("data-market") + encodeURIComponent(quotePick.value);
+        });
+        var whole = {{ whole|tojson }}, qname = {{ qname|tojson }}, bname = {{ bname|tojson }};
+        var asks = [{% for o in asks if not o.mine %}{{ {"price": o.price, "base": o.base_shown, "quote": o.quote_shown, "id": o.id}|tojson }},{% endfor %}];
+        var bids = [{% for o in bids if not o.mine %}{{ {"price": o.price, "base": o.base_shown, "quote": o.quote_shown, "id": o.id}|tojson }},{% endfor %}];
+        var mode = "limit";    // always the reader's price; taking an order is a press on its book row (2026-10-17)
+        var num = function (t) { var n = Number(String(t || "").replace(/,/g, "").trim()); return isFinite(n) ? n : 0; };
+        var fmt = function (n) { return Number(n).toLocaleString(undefined, {maximumFractionDigits: 8}); };
+        var side = function () { return root.querySelector('input[name="swap-side"]:checked').value; };
+        // Never the reader's own swap: those are marked in the book by _tab_swaps (window.myOrderIds).
+        var best = function () {
+          var mine = window.myOrderIds || new Set();
+          var l = (side() === "buy" ? asks : bids).filter(function (o) { return !mine.has(o.id); });
+          return l.length ? l[0] : null; };
+        var busy = null;
+        var draw = function () {
+          if (busy) return;
+          root.querySelectorAll(".ex-modes button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.mode === mode ? "true" : "false"); });
+          var o = mode === "best" ? best() : null, q = root.querySelector(".ex-quote"), go = $("swap-go");
+          $("swap-amount-box").hidden = whole || mode === "best";
+          $("swap-price-box").hidden = mode === "best";
+          if (mode === "best") {
+            q.textContent = o ? (side() === "buy" ? "Buy " : "Sell ") + (whole ? bname : o.base + " " + bname) + " for "
+              + o.quote + " " + qname + " (" + fmt(o.price) + " " + qname + " {{ unit }})"
+              : (side() === "buy" ? "Nobody is selling right now: set your price instead." : "Nobody is buying right now: set your price instead.");
+            go.textContent = o ? (side() === "buy" ? "Buy it" : "Sell it") : "Nothing to take";
+            go.disabled = !o || (side() === "sell" && window.dgShort);
+            root.querySelector("[data-ex-total]").textContent = o ? o.quote : "0";
+            return;
+          }
+          var a = whole ? 1 : num($("swap-amount").value), p = num($("swap-price").value);
+          root.querySelector("[data-ex-total]").textContent = fmt(a * p);
+          q.textContent = "";
+          go.disabled = !(a > 0 && p > 0) || (side() === "sell" && window.dgShort);
+          go.textContent = a > 0 && p > 0 ? (side() === "buy" ? "List my bid" : "List my sale") : "Enter " + (whole ? "a price" : "an amount and a price");
+        };
+        root.querySelectorAll(".ex-modes button").forEach(function (b) { b.onclick = function () { mode = b.dataset.mode; draw(); }; });
+        root.querySelectorAll('input[name="swap-side"]').forEach(function (r) { r.onchange = draw; });
+        ["swap-amount", "swap-price"].forEach(function (id) { $(id).oninput = draw; });
+        // The press shows at once, and follows what _tab_swaps says it is doing (arcade:swap-step).
+        document.addEventListener("arcade:swap-step", function (e) {
+          var go = $("swap-go"), w = e.detail.what;
+          if (w === "asking") { busy = true; go.disabled = true; go.textContent = "Asking the seller\u2026"; }
+          else if (w === "listing") { busy = true; go.disabled = true; go.textContent = "Listing\u2026"; }
+          else if (w === "asked") { go.textContent = "Asked \u2713 \u2014 watch for the next step"; setTimeout(function () { busy = null; draw(); }, 6000); }
+          else if (w === "listed") { go.textContent = "Listed \u2713"; setTimeout(function () { busy = null; draw(); }, 4000); }
+          else { busy = null; draw(); }
+        });
+        $("swap-go").onclick = function () {
+          if (busy) return;
+          if (mode === "best") {
+            var o = best(); if (!o) return;
+            var btn = document.querySelector('[data-take-id="' + o.id + '"]');
+            if (btn) btn.click();
+            return;
+          }
+          var f = document.querySelector('form[data-pair-side="' + side() + '"]');
+          f.querySelector('[name="amount"]').value = whole ? "1" : $("swap-amount").value;
+          f.querySelector('[name="price"]').value = $("swap-price").value;
+          f.requestSubmit();
+        };
+        // The price box starts at the market (2026-10-17): buying, the best ask; selling, the best bid -- any
+        // order on the book, yours too; then the other side; then the last trade. Typed over, it stays yours.
+        var hint = {asks: [{% for o in asks %}{{ o.price|tojson }},{% endfor %}],
+                    bids: [{% for o in bids %}{{ o.price|tojson }},{% endfor %}], last: {{ last|tojson }}};
+        var typed = false;
+        $("swap-price").addEventListener("input", function () { typed = true; });
+        // The book as drawn: rows the server sent and rows this page added (your own, listed just now).
+        var drawn = function (cls) {
+          return [].slice.call(document.querySelectorAll("#swap-pair .obrow." + cls + " .obprice"))
+            .map(function (e) { return Number(String(e.textContent).replace(/[^0-9.]/g, "")); })
+            .filter(function (n) { return n > 0; });
+        };
+        var prefill = function () {
+          if (typed && $("swap-price").value) { draw(); return; }
+          var asks = hint.asks.concat(drawn("ask")), bids = hint.bids.concat(drawn("bid"));
+          var ask = asks.length ? Math.min.apply(null, asks) : null;
+          var bid = bids.length ? Math.max.apply(null, bids) : null;
+          var p = side() === "buy" ? (ask || bid || hint.last) : (bid || ask || hint.last);
+          if (p) $("swap-price").value = String(+Number(p).toFixed(8));
+          draw();
+        };
+        root.querySelectorAll('input[name="swap-side"]').forEach(function (r) { r.addEventListener("change", prefill); });
+        window.swapBoxDraw = prefill;          // redrawn with the book (_tab_swaps drawOrders, live updates)
+        document.addEventListener("arcade:changed", prefill);
+        prefill();
+      })();
+      </script>
+      {% elif open_here and can_trade_orders %}
+      <h3 style="margin:0 0 10px">Buy and sell {{ bname }}</h3>
+      {# The operator's node, in the same words as everybody's (2026-10-15): an amount of the base
+         at a price in the quote each (trade_order_place). #}
+      {% for side_ in ('sell', 'buy') %}
+      <form class="cp-form row" method="post" action="/exchange/trade-orders/place" style="gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="side" value="{{ side_ }}">
+        <input type="hidden" name="base" value="{{ b.key }}"><input type="hidden" name="quote" value="{{ q.key }}">
+        <span class="muted" style="font-size:.84rem;min-width:2.4em">{{ 'Sell' if side_ == 'sell' else 'Buy' }}</span>
+        {% if not whole %}
+        <input name="amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off" style="width:110px">
+        <span class="muted" style="font-size:.84rem">at</span>
+        <input name="price" inputmode="decimal" placeholder="{{ qname }} each" autocomplete="off" style="width:110px">
+        {% else %}
+        <input type="hidden" name="amount" value="1">
+        <span class="muted" style="font-size:.84rem">it for</span>
+        <input name="price" inputmode="decimal" placeholder="{{ qname }}" autocomplete="off" style="width:110px">
+        {% endif %}
+        <button type="submit" class="small">{{ 'List sale' if side_ == 'sell' else 'List bid' }}</button>
+      </form>
+      {% endfor %}
+      {% elif viewer == 'nobody' %}
+      <h3 style="margin:0 0 6px">Buy and sell {{ bname }}</h3>
+      <p class="muted" style="margin:0">Sign in to trade.</p>
+      {% else %}
+      <h3 style="margin:0 0 6px">Buy and sell {{ bname }}</h3>
+      {% if open_here and not can_trade_orders %}
+      <p class="muted" style="margin:0">This node's own wallet lists and takes swaps once
+        <a href="/admin#trading">Node-facilitated trades</a> is on (Admin &rarr; Trading).</p>
+      {% else %}
+      <p class="muted" style="margin:0">Swaps open here when this node runs both chains.</p>
+      {% endif %}
+      {% endif %}
+    </div>
+
+    {% if viewer == 'account' %}
+    {# The swap machinery (binds Take, the list forms, marks the reader's own orders in the book),
+       out of sight (2026-10-17: "Remove this"): the swaps themselves are in Trade history. #}
+    <div hidden>{% include "_tab_swaps.html" %}</div>
+    {% endif %}
+  </div>
+
+  <div>
+    {% if can_trade_orders and my_pair_orders %}
+    <div class="panel">
+      <h3 style="margin:0 0 8px">Your orders</h3>
+      {% for o in my_pair_orders %}
+      <div class="row" style="gap:8px;align-items:center;padding:4px 0">
+        <span style="flex:1;font-size:.86rem">{{ o.give_label }} for {{ o.get_label }}</span>
+        <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
+          <input type="hidden" name="back" value="{{ here }}">
+          <button type="submit" class="ghost small">Cancel</button></form>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <h3 style="margin:0 0 2px">Recent trades</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ qname }}</p>
+      {% if recent %}
+      <table>
+        <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
+          <td>Price</td><td style="text-align:right">Amount</td>
+          <td style="text-align:right">{{ qname }}</td><td style="text-align:right">When</td></tr>
+        {% for t in recent %}
+        <tr class="tradelink" data-href="/exchange/swap-trade/{{ t.id }}" title="Who traded"><td class="mono"><a class="tl" href="/exchange/swap-trade/{{ t.id }}">{{ "%.8f"|format(t.price) }}</a></td>
+            <td class="mono" style="text-align:right"><a class="tl" href="/exchange/swap-trade/{{ t.id }}">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</a></td>
+            <td class="mono muted" style="text-align:right"><a class="tl" href="/exchange/swap-trade/{{ t.id }}">{{ "%.4f"|format(t.total) }}</a></td>
+            <td class="muted" style="text-align:right"><a class="tl" href="/exchange/swap-trade/{{ t.id }}"><span data-when-short="{{ t.when }}"></span></a></td></tr>
+        {% endfor %}
+      </table>
+      <script nonce="{{ csp_nonce }}">document.querySelectorAll("[data-when-short]").forEach(function (e) {
+        var d = new Date(Number(e.dataset.whenShort) * 1000);
+        e.textContent = d.toLocaleDateString(undefined, {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); });</script>
+      {% else %}<p class="muted" style="margin:0">No swap has settled on this market yet.</p>{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if viewer == 'account' and b.kind == 'doginal' %}
+{# Giving a Doginal needs Dogecoin besides it: the lock's fee and the reserve that moves it out again (2026-10-15:
+   "Those buttons should be grayed out unless they have a balance of Dogecoin on top of their asset"). #}
+<p class="ex-note dg-need" id="dg-need" hidden></p>
+<script nonce="{{ csp_nonce }}">
+(async () => {
+  try {
+    const said = await (await fetch("/account?chains=doge", {cache: "no-store"})).json();
+    const d = (said.chains || []).find((c) => c.network === "doge");
+    if (!d) return;
+    const free = Number(d.spendable || 0), need = Number(d.doginal_lock_need || 0);
+    if (free >= need) return;
+    const coins = (k) => (k / 1e8).toFixed(8).replace(/\.?0+$/, "");
+    const note = document.getElementById("dg-need");
+    note.hidden = false;
+    note.textContent = `To sell this Doginal through a swap you need about ${coins(need)} DOGE besides it, for the network `
+      + `fee and the coin that moves it out of the lock. Your wallet has ${coins(free)} DOGE to spend.`;
+    window.dgShort = true;
+    document.querySelectorAll('[data-take-side="bid"]').forEach((b) => {
+      b.disabled = true; b.title = "Needs Dogecoin besides the Doginal for the network fee";
+    });
+    if (window.swapBoxDraw) window.swapBoxDraw();
+  } catch (e) { /* the buttons stay as they were; the send itself says why if it cannot pay */ }
+})();
+</script>
+{% endif %}
+{% endblock %}

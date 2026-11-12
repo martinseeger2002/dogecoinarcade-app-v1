@@ -1,0 +1,3138 @@
+{% extends "base.html" %}
+{% import "_not_ordinals.html" as notord %}
+{% import "_exui.html" as ex %}
+{% block title %}Wallet · {{ brand.name }}{% endblock %}
+{% block body %}
+{{ ex.fav_script() }}
+{# The Wallet tab, redone (2026-10-08: "our wallet tab is trash. It
+   needs to work a lot better. It needs to give feedback when transactions are
+   sent it should have a history. The address should auto complete if somebody
+   is in your address book and it should just look a lot cleaner"). Built from
+   the prototype he approved ("I love the wallet make that change"), which took
+   its shape from Xverse, Leather and UniSat: a balance card with Send /
+   Receive / Exchange under it, pending sends pinned above a dated history, a
+   success screen with the transaction id, and NFTs by collection first. #}
+<div class="row" style="align-items:baseline;gap:10px">
+  <h1 style="margin:0">Wallet</h1>
+  {# Backup lives here now, not as a tab (2026-09-27). #}
+  <a class="btn ghost small" href="{{ '/backup' if node_side else '/me/backup' }}" style="margin-left:auto">Back up your wallet</a>
+</div>
+
+<p class="muted" id="shut" hidden style="font-size:.86rem;margin:10px 0 0">
+  Your wallet is locked. Press Unlock at the top of the page, or just carry on: anything that needs your key asks for your password first.</p>
+<div class="msg err" id="trouble" hidden style="margin-top:12px"></div>
+<div class="msg ok" id="news" hidden style="margin-top:12px"></div>
+
+<section class="wl-hero" aria-label="Balance">
+  <div class="wl-top">
+    <span class="wl-who" id="who"></span>
+    {# The coin picker (2026-10-27: "re work the ui to fit the ever growing list of coins"): one button with the coin
+       shown, and every coin as a tile in its menu, so a coin added later never pushes the row out of the card. #}
+    <div class="wl-coin" id="coinpicker" hidden>
+      <button type="button" class="wl-coinbtn" id="coinpick" aria-haspopup="listbox" aria-expanded="false">
+        <span class="wl-coinface" id="coinface"></span><span aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="wl-coinmenu" role="listbox" aria-label="Coin" id="nets" hidden></div>
+    </div>
+  </div>
+  {% if not node_side %}
+  {# Several wallets on each coin (plan item 18, 2026-10-20, from the mock-up he approved): the account's own
+     wallet first, then the wallets it imported, by name and never by address; "+ Import a wallet" last. #}
+  <div class="wl-picker" id="wpicker" hidden>
+    <button type="button" class="wl-pick" id="wpick" aria-haspopup="listbox" aria-expanded="false">
+      <span class="wl-pickname" id="wpickname"></span><span aria-hidden="true">&#9662;</span>
+    </button>
+    <div class="wl-menu" id="wmenu" role="listbox" aria-label="Wallet" hidden></div>
+  </div>
+  {% endif %}
+  <div class="wl-bal"><b id="bal">—</b><span id="unit">PEP</span>
+    <span class="wl-chip" id="netchip"></span></div>
+  <div class="wl-sub" id="sub"></div>
+  <div class="wl-addrrow">
+    <select class="wl-kind" id="addrkind" aria-label="Address type" hidden></select>
+    <button type="button" class="wl-addr" id="addrchip" title="Copy your address"></button>
+  </div>
+  <div class="wl-actions">
+    <button type="button" class="wl-act" id="do-send"><i aria-hidden="true">&#8593;</i>Send</button>
+    <button type="button" class="wl-act" id="do-recv"><i aria-hidden="true">&#8595;</i>Receive</button>
+    <a class="wl-act" href="/exchange"><i aria-hidden="true">&#8646;</i>Exchange</a>
+  </div>
+  {% if not node_side %}
+  <div class="wl-wtools" id="wtools" hidden>
+    <button type="button" class="wl-link" id="wrename">&#9998; Rename</button>
+    <button type="button" class="wl-link wl-quiet" id="wremove" hidden>Remove from list</button>
+  </div>
+  <div class="wl-wstate" id="wstate" hidden></div>
+  {% endif %}
+</section>
+
+{# Not backed up: said, not enforced (2026-10-08: "If they don't back them up,
+   that's on them give them a notice"). Dismissed for this tab only. #}
+<div class="wl-banner" id="not-backed-up" hidden>
+  <span aria-hidden="true">&#9888;</span>
+  <span><strong>Your twelve words are not backed up.</strong> You can spend your
+    coins, but if you lose your password without the words written down, they
+    are gone for good and nobody can get them back.
+    <a href="/me/backup">Show my twelve words</a></span>
+  <button type="button" class="wl-x" id="backup-x" aria-label="Dismiss">&times;</button>
+</div>
+
+<div class="wl-tabs" role="tablist">
+  <button type="button" role="tab" id="tab-activity" aria-selected="true">Activity</button>
+  <button type="button" role="tab" id="tab-tokens" aria-selected="false">Tokens</button>
+  <button type="button" role="tab" id="tab-nfts" aria-selected="false">NFTs</button>
+</div>
+<div id="panel-activity" role="tabpanel"></div>
+<div id="panel-tokens" role="tabpanel" hidden></div>
+<div id="panel-nfts" role="tabpanel" hidden></div>
+{# [Claude 2026-10-15] Inscriptions on this account's own coins -- Doginals on Dogecoin, ord inscriptions on Pepecoin
+   mainnet -- read from the chain by this node (2026-10-14: "We have to have the wallet check its own utxo to see if
+   they are doginals"; 2026-10-15: the outside Doginals API removed, "do the same for small .01 pep txs"). Shown under NFTs. #}
+<section id="doginals" class="wl-dg" hidden aria-labelledby="dg-title"></section>
+
+{# The sweep-back card is gone (2026-10-24): small outputs come back by themselves while a page is open with the
+   wallet unlocked, and the card showed on every coin though only Pepecoin test is swept. #}
+{# Things a game holds for this account in a refereed escrow (arcade/escrow.py):
+   the game's judge decides who gets them until the unlock time, and after it
+   one press brings them all home -- whatever the game, or its referee, says. #}
+<div class="panel" id="escrow-panel" hidden style="margin-bottom:18px"></div>
+{# What is on its way to or from this account, before its block (2026-10-04,
+   settle_now D): a game pays as it is played, so a piece collected a moment ago
+   shows here at once, marked as arriving, and becomes simply yours when it lands. #}
+<div class="panel" id="pending-panel" hidden style="margin-bottom:18px"></div>
+
+<template id="receive-note">{{ notord.receiving() }}</template>
+
+<style>
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.wl-hero{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:18px;
+  box-shadow:var(--shadow);margin:16px 0 0;max-width:620px}
+.wl-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative}
+.wl-who{color:var(--muted);font-size:.9rem;font-weight:600}
+/* The coin picker (2026-10-27): the coin shown on one button; every coin a tile in its menu, as many rows as it
+   takes. The picked tile ringed; a coin still syncing greyed with how far it is. */
+.wl-coin{margin-left:auto;max-width:100%}
+.wl-coinbtn{display:flex;align-items:center;gap:8px;padding:5px 12px 5px 6px;border-radius:999px;background:var(--code);
+  color:var(--fg);border:1px solid var(--line);box-shadow:none;font-weight:650;font-size:.86rem;max-width:100%}
+.wl-coinface{display:flex;align-items:center;gap:8px;min-width:0}
+.wl-coinface .neticon,.wl-coinface .wl-coinletter{width:26px;height:26px;flex:none;font-size:.8rem}
+.wl-coinface .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-coinmenu{position:absolute;right:0;top:calc(100% + 6px);width:min(420px,100%);background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);z-index:21;padding:8px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;max-height:60vh;overflow-y:auto}
+.wl-coinmenu[hidden]{display:none}
+.wl-cointile{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border-radius:10px;border:1px solid transparent;
+  background:none;box-shadow:none;color:var(--fg);font-size:.74rem;font-weight:600;line-height:1.2;text-align:center;min-width:0}
+.wl-cointile:hover{background:var(--code)}
+.wl-cointile[aria-selected="true"]{border-color:var(--accent,#d4a72c);background:var(--code)}
+.wl-cointile .neticon,.wl-coinletter{width:32px;height:32px}
+.wl-coinletter{display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--code);
+  border:1px solid var(--line);font-weight:800;font-size:.95rem}
+.wl-cointile .tk{font-weight:750}
+.wl-cointile .lb{color:var(--muted);font-weight:500;font-size:.7rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-cointile.chain-off{opacity:.45;cursor:default}
+.wl-cointile.chain-off .neticon{filter:grayscale(1)}
+.wl-bal{margin:12px 0 0;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.wl-bal b{font-size:2.4rem;font-weight:750;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
+.wl-bal span{font-weight:650;color:var(--muted)}
+.wl-chip{font-size:.68rem!important;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;
+  border-radius:999px;border:1px solid var(--line)}
+.wl-chip.real{border-color:var(--accent);color:var(--accent)!important}
+.wl-sub{font-size:.88rem;color:var(--muted);min-height:1.3em;margin-top:2px}
+.wl-sub .in{color:var(--ok);font-weight:600}.wl-sub .out{color:var(--warn);font-weight:600}
+.wl-addr{margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;
+  background:var(--code);color:var(--fg);border:0;box-shadow:none;padding:4px 10px;border-radius:999px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.wl-addrrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;max-width:100%}
+.wl-addrrow .wl-addr{margin-top:0;min-width:0}
+.wl-kind{font-size:16px;font-weight:600;padding:2px 26px 2px 10px;border-radius:999px;background:var(--code);
+  color:var(--fg);border:1px solid var(--line,#2b3c31);width:auto;max-width:100%}
+.wl-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.wl-act{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:.82rem;font-weight:650;
+  padding:10px 4px;border-radius:14px;background:var(--code);color:var(--fg);border:0;box-shadow:none}
+a.wl-act:hover{text-decoration:none}
+.wl-act i{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--accent);
+  color:var(--accent-fg);font-style:normal;font-size:1.15rem}
+.wl-banner{display:flex;gap:10px;align-items:flex-start;margin:12px 0 0;padding:11px 13px;border-radius:14px;
+  border:1px solid var(--bad);background:color-mix(in srgb,var(--bad) 8%,transparent);font-size:.88rem;max-width:620px}
+.wl-x{margin-left:auto;background:none;border:0;box-shadow:none;color:var(--muted);font-size:1.2rem;padding:0 4px;line-height:1}
+.wl-tabs{display:flex;gap:4px;margin:22px 0 4px;border-bottom:1px solid var(--line);max-width:620px}
+.wl-tabs button{padding:9px 12px;font-weight:650;font-size:.92rem;color:var(--muted);background:none;border:0;
+  box-shadow:none;border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px}
+.wl-tabs button[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
+#panel-activity,#panel-tokens,#panel-nfts,#doginals{max-width:620px}
+.wl-dg{margin-top:22px}
+.wl-dg h2{margin:0 0 4px;font-size:1.05rem}
+.wl-dg .wl-dgpic{display:grid;place-items:center;aspect-ratio:1;border-radius:12px;overflow:hidden;background:var(--code);
+  color:var(--muted);font-size:.7rem}
+.wl-dg .wl-dgpic img{width:100%;height:100%;object-fit:cover;display:block;image-rendering:pixelated}
+.wl-dgid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.66rem;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-day{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 2px 4px}
+.wl-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px 6px;border-radius:12px;
+  background:none;border:0;box-shadow:none;color:var(--fg);font-weight:400}
+.wl-row:hover{background:var(--code)}
+.wl-ic{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--code);font-size:1rem}
+.wl-ic.in{color:var(--ok)}
+.wl-mid{flex:1;min-width:0}
+.wl-mid b{display:block;font-weight:600;font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-mid small{color:var(--muted);font-size:.8rem}
+.wl-amt{text-align:right;font-variant-numeric:tabular-nums;font-weight:650;font-size:.95rem;white-space:nowrap}
+.wl-amt.in{color:var(--ok)}
+.wl-amt small{display:block;color:var(--muted);font-weight:500;font-size:.75rem}
+.wl-pill{display:inline-flex;align-items:center;gap:5px;font-size:.7rem;font-weight:700;padding:1px 7px;border-radius:999px;margin-top:2px}
+.wl-pill.wait{color:var(--warn);background:color-mix(in srgb,var(--warn) 13%,transparent)}
+.wl-pill.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.wl-spin{width:9px;height:9px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:wlsp .8s linear infinite}
+@keyframes wlsp{to{transform:rotate(360deg)}}
+.wl-empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:.9rem}
+.wl-since{color:var(--muted);font-size:.78rem;text-align:center;margin:14px 0 0}
+.wl-more{width:100%;margin-top:10px}
+.wl-tok{display:flex;align-items:center;gap:12px;padding:12px 6px;border-bottom:1px solid var(--line);width:100%;text-align:left;border-radius:10px;
+  background:var(--accent);color:var(--accent-fg)}
+/* A row is a button, and on a phone a tapped button keeps :hover and :focus: the row went
+   dark with its dark text on it, as if blacked out (2026-10-17: "I don't like that it
+   selects it all dark"). The colours stay; only a real mouse gets the hover. */
+.wl-tok:focus{outline:none}
+.wl-tok:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+@media (hover:hover){.wl-tok:hover{filter:brightness(1.06)}}
+.wl-tok .wl-mid small{color:color-mix(in srgb,var(--accent-fg) 62%,transparent)}
+.wl-tokrow{display:flex;align-items:center;gap:6px}
+.wl-tokrow .wl-tok{flex:1;min-width:0}
+.wl-favhead{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:10px 6px 2px}
+.wl-tok.on{background:var(--accent);box-shadow:inset 0 0 0 3px var(--fg)}
+.wl-backcoin{margin-left:4px;font-size:.8rem;font-weight:700;color:var(--accent);padding:2px 8px;border-radius:999px;background:var(--code);box-shadow:none}
+.wl-piececard{display:flex;flex-direction:column;gap:5px;min-width:0}
+.wl-piecesend{padding:6px 0;border-radius:9px;font-size:.8rem;font-weight:700;background:var(--code);color:var(--accent);box-shadow:none}
+.wl-sendpiece{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:.88rem}
+.wl-sendpiece > :first-child{width:64px;height:64px;flex:none;border-radius:10px;overflow:hidden}
+.wl-av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#fff;flex:none}
+/* NFTs: collections first, then the pieces of the one opened */
+.wl-tools{display:flex;gap:8px;margin:12px 0 10px}
+.wl-tools input{flex:1;min-width:0}
+.wl-tools select{width:auto;flex:none;max-width:44%}
+.wl-count{font-size:.82rem;color:var(--muted);margin:10px 0 0}
+.wl-colls{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.wl-coll{display:flex;flex-direction:column;gap:2px;text-align:left;padding:8px;border-radius:16px;background:var(--panel);
+  border:1px solid var(--line);box-shadow:var(--shadow);min-width:0;color:var(--fg);font-weight:400}
+.wl-coll b{font-size:.92rem;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-coll small{color:var(--muted);font-size:.78rem}
+.wl-mosaic{display:grid;grid-template-columns:1fr 1fr;gap:3px;aspect-ratio:1;border-radius:11px;overflow:hidden;width:100%;background:var(--code)}
+.wl-mosaic span{display:grid;place-items:center;background:var(--code);color:var(--muted);font-size:.6rem;overflow:hidden}
+.wl-mosaic img,.wl-piece img{width:100%;height:100%;object-fit:cover;display:block;image-rendering:pixelated}
+.wl-back{background:none;border:0;box-shadow:none;color:var(--accent);font-weight:650;font-size:.9rem;padding:8px 0}
+.wl-collhead{display:flex;align-items:center;gap:12px;margin:4px 0 4px}
+.wl-collhead .wl-mosaic{width:60px;flex:none}
+.wl-collhead b{font-size:1.1rem;display:block}
+.wl-dgpager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
+.wl-dgpager select{flex:1 1 140px;min-width:0}
+.wl-pieces{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;margin-top:8px}
+/* the Wallet's Doginals in order, and their card (2026-11-05) */
+.dg-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 4px}
+.dg-chip{border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:999px;padding:4px 11px;font-size:.8rem;box-shadow:none}
+.dg-chip b{margin-left:5px;color:var(--muted);font-weight:600}.dg-chip.on{border-color:var(--accent);color:var(--accent)}.dg-chip.on b{color:var(--accent)}
+.dg-sp{flex:1 0 100%;height:0}.wl-dg .dg-pick,.wl-dg .dg-go{width:auto;flex:1 1 140px;font-size:.8rem;padding:5px 8px;min-width:0;margin:0}
+.dg-grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+.dg-tile{cursor:pointer;border:1px solid var(--line);border-radius:12px;padding:6px;background:var(--panel)}
+.dg-tile:hover,.dg-tile:focus-visible{border-color:var(--accent)}.dg-tile.dg-focus{outline:2px solid var(--accent)}
+.dg-num{font-weight:700;font-size:.92rem}.dg-coll{font-size:.74rem;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.1em}
+.dg-coll.none{color:var(--muted)}.dg-acts{display:flex;gap:5px}.dg-acts .wl-piecesend{flex:1}
+.dg-textpic{padding:8px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);word-break:break-all;text-align:center;overflow:hidden}
+.dg-shade{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.62);display:flex;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto}
+.dg-modal{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;max-width:820px;width:100%;display:grid;grid-template-columns:minmax(0,340px) 1fr;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+@media (max-width:680px){.dg-modal{grid-template-columns:1fr}}
+.dg-x{position:absolute;top:6px;right:8px;background:transparent;color:var(--muted);font-size:1.4rem;box-shadow:none;padding:2px 8px;z-index:1}
+.dg-big{width:100%;aspect-ratio:1;border:0;display:block;background:var(--code)}
+.dg-bigtext{margin:0;padding:14px;min-height:100%;white-space:pre-wrap;word-break:break-all;background:var(--code);font-size:.8rem}
+.dg-side{padding:16px 18px}.dg-side h3{margin:0;font-size:1.5rem}.dg-cn{color:var(--accent);font-weight:600;margin:2px 0 10px}
+.dg-desc{color:var(--muted);font-size:.85rem;margin:0 0 10px}.dg-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
+.dg-attrs{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin-bottom:12px}
+.dg-attr{border:1px solid var(--line);border-radius:8px;padding:5px 7px}.dg-attr i{display:block;font-style:normal;font-size:.7rem;color:var(--muted)}
+.dg-attr em{font-style:normal;font-size:.7rem;color:var(--accent);float:right}
+.dg-dl{display:grid;grid-template-columns:110px 1fr;gap:4px 10px;margin:0 0 12px;font-size:.85rem}.dg-dl dt{color:var(--muted)}.dg-dl dd{margin:0;word-break:break-all}
+.dg-copy{padding:0 6px;font-size:.75rem;box-shadow:none;background:transparent;color:var(--link)}
+.dg-links{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;font-size:.85rem}
+.dg-bigacts{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}.dg-send{padding:8px 18px}
+.dg-pricebox{flex:1;display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:3px 3px 3px 10px;min-width:200px}
+.dg-pricebox input{flex:1;min-width:0;border:0;background:transparent;padding:4px 0}
+.dg-listed{flex:1;align-self:center;color:var(--accent);font-weight:600}
+.wl-piece{display:block;aspect-ratio:1;border-radius:12px;overflow:hidden;position:relative;background:var(--code);max-width:100%}
+.wl-piece em{position:absolute;left:0;right:0;bottom:0;padding:4px 6px;font-style:normal;font-size:.7rem;font-weight:700;color:#fff;
+  background:linear-gradient(transparent,rgba(0,0,0,.6));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-piece .wl-kind{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:.72rem}
+/* the sheet: from the bottom on a phone, a card in the middle elsewhere */
+.wl-scrim{position:fixed;inset:0;z-index:60;background:rgba(20,18,14,.45);display:flex;align-items:flex-end;justify-content:center}
+.wl-sheet{background:var(--panel);width:100%;max-width:460px;border-radius:22px 22px 0 0;padding:10px 18px calc(22px + env(safe-area-inset-bottom,0px));
+  max-height:92vh;overflow:auto;animation:wlup .2s ease}
+@media (min-width:700px){.wl-scrim{align-items:center}.wl-sheet{border-radius:22px}}
+@keyframes wlup{from{transform:translateY(30px);opacity:.5}}
+@media (prefers-reduced-motion:reduce){.wl-sheet,.wl-spin{animation:none}}
+.wl-grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
+.wl-sheet h2{margin:0 0 12px;font-size:1.12rem;display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;color:var(--fg)}
+.wl-sheet h2 .wl-x{font-size:1.4rem}
+.wl-sheet label.l{display:block;font-size:.78rem;font-weight:650;color:var(--muted);margin:14px 0 6px}
+.wl-field{position:relative}
+/* Scan a QR code into Send (2026-10-17: "phone camera support for QR scanning on the send"). */
+.wl-tohead{display:flex;align-items:center;justify-content:space-between}
+.wl-scan{font-size:.8rem;font-weight:700;padding:4px 12px;border-radius:999px;background:var(--code);color:var(--fg);box-shadow:none;border:1px solid var(--line)}
+.wl-scanbox{position:fixed;inset:0;z-index:1000;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px}
+.wl-scanbox video{width:min(92vw,420px);aspect-ratio:1;object-fit:cover;border-radius:16px;background:#111;box-shadow:0 0 0 3px var(--accent)}
+.wl-scanbox p{color:#eee;margin:0;text-align:center;max-width:420px;font-size:.9rem}
+.wl-scanbox .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.wl-field input{width:100%;font-size:16px}
+.wl-sugg{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;box-shadow:var(--shadow);z-index:5;overflow:hidden}
+.wl-sugg button{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;text-align:left;background:none;
+  border:0;box-shadow:none;border-radius:0;color:var(--fg);font-weight:500}
+.wl-sugg button:hover,.wl-sugg button.hi{background:var(--code)}
+.wl-sugg small{display:block;color:var(--muted);font-family:ui-monospace,monospace;font-size:.72rem}
+.wl-recent{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px}
+.wl-recent button{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:.72rem;color:var(--muted);
+  min-width:62px;background:none;border:0;box-shadow:none;padding:4px;font-weight:500}
+.wl-note{font-size:.8rem;margin-top:6px;color:var(--muted);overflow-wrap:anywhere}
+.wl-note.bad{color:var(--bad);word-break:normal}
+.wl-amtrow{display:flex;gap:8px;align-items:center}
+.wl-amtrow input{flex:1;min-width:0;font-size:16px}
+.wl-max{font-size:.8rem;font-weight:700;padding:11px 12px;border-radius:12px;background:var(--code);color:var(--accent);border:0;box-shadow:none}
+.wl-go{width:100%;margin-top:18px;padding:14px;border-radius:14px;font-weight:700;font-size:1rem}
+.wl-go:disabled{opacity:.45;cursor:not-allowed}
+.wl-second{width:100%;margin-top:10px}
+.wl-review{text-align:center;padding:4px 0}
+.wl-review .big{font-size:2rem;font-weight:750;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.wl-kv{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.wl-kv span:first-child{color:var(--muted);flex:none}
+.wl-kv span:last-child{text-align:right;min-width:0;word-break:break-all}
+.wl-kv.total{font-weight:700;border-bottom:0}
+.wl-warn{margin-top:12px;padding:10px 12px;border-radius:12px;font-size:.84rem;
+  background:color-mix(in srgb,var(--accent) 10%,transparent);border:1px solid var(--accent)}
+.wl-steps{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:12px}
+.wl-steps li{display:flex;align-items:center;gap:10px;font-size:.92rem;color:var(--muted)}
+.wl-steps li.now{color:var(--fg);font-weight:600}.wl-steps li.done{color:var(--ok)}
+.wl-dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:.7rem;flex:none}
+.wl-steps li.now .wl-dot{border-color:var(--accent);border-right-color:transparent;animation:wlsp .8s linear infinite}
+.wl-steps li.done .wl-dot{border-color:var(--ok);background:var(--ok);color:#fff}
+.wl-done{text-align:center;padding:6px 0}
+.wl-check{width:64px;height:64px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;font-size:2rem;margin:4px auto 12px}
+.wl-txid{display:flex;gap:8px;align-items:center;justify-content:center;font-family:ui-monospace,monospace;font-size:.8rem;margin-top:10px;color:var(--muted);flex-wrap:wrap}
+.wl-save{margin-top:16px;text-align:left;padding:12px;border:1px dashed var(--line);border-radius:12px}
+.wl-qr{background:#fff;border-radius:16px;padding:10px;width:min(240px,100%);margin:0 auto}
+.wl-qr svg{display:block;width:100%;height:auto}
+.wl-addrbig{font-family:ui-monospace,monospace;font-size:.86rem;text-align:center;word-break:break-all;margin:12px auto 0;max-width:300px;user-select:all}
+.wl-link{background:none;border:0;box-shadow:none;color:var(--accent);font-weight:700;font-size:.8rem;padding:2px 4px}
+/* the wallet picker (plan item 18) */
+.wl-picker{position:relative;margin-top:12px;max-width:100%}
+.wl-pick{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:9px 12px;
+  border-radius:12px;background:var(--code);color:var(--fg);border:1px solid var(--line);box-shadow:none;font-weight:650}
+.wl-pickname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  box-shadow:var(--shadow);z-index:20;overflow:hidden;max-height:60vh;overflow-y:auto}
+.wl-opt{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;padding:11px 13px;border:0;border-radius:0;
+  border-bottom:1px solid var(--line);background:none;box-shadow:none;color:var(--fg);text-align:left;font-weight:600}
+.wl-opt:hover,.wl-opt[aria-selected="true"]{background:var(--code)}
+.wl-opt .who{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-opt .bal{color:var(--muted);font-size:.85rem;font-weight:500;white-space:nowrap}
+.wl-opt.import{color:var(--accent);border-bottom:0}
+.wl-tag{font-size:.68rem;border:1px solid var(--line);border-radius:999px;padding:1px 7px;color:var(--muted);margin-left:6px;font-weight:500}
+.wl-wtools{display:flex;justify-content:space-between;gap:10px;margin-top:10px}
+.wl-quiet{color:var(--muted)}
+.wl-wstate{margin-top:12px;border-radius:12px;padding:11px 13px;font-size:.88rem}
+.wl-wstate.wait{background:color-mix(in srgb,var(--accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
+.wl-wstate.none{background:color-mix(in srgb,var(--bad) 9%,transparent);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
+.wl-wstate.good{background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.wl-proto{color:var(--muted);font-weight:500}
+.wl-rescanbar{display:block;width:100%;height:8px;margin-top:8px;accent-color:var(--accent)}
+.wl-segk{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0 4px}
+.wl-segk button{border:0;border-radius:0;background:none;box-shadow:none;color:var(--fg);font-weight:600;padding:9px}
+.wl-segk button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.wl-sheet textarea{width:100%;min-height:92px;font-family:ui-monospace,Menlo,monospace;font-size:16px}
+.wl-sheet input.wide,.wl-sheet select.wide{width:100%;font-size:16px}
+</style>
+<script src="/vendor/qrcode.js"></script>
+
+
+<script type="module" nonce="{{ csp_nonce }}">
+import {scanQR, parseQR} from "/qrscan.js";
+{# The operator's Wallet is this page with node_side on (2026-10-19): the node's wallets answer, node-wallet.js signs. #}
+import * as wallet from "{{ '/node-wallet.js' if node_side else '/wallet.js' }}";
+import * as mail from "/messaging.js";
+const API = {{ ('/node/wallet' if node_side else '/account')|tojson }};
+const NODE_SIDE = {{ 'true' if node_side else 'false' }};
+
+const $ = (id) => document.getElementById(id);
+// Each chain as its coin (2026-10-18: "Use the icons ... rather than text badges").
+const COIN_ICONS = {{ coin_icons()|tojson }};
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+};
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const coinsOf = (n) => (Number(n || 0) / 100000000).toLocaleString(undefined,
+  {minimumFractionDigits: 0, maximumFractionDigits: 8});
+const short = (a) => (a && a.length > 14) ? a.slice(0, 7) + "…" + a.slice(-5) : (a || "");
+// What the coins are called (2026-10-08): mainnet "PEP", testnet "PEP TEST".
+let UNIT = "PEP";
+const TAGCHAIN = {network: "{{ chain.network }}",
+                  version: {{ chain.params.pubkeyhash_version }}};
+const ME = (typeof ARCADE_ME === "string" && ARCADE_ME) || "me";
+const toast = (t) => { try { arcadeToast(t); } catch (e) { /* the page still says it */ } };
+
+/* What this browser remembers for the Wallet tab, and only for it: what it
+ * sent (to name a send before its block lands, and to offer recent people
+ * back), the addresses somebody chose to save under a name, and which chain
+ * was showing. Per account, because one browser can hold several. */
+const SENT = `arcade.wallet.sent.${ME}`, SAVED = `arcade.wallet.saved.${ME}`;
+const NET = `arcade.wallet.net.${ME}`;
+function kept(key, empty) {
+  try { return JSON.parse(localStorage.getItem(key) || "null") || empty; } catch (e) { return empty; }
+}
+function keep(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {} }
+
+let said = {chains: []}, net = null, keys = null, tab = "activity";
+// Locked after nothing was done (wallet.js, 2026-11-09, security review): the wallet this page kept goes too, so a
+// page left open with typed text in it cannot send without the password.
+window.addEventListener("arcade-wallet-locked", () => { keys = null; const shut = $("shut"); if (shut) shut.hidden = false; });
+/* The token the balance card is showing, or null for the chain's own coins
+ * (2026-10-08: "When you click on the tokens tab and you click on a token your
+ * send receive and balance at the top of your wallet should be in that token").
+ * Send and Receive follow it; the network fee is still paid in PEP. */
+let asset = null;
+// The chain's coin as the node names it (Params.coin), so a chain added later is named right too.
+const coinOf = (c) => !c ? "PEP TEST" : c.coin ? c.coin : c.network === "doge" ? "DOGE" : c.network === "ltc" ? "LTC" : c.network === "ltctest" ? "LTC TEST" : c.mainnet ? "PEP" : "PEP TEST";
+const COIN = () => coinOf(chainNow());
+// Chains this node has that are not open yet: Dogecoin while it syncs (2026-10-13).
+// Wallets this account hides (Your arcade -> Your wallets, 2026-10-18): kept, announced and watched, not shown.
+const HIDDEN = {{ (hidden or [])|tojson }};
+const WAITING = {{ chain_menu(account_side=True)|rejectattr("ready")|list|tojson }}.filter((c) => !HIDDEN.includes(c.network));
+/** A token amount in its own units: divisible ones have 8 places, the rest are whole. */
+const tokenAmt = (raw, t) => t && t.divisible ? coinsOf(raw) : Number(raw || 0).toLocaleString();
+/** Raw units from what was typed, by the digits: 8 places for a divisible token, whole otherwise. */
+function rawOf(text, t) {
+  if (!t || t.divisible) return satsOf(text);
+  return /^\d+$/.test(String(text).trim()) ? Number(String(text).trim()) : null;
+}
+
+const chains = () => (said.chains || []).filter((c) => c.address && !HIDDEN.includes(c.network));
+const chainNow = () => chains().find((c) => c.network === net) || chains()[0] || null;
+const mine = (address) => (said.chains || []).some((c) => c.address && c.address === address);
+
+/* --- DigiDollar, a coin of its own (2026-11-05: "add the digi dollar to the main app ... it should be its own
+ * wallet coin option", "just like any other coin or chain is added or borrowed") ---------------------------------------
+ * A tile right after DigiByte's in the coin picker, on every DigiByte chain this arcade gives its accounts, run here or
+ * borrowed (app.py _digidollar_nets). Shown as an `asset` on the DigiByte chain, as a token is: the balance and the
+ * DigiDollar address are /account/digidollar (the arcade's own index, arcade/digidollar.py), Receive shows that address
+ * (DD... on mainnet, TD... on the test chain), and Send is /account/digidollar/send, which this wallet reads from the
+ * transaction's own bytes (coins.verifyOffer: each DigiDollar output said in dollars) before it signs. Fees are DGB. */
+const DD_NETS = {{ (dd_nets or [])|tojson }};
+const DDNET = `arcade.wallet.dd.${ME}`;
+const DD_ICON = {dgb: "/coin-dd.png", dgbtest: "/coin-ddtest.png"};
+const ddCoin = (c) => ({network: c.network, dd: true, icon: DD_ICON[c.network], letter: "D",
+                        coin: c.mainnet ? "DD" : "DD TEST", label: c.mainnet ? "DigiDollar" : "DigiDollar testnet"});
+const ddAsset = (c) => ({dd: true, network: c.network, name: c.mainnet ? "DD" : "DD TEST", balance: null, address: "",
+                         problem: ""});
+const dollars = (cents) => "$" + (Number(cents || 0) / 100).toLocaleString(undefined,
+  {minimumFractionDigits: 2, maximumFractionDigits: 2});
+/** Cents from what was typed, by the digits: dollars and up to two places of cents; null otherwise. */
+function centsOf(text) {
+  const m = /^(\d*)(?:\.(\d{0,2}))?$/.exec(String(text || "").trim().replace(/^\$/, ""));
+  if (!m || (!m[1] && !m[2])) return null;
+  return Number(m[1] || "0") * 100 + Number((m[2] || "").padEnd(2, "0"));
+}
+const DD_ADDRESSY = /^(?:DD|TD)[1-9A-HJ-NP-Za-km-z]{40,60}$/;
+//: The most a DigiDollar send's network fee may be, in DGB satoshis (ddtx.MAX_FEE, 0.5 DGB).
+const DD_MAX_FEE = 50000000;
+/** This wallet's public key on a DigiByte chain, as hex: the arcade checks it is the account's, and names its coins. */
+async function ddKey(network) {
+  if (!keys) keys = await wallet.opened(TAGCHAIN);
+  if (!keys) throw new Error("Unlock your wallet to see your DigiDollars.");
+  return Array.from(wallet.keysOn(keys, network).pubkey, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function ddAsk(url, body) {
+  const r = await fetch(url, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}
+                                  : {cache: "no-store"});
+  let j = {};
+  try { j = await r.json(); } catch (e) { /* said below */ }
+  if (!r.ok) throw new Error(j.detail || "The arcade did not answer.");
+  return j;
+}
+/** The DigiDollars this account holds on the card's chain, and its DigiDollar address. */
+async function ddLoad() {
+  const a = asset;
+  if (!a || !a.dd) return;
+  try {
+    const got = await ddAsk(`/account/digidollar?chain=${encodeURIComponent(a.network)}&pubkey=${await ddKey(a.network)}`);
+    a.balance = Number(got.cents || 0); a.address = got.address || ""; a.problem = "";
+  } catch (e) { a.problem = String(e.message || e); }
+  if (asset === a) drawHead();
+}
+
+/* The card's address type (2026-10-20): wallet.ADDRESS_KINDS lists a
+ * chain's kinds; the first is its ordinary address, the one everything else on
+ * this page uses. Another kind changes the card's address, balance, Receive and
+ * coin Send. Tokens and NFTs stay on the ordinary address. */
+const kinds = (c) => (!NODE_SIDE && c ? wallet.addressKinds(c.network) : []);
+/* The pick is kept in this browser under ArcadeCore's own name for it (lite_kind_<account>_<network>, _wallet.html),
+ * and the kind's address as last seen under that name too, so both looks show the same address type (2026-11-08,
+ * SadFrog: "it should all be the same thing", "chose the lites version of things"). */
+const KIND_WHO = (typeof ARCADE_ME === "string" && ARCADE_ME) || "visitor";
+const kindKey = (c) => `lite_kind_${KIND_WHO}_${c.network}`;
+function kindPicked(c) { try { return localStorage.getItem(kindKey(c)) || ""; } catch (e) { return ""; } }
+function kindPick(c, id) { try { localStorage.setItem(kindKey(c), id); } catch (e) {} }
+let kindSeen = {};                     // "<network>:<kind>" -> {address, balance, at}
+function kindNow() {
+  const c = chainNow(), ks = kinds(c);
+  if (asset || ks.length < 2 || pickedNow()) return null;
+  const k = ks.find((x) => x.id === (kindPicked(c) || ks[0].id));
+  return k && k !== ks[0] ? k : null;
+}
+const kindSpot = (c, k) => `${kindKey(c)}_${k.id}`;
+/** That kind's address: derived when the wallet is open, else as last seen in this browser.
+ *  `pubkey` (hex) only when derived: a P2SH address is registered with it, the first time. */
+async function kindAddress(c, k) {
+  const open = keys || await wallet.opened(c.network).catch(() => null);
+  if (open && open.seed) {
+    const mine = wallet.keysOn(await wallet.asKind(open, c.network, k.id), c.network);
+    try { localStorage.setItem(kindSpot(c, k), mine.address); } catch (e) {}
+    // its key signs it over to this account, which a first registration needs (2026-11-09, security review)
+    return {address: mine.address, pubkey: [...mine.pubkey].map((b) => b.toString(16).padStart(2, "0")).join(""),
+            signature: await wallet.claimProof(open, c.network, mine)};
+  }
+  let seen = "";
+  try { seen = localStorage.getItem(kindSpot(c, k)) || ""; } catch (e) {}
+  return {address: seen, pubkey: "", signature: ""};
+}
+async function loadKind(c, k) {
+  const spot = `${c.network}:${k.id}`;
+  const seen = kindSeen[spot] || (kindSeen[spot] = {address: "", balance: null, at: 0});
+  if (Date.now() - seen.at < 15000) return;
+  seen.at = Date.now();
+  const derived = await kindAddress(c, k);
+  seen.address = derived.address;
+  if (!seen.address) { drawHead(); return; }
+  try {
+    // the node watches it once told (one address of each kind per account and chain)
+    await fetch("/account/segwit/register", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({address: seen.address, chain: c.network,
+                            ...(derived.pubkey ? {pubkey: derived.pubkey, address_signature: derived.signature} : {})})});
+    const r = await fetch(`/account/segwit/balance?network=${encodeURIComponent(c.network)}`
+                          + `&address=${encodeURIComponent(seen.address)}`, {cache: "no-store"});
+    const b = await r.json();
+    if (r.ok) seen.balance = Number(b.balance || 0);
+  } catch (e) { /* the balance stays unknown */ }
+  if (chainNow() === c && kindNow() === k) drawHead();
+}
+const kindHere = () => { const c = chainNow(), k = kindNow(); return k && c ? (kindSeen[`${c.network}:${k.id}`] || {}) : null; };
+
+/* --- several wallets on each coin (plan item 18, 2026-10-20) -------
+ *
+ * "We should be able to import any with private key or 12 word seed phrase,
+ * even if that wallet has not been used in Dogecoin arcade." The picker lists
+ * the account's own wallet (its twelve words), then the wallets it imported,
+ * by name, never by address; "+ Import a wallet" is last. The keys and phrases
+ * are in the account's second sealed record (wallet.js importWallet), open in
+ * this tab while the wallet is; the node knows only the addresses. */
+const PICK = `arcade.wallet.pick.${ME}`;
+let imp = {node: null, at: 0, fresh: {}, kicked: new Set()};
+const acct = () => String((keys && keys.pubkey) || said.pubkey || "").toLowerCase();
+const KIND_SAYS = {phrase: "Imported from a seed phrase", wif: "Imported from a private key"};
+
+function importedHere(c) {
+  if (NODE_SIDE || !c) return [];
+  const open = wallet.importsOpen(acct());
+  const status = ((imp.node && imp.node.chains) || {})[c.network] || [];
+  return ((open && open.wallets) || []).filter((w) => w.chain === c.network)
+    .map((w) => ({...w, status: status.find((one) => one.address === w.address) || null}));
+}
+function mainName(c) { return (c && ((imp.node && imp.node.names) || {})[c.network]) || ""; }
+function pickedNow() {
+  const c = chainNow();
+  if (NODE_SIDE || !c) return null;
+  const id = (kept(PICK, {}) || {})[c.network];
+  if (!id || id === "main") return null;
+  return importedHere(c).find((w) => w.id === id) || null;
+}
+function pickWallet(id) {
+  const c = chainNow();
+  if (!c) return;
+  const all = kept(PICK, {}) || {};
+  all[c.network] = id;
+  keep(PICK, all);
+  asset = null;
+  // Its coins are read now, when it is opened (lazy wallets, 2026-11-05).
+  const w = id && id !== "main" ? importedHere(c).find((one) => one.id === id) : null;
+  if (w && (!w.status || w.status.lazy)) loadImports(true).then(() => drawAll()).catch(() => {});
+}
+/** Every name on this chain but `except`'s: for the lowest free "Wallet N". */
+function namesOn(c, except = null) {
+  const out = importedHere(c).filter((w) => w.id !== except).map((w) => w.name);
+  if (except !== "main" && mainName(c)) out.push(mainName(c));
+  return out;
+}
+
+async function loadImports(force = false) {
+  if (NODE_SIDE || !$("wpicker")) return;
+  if (!force && imp.node && Date.now() - imp.at < 15000) return;
+  imp.at = Date.now();
+  // Lazy wallets (2026-11-05: "only when each wallet is open"): coins are read for the imported wallet picked
+  // on this chain, if one is; the others keep the balance this page last saw for them (imp.seen) or show "—".
+  const c0 = chainNow();
+  const pickId = c0 ? (kept(PICK, {}) || {})[c0.network] : null;
+  const openRec = wallet.importsOpen(acct());
+  const pickW = pickId && pickId !== "main" ? ((openRec && openRec.wallets) || []).find((w) => w.id === pickId) : null;
+  try {
+    imp.node = await wallet.importedOnNode({open: pickW ? {chain: c0.network, address: pickW.address} : {}});
+  } catch (e) { return; }
+  imp.seen = imp.seen || {};
+  for (const [net, rows] of Object.entries(imp.node.chains || {})) {
+    for (const row of rows) {
+      const k = `${net}:${row.address}`;
+      if (!row.lazy) imp.seen[k] = row;
+      else if (imp.seen[k]) Object.assign(row, {...imp.seen[k], ...row, lazy: true,
+        spendable: imp.seen[k].spendable, inscribed: imp.seen[k].inscribed, inscribed_n: imp.seen[k].inscribed_n,
+        unchecked: imp.seen[k].unchecked, unchecked_n: imp.seen[k].unchecked_n, since: imp.seen[k].since});
+    }
+  }
+  const c = chainNow();
+  // The account's own wallet, unnamed, takes the lowest free "Wallet N" and keeps it until it is renamed.
+  if (c && !mainName(c)) {
+    const n = wallet.nextWalletName(namesOn(c, "main"));
+    imp.node.names = {...(imp.node.names || {}), [c.network]: n};
+    wallet.nameMainWallet(c.network, n).catch(() => {});
+  }
+  // An address registered here whose wallet is not in the sealed record (the tab closed between the two steps of an
+  // import) has no key anywhere here: taken off again, once the record is open and the address is ten minutes old.
+  const open = wallet.importsOpen(acct());
+  // Only against the record as the node has it now: a copy another device has since changed proves nothing.
+  if (c && open && !open.stale && !open.reseal && Number(open.updated || 0) === Number(imp.node.updated || 0)) {
+    const have = new Set((open.wallets || []).filter((w) => w.chain === c.network).map((w) => w.address));
+    for (const one of (imp.node.chains || {})[c.network] || []) {
+      if (!have.has(one.address) && one.registered && Date.now() / 1000 - one.registered > 600
+          && !imp.kicked.has("forget:" + one.address)) {
+        imp.kicked.add("forget:" + one.address);
+        fetch("/account/imported/forget", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({chain: c.network, address: one.address})}).catch(() => {});
+      }
+    }
+  }
+  // The record came from another arcade the account uses (2026-10-21: "all of your wallet balances persist
+  // over all arcades that you sign into"): every wallet in it that this arcade is not watching yet is registered
+  // here, by its own key, with a proof that lets this arcade ask the others for its coins. Quietly, once a page.
+  if (open && !open.stale && !imp.syncing && !imp.synced && imp.node.signed
+      && Number(open.updated || 0) === Number(imp.node.updated || 0)) {
+    imp.syncing = true;
+    wallet.syncImported(acct(), imp.node, () => {
+      const st = $("wstate");
+      if (st && st.hidden) {
+        st.className = "wl-wstate wait"; st.textContent = "Bringing your imported wallets over…"; st.hidden = false;
+        imp.syncNote = true;
+      }
+    }).then((n) => {
+      imp.synced = true;
+      if (imp.syncNote) { $("wstate").hidden = true; imp.syncNote = false; }
+      if (n) loadImports(true).then(() => drawHead()).catch(() => {});
+    }).catch(() => {}).finally(() => { imp.syncing = false; });
+  }
+  // A read-back cut short (a restart) starts again, once per page.
+  for (const w of importedHere(c)) {
+    if (w.status && w.status.state === "stopped" && !imp.kicked.has(w.address)) {
+      imp.kicked.add(w.address);
+      fetch("/account/imported/rescan", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({chain: c.network, address: w.address})})
+        .then(() => loadImports(true)).then(() => drawHead()).catch(() => {});
+    }
+  }
+}
+
+function stateTag(w) {
+  const st = w.status && w.status.state;
+  return st === "rescan" ? "rescanning" : st === "none" ? "waiting for a Core" : st === "stopped" ? "starting" : "";
+}
+
+function drawPicker() {
+  const box = $("wpicker");
+  if (!box) return;
+  const c = chainNow();
+  box.hidden = NODE_SIDE || !c || !imp.node;
+  $("wtools").hidden = box.hidden;
+  $("wstate").hidden = true;
+  if (box.hidden) return;
+  const w = pickedNow();
+  // Labelled with its name and its protocol (2026-10-22).
+  $("wpickname").textContent = w ? `${w.name} · ${protoLabel(c, w.addr_kind)}`
+    : `${mainName(c) || "Your wallet"} · ${(kindNow() || mainKinds(c)[0]).label}`;
+  $("wremove").hidden = !w;
+  // Not redrawn under a finger: an open list stays as it was until it closes (it is drawn afresh on opening).
+  if ($("wmenu").hidden) drawMenu();
+  drawWalletState(w);
+}
+
+/** A chain's address types for this account's own wallet: its kinds, or the one ordinary (Legacy) address. */
+const mainKinds = (c) => (kinds(c).length ? kinds(c) : [{id: "legacy", label: "Legacy"}]);
+/** A protocol's name by its kind id ("legacy" where the chain has no kinds). */
+const protoLabel = (c, id) => ((kinds(c).find((x) => x.id === (id || "legacy"))) || {label: "Legacy"}).label;
+/** A wallet's line in the drop-down: its name, then its protocol. */
+function walletLabel(name, proto) {
+  const who = el("span", "who", name);
+  who.append(el("span", "wl-proto", ` · ${proto}`));
+  return who;
+}
+
+function drawMenu() {
+  const c = chainNow(), w = pickedNow();
+  if (!c || !imp.node) return;
+  const menu = $("wmenu");
+  menu.replaceChildren();
+  const option = (label, right, on, act, cls = "") => {
+    const o = el("button", "wl-opt" + (cls ? " " + cls : "")); o.type = "button";
+    o.setAttribute("role", "option"); o.setAttribute("aria-selected", String(!!on));
+    o.append(label);
+    if (right != null) o.append(el("span", "bal", right));
+    o.onclick = () => { menu.hidden = true; $("wpick").setAttribute("aria-expanded", "false"); act(); };
+    menu.append(o);
+  };
+  // This account's own wallet once per address type, each its own entry: name and protocol, and its balance.
+  const kNow = kindNow(), own = mainKinds(c);
+  for (const k of own) {
+    const first = k === own[0];
+    const seen = first ? null : kindSeen[`${c.network}:${k.id}`];
+    const bal = first ? `${coinsOf(c.spendable ?? c.balance)} ${COIN()}`
+      : seen && seen.balance != null ? `${coinsOf(seen.balance)} ${COIN()}` : "—";
+    option(walletLabel(mainName(c) || "Your wallet", k.label), bal, !w && (first ? !kNow : !!kNow && kNow.id === k.id),
+           () => { pickWallet("main"); kindPick(c, k.id); drawAll(); });
+    if (!first && (!seen || seen.balance == null)) loadKind(c, k).catch(() => {});
+  }
+  for (const one of importedHere(c)) {
+    const who = walletLabel(one.name, protoLabel(c, one.addr_kind));
+    const tag = stateTag(one);
+    if (tag) who.append(el("span", "wl-tag", tag));
+    option(who, one.status && one.status.state === "ready" && one.status.spendable != null
+             ? `${coinsOf(one.status.spendable)} ${COIN()}` : "—",
+           w && w.id === one.id, () => { pickWallet(one.id); drawAll(); });
+  }
+  const open = wallet.importsOpen(acct());
+  // A newer version than the one open in this tab (another arcade's, or another device's): opened again with the
+  // password, so its wallets show here too.
+  const behind = open && !open.stale && Number(open.updated || 0) < Number(imp.node.updated || 0);
+  if (imp.node.blob && (!(open && !open.stale) || behind)) {
+    option(el("span", "who", open && open.stale ? "Open your imported wallets (earlier password)…"
+                                                 : "Open your imported wallets…"), null, false, openUnlockImports);
+  }
+  // No imports on PEP TEST (2026-10-21); the node refuses one there too.
+  // Greyed where a new import cannot be made (import_closed: only NO_IMPORTS since 2026-11-03, when the two-node rule went).
+  const closed = ((imp.node || {}).import_closed || {})[c.network];
+  if (chainNow() !== "test") {
+    if (closed) {
+      const o = el("button", "wl-opt import"); o.type = "button"; o.disabled = true; o.title = closed;
+      o.setAttribute("aria-disabled", "true"); o.style.opacity = ".5";
+      o.append(el("span", "", "+ Import a wallet"), el("span", "bal", "not available"));
+      menu.append(o, el("div", "wl-note", closed));
+    } else option(el("span", "", "+ Import a wallet"), null, false, openImport, "import");
+  }
+}
+
+/** Where the picked wallet's read-back stands, or the import that just happened. */
+function drawWalletState(w) {
+  const said1 = w && (imp.fresh[w.address] || w.status);
+  if (said1 && said1.says && (said1.state !== "ready" || imp.fresh[w.address])) {
+    const st = $("wstate");
+    st.className = "wl-wstate " + (said1.state === "ready" ? "good" : said1.state === "none" ? "none" : "wait");
+    const head = said1.state === "none" ? "No rescan yet. " : said1.state !== "ready" ? "A rescan is taking place. "
+      : /^Imported\b/.test(said1.says) ? "" : "Imported. ";
+    // The Core's own share done, when its log can be read (2026-10-22: "include rescan %").
+    const bar = typeof said1.pct === "number" && said1.state === "rescan" ? el("progress", "wl-rescanbar") : null;
+    if (bar) { bar.max = 100; bar.value = said1.pct; bar.title = said1.pct.toFixed(1) + "%"; }
+    st.replaceChildren(...(head ? [el("strong", "", head)] : []), said1.says, ...(bar ? [bar] : []));
+    st.hidden = false;
+  }
+}
+
+if (!NODE_SIDE && $("wpick")) {
+  $("wpick").onclick = () => {
+    const menu = $("wmenu");
+    if (menu.hidden) drawMenu();
+    menu.hidden = !menu.hidden;
+    $("wpick").setAttribute("aria-expanded", String(!menu.hidden));
+  };
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest || !e.target.closest(".wl-picker")) { $("wmenu").hidden = true; $("wpick").setAttribute("aria-expanded", "false"); }
+  });
+  $("wrename").onclick = () => openRename();
+  $("wremove").onclick = () => removePicked();
+}
+
+/** A password box, shown when this page does not hold the imported wallets' key yet. */
+function passwordField(body, why) {
+  const label = el("label", "l", "Your password"); label.htmlFor = "imp-pass";
+  const box = el("input", "wide"); box.id = "imp-pass"; box.type = "password"; box.autocomplete = "current-password";
+  const note = el("div", "wl-note", why);
+  const holder = el("div"); holder.append(label, box, note);
+  holder.hidden = wallet.importsKeyHere(acct());
+  body.append(holder);
+  return {holder, box, show() { holder.hidden = false; box.focus(); }};
+}
+
+async function openedKeys() {
+  if (!keys) keys = await arcadeKeys(TAGCHAIN);
+  return keys;
+}
+
+async function openImport() {
+  const c = chainNow();
+  if (!c) return;
+  // A rescan running on this coin: said before anything is typed (2026-10-21), and the import still goes
+  // ahead -- it joins the next rescan, back to back with this one.
+  let waitNote = "";
+  try {
+    const r = await fetch("/account/imported/busy?chain=" + encodeURIComponent(c.network), {cache: "no-store"});
+    const said = r.ok ? await r.json() : null;
+    if (said && said.busy) waitNote = said.says;
+  } catch (err) { /* not known: the import's own answer says where it stands */ }
+  const s = sheet();
+  const body = s.set("Import a wallet");
+  if (waitNote) { const note = el("div", "wl-wstate wait", waitNote); note.id = "imp-wait"; body.append(note); }
+  body.append(el("p", "wl-note", `Any ${coinOf(c)} wallet, even one never used on an arcade. The key stays in this `
+    + "browser, sealed with your password; the arcade only learns the address, so it can watch it."));
+  const seg = el("div", "wl-segk"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "What you have");
+  const byPhrase = el("button", "", "12-word phrase"), byKey = el("button", "", "Private key");
+  byPhrase.type = byKey.type = "button"; byPhrase.id = "imp-by-phrase"; byKey.id = "imp-by-key";
+  seg.append(byPhrase, byKey);
+  const phrase = el("textarea"); phrase.id = "imp-phrase"; phrase.spellcheck = false; phrase.autocomplete = "off";
+  phrase.setAttribute("autocapitalize", "off"); phrase.placeholder = "twelve words separated by spaces (24 work too)";
+  const key = el("input", "wide"); key.id = "imp-key"; key.spellcheck = false; key.autocomplete = "off";
+  key.setAttribute("autocapitalize", "off"); key.placeholder = "private key (WIF)";
+  let kind = "phrase";
+  const show = (k) => {
+    kind = k;
+    byPhrase.setAttribute("aria-pressed", String(k === "phrase")); byKey.setAttribute("aria-pressed", String(k === "wif"));
+    phrase.hidden = k !== "phrase"; key.hidden = k !== "wif";
+    (k === "phrase" ? phrase : key).focus();
+  };
+  byPhrase.onclick = () => show("phrase"); byKey.onclick = () => show("wif");
+  body.append(seg, phrase, key);
+  // A chain with more than one address kind (L test): the same kinds the account's own words offer.
+  const ks = kinds(c);
+  let kindPick = null;
+  if (ks.length > 1) {
+    const lk = el("label", "l", "Address type"); lk.htmlFor = "imp-kind";
+    kindPick = el("select", "wide"); kindPick.id = "imp-kind";
+    kindPick.append(...ks.map((one) => { const o = el("option", "", one.label); o.value = one.id; return o; }));
+    body.append(lk, kindPick);
+  }
+  const ln = el("label", "l", "Name (optional)"); ln.htmlFor = "imp-name";
+  const name = el("input", "wide"); name.id = "imp-name"; name.maxLength = 40; name.autocomplete = "off";
+  name.placeholder = "leave empty for the next Wallet number";
+  body.append(ln, name);
+  const pass = passwordField(body, "The same password your wallet opens with: the key is sealed under it.");
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px"; problem.id = "imp-problem";
+  const busy = el("div", "wl-wstate wait"); busy.hidden = true; busy.id = "imp-busy";
+  const go = el("button", "wl-go", "Import"); go.type = "button"; go.id = "imp-go";
+  body.append(problem, busy, go);
+  show("phrase");
+  go.onclick = async () => {
+    problem.hidden = true; busy.hidden = true;
+    go.disabled = true; go.textContent = "Importing…";
+    try {
+      await openedKeys();
+      const got = await wallet.importWallet(c, {
+        kind, secret: kind === "phrase" ? phrase.value : key.value, name: name.value,
+        addrKind: kindPick ? kindPick.value : "legacy", otherNames: namesOn(c), password: pass.box.value});
+      pass.box.value = "";
+      imp.fresh[got.wallet.address] = {state: got.state, says: got.says};
+      pickWallet(got.wallet.id);
+      s.close();
+      await loadImports(true);
+      drawAll();
+      toast(`${got.wallet.name} imported`);
+    } catch (e) {
+      if (e.needsPassword) pass.show();
+      if (e.busy) { busy.textContent = String(e.message || e); busy.hidden = false; }
+      else { problem.textContent = String(e.message || e); problem.hidden = false; }
+    } finally {
+      go.disabled = false; go.textContent = "Import";
+    }
+  };
+}
+
+function openUnlockImports() {
+  const c = chainNow();
+  const open = wallet.importsOpen(acct());
+  const stale = !!(open && open.stale);
+  const s = sheet();
+  const body = s.set("Open your imported wallets");
+  body.append(el("p", "wl-note", stale
+    ? "They were sealed under the password you had before you changed it. Type that earlier password; they are "
+      + "sealed under your new one the next time you change them."
+    : "They are sealed with your password, like your wallet."));
+  const box = el("input", "wide"); box.type = "password"; box.id = "imp-unlock"; box.autocomplete = "current-password";
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
+  const go = el("button", "wl-go", "Open"); go.type = "button";
+  body.append(box, problem, go);
+  box.focus();
+  go.onclick = async () => {
+    problem.hidden = true; go.disabled = true;
+    try {
+      const held = await openedKeys();
+      if (stale) await wallet.openStaleImports(held, box.value);
+      else await wallet.openImports(held, box.value);
+      box.value = "";
+      s.close();
+      await loadImports(true);
+      drawAll();
+    } catch (e) {
+      problem.textContent = String(e.message || e); problem.hidden = false;
+      if (e.stale) { s.close(); drawAll(); }
+    } finally { go.disabled = false; }
+  };
+}
+
+function openRename() {
+  const c = chainNow();
+  if (!c) return;
+  const w = pickedNow();
+  const s = sheet();
+  const body = s.set("Rename this wallet");
+  body.append(el("p", "wl-note", "Only you see the name. The list shows it instead of the address. "
+    + "Left empty, it takes the lowest free Wallet number."));
+  const name = el("input", "wide"); name.id = "rename-to"; name.maxLength = 40; name.autocomplete = "off";
+  name.value = w ? w.name : mainName(c);
+  body.append(name);
+  const pass = w ? passwordField(body, "Imported wallets' names are sealed with them, under your password.") : null;
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
+  const go = el("button", "wl-go", "Save"); go.type = "button"; go.id = "rename-go";
+  body.append(problem, go);
+  name.focus();
+  go.onclick = async () => {
+    problem.hidden = true; go.disabled = true;
+    try {
+      if (w) {
+        await openedKeys();
+        // The other imported names are read from the sealed record itself; the main wallet's is told.
+        await wallet.renameImported(c, w.id, name.value, {otherNames: mainName(c) ? [mainName(c)] : [],
+                                                          password: pass.box.value});
+        pass.box.value = "";
+      } else {
+        const typed = name.value.trim() || wallet.nextWalletName(namesOn(c, "main"));
+        const saved = await wallet.nameMainWallet(c.network, typed);
+        imp.node.names = {...(imp.node.names || {}), [c.network]: saved};
+      }
+      s.close();
+      await loadImports(true);
+      drawAll();
+    } catch (e) {
+      if (e.needsPassword && pass) pass.show();
+      problem.textContent = String(e.message || e); problem.hidden = false;
+    } finally { go.disabled = false; }
+  };
+}
+
+async function removePicked() {
+  const c = chainNow(), w = pickedNow();
+  if (!c || !w) return;
+  const ok = await arcadeAsk(`Remove ${w.name} from your list?`,
+    "Its coins are not touched: they stay where they are on the chain, and its key or words still open it in any "
+    + "wallet, or here again if you import it once more. This arcade stops showing it.", "Remove");
+  if (!ok) return;
+  const s = sheet();
+  const body = s.set(`Remove ${w.name}`);
+  const pass = passwordField(body, "Your imported wallets are sealed under your password; removing one seals the rest again.");
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
+  const go = el("button", "wl-go", "Remove"); go.type = "button"; go.id = "remove-go";
+  body.append(problem, go);
+  const run = async () => {
+    problem.hidden = true; go.disabled = true;
+    try {
+      await openedKeys();
+      await wallet.removeImported(c, w.id, {password: pass.box.value});
+      pass.box.value = "";
+      pickWallet("main");
+      s.close();
+      await loadImports(true);
+      drawAll();
+      toast(`${w.name} removed from your list`);
+    } catch (e) {
+      if (e.needsPassword) pass.show();
+      problem.textContent = String(e.message || e); problem.hidden = false;
+    } finally { go.disabled = false; }
+  };
+  go.onclick = run;
+  if (wallet.importsKeyHere(acct())) run();
+}
+// While an imported wallet's coins are being read back, its state is asked again every 30 seconds.
+setInterval(() => {
+  const c = chainNow();
+  if (!document.hidden && importedHere(c).some((w) => w.status && w.status.state !== "ready")) {
+    loadImports(true).then(() => drawHead()).catch(() => {});
+  }
+}, 30000);
+
+/* --- the coin picker (2026-10-27) ----------------------------------------
+ * One button showing the coin now, and a menu with every coin as a tile: its icon (or letter), its ticker and
+ * its name. A coin still syncing is a greyed tile that cannot be picked. */
+const coinMark = (one) => {
+  const icon = one.icon || COIN_ICONS[one.network];
+  if (!icon) return el("span", "wl-coinletter", one.letter || coinOf(one).charAt(0));
+  const img = el("img", "neticon"); img.src = icon; img.alt = ""; return img;
+};
+const coinTile = (one, cls) => {
+  const t = el("button", "wl-cointile" + (cls ? " " + cls : ""));
+  t.type = "button"; t.setAttribute("role", "option"); t.dataset.net = one.network || "";
+  if (one.dd) t.dataset.dd = "1";
+  t.append(coinMark(one), el("span", "tk", coinOf(one)), el("span", "lb", one.label || one.title || one.network));
+  return t;
+};
+const closeCoins = () => { $("nets").hidden = true; $("coinpick").setAttribute("aria-expanded", "false"); };
+function drawCoins(c) {
+  const box = $("coinpicker"), menu = $("nets"), face = $("coinface");
+  box.hidden = chains().length < 2 && !WAITING.length;
+  face.replaceChildren();
+  const ddNow = !!(asset && asset.dd);
+  const shown = c && ddNow ? ddCoin(c) : c;
+  if (c) face.append(coinMark(shown), el("span", "nm", `${coinOf(shown)} · ${shown.label || shown.network}`));
+  menu.replaceChildren();
+  for (const one of chains()) {
+    const t = coinTile(one);
+    t.setAttribute("aria-selected", String(!ddNow && one.network === (c && c.network)));
+    t.onclick = async () => {
+      closeCoins();
+      net = one.network; asset = null; keep(NET, net); keep(DDNET, "");
+      if (one.lazy) { drawAll(); await fillNow(); }   // the picked wallet's balance, read now (lazy wallets)
+      drawAll();
+    };
+    menu.append(t);
+    if (!NODE_SIDE && DD_NETS.includes(one.network)) {
+      const d = coinTile(ddCoin(one));
+      d.setAttribute("aria-selected", String(ddNow && one.network === (c && c.network)));
+      d.onclick = async () => {
+        closeCoins();
+        net = one.network; asset = ddAsset(one); keep(NET, net); keep(DDNET, net);
+        if (one.lazy) { drawAll(); await fillNow(); }
+        drawAll();
+        ddLoad();
+      };
+      menu.append(d);
+    }
+  }
+  for (const one of WAITING) {
+    const t = coinTile(one, "chain-off");
+    t.disabled = true; t.setAttribute("aria-disabled", "true");
+    t.title = `${one.label} opens when this node has synced it (${one.progress}% so far)`;
+    t.querySelector(".lb").textContent = `syncing ${one.progress}%`;
+    menu.append(t);
+  }
+}
+$("coinpick").onclick = (e) => {
+  e.stopPropagation();
+  const open = $("nets").hidden;
+  $("nets").hidden = !open; $("coinpick").setAttribute("aria-expanded", String(open));
+  if (open) { const on = $("nets").querySelector('[aria-selected="true"]'); if (on) on.focus(); }
+};
+document.addEventListener("click", (e) => { if (!e.target.closest || !e.target.closest(".wl-coin")) closeCoins(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("nets").hidden) { closeCoins(); $("coinpick").focus(); } });
+
+/* --- the balance card --------------------------------------------------- */
+
+function drawHead() {
+  const c = chainNow();
+  $("who").textContent = said.name ? "@" + said.name : "";
+  drawCoins(c);
+  if (!c) {
+    $("bal").textContent = "—";
+    $("sub").textContent = "This account has no address yet. It gets one the first time the wallet opens.";
+    return;
+  }
+  if (asset && asset.network !== c.network) asset = null;
+  const k = kindNow(), here = kindHere();
+  // The address type is picked in the Wallet drop-down now, each its own wallet (2026-10-22: "The three
+  // different types of wallets should each get their own wallet in the Wallet drop-down instead of a separate
+  // drop-down"): no second picker on the card.
+  const pick = $("addrkind");
+  pick.hidden = true;
+  UNIT = asset ? asset.name : coinOf(c);
+  const w = pickedNow();
+  if (w) pick.hidden = true;
+  $("bal").textContent = w ? (w.status && w.status.state === "ready" ? coinsOf(w.status.spendable) : "—")
+    : asset && asset.dd ? (asset.balance == null ? "—" : dollars(asset.balance))
+    : asset ? (asset.token20 ? units20(asset.balance, asset.decimals) : tokenAmt(asset.balance, asset))
+    : k ? (here.balance == null ? "—" : coinsOf(here.balance)) : coinsOf(c.spendable ?? c.balance);
+  // A token's name is a link to its own page, on its own chain (2026-10-15).
+  if (asset && (asset.token20 || asset.dd)) $("unit").textContent = UNIT;
+  else if (asset) {
+    const link = el("a", "wl-unitlink", UNIT);
+    link.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
+    link.style.cssText = "color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px";
+    $("unit").replaceChildren(link);
+  } else $("unit").textContent = UNIT;
+  const chip = $("netchip");
+  chip.textContent = asset && asset.dd ? (c.mainnet ? "real dollars" : "test dollars, no value")
+    : asset ? "token" : c.mainnet ? "real coins" : "test coins, no value";
+  chip.className = "wl-chip" + (c.mainnet ? " real" : "");
+  const sub = $("sub");
+  sub.replaceChildren();
+  const bits = [];
+  // Arriving: this node's own sends on their way (spendable now) and anybody's payment waiting in the pool (2026-10-17).
+  const arriving = Number(c.incoming || 0) + Number(c.arriving || 0);
+  if (arriving) bits.push(["in", `${coinsOf(arriving)} arriving`]);
+  if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
+  // Set aside for this account's offers and orders, on this arcade or another (2026-10-19): not leaving, not to spend.
+  if (c.held) bits.push(["out", `${coinsOf(c.held)} held for your offers`]);
+  // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
+  // On DigiByte a DigiAsset's coin is held the same way (2026-11-09, arcade/digiassets.py).
+  const inscWord = c.network === "doge" ? "Doginals" : c.network === "main" ? "Pepinals"
+    : c.network === "bel" ? "Bellinals" : c.network === "lky" ? "Luckinals" : c.network === "wjk" ? "Wojakinals" : c.network === "dgb" ? "DigiByte ordinals and DigiAssets" : c.network === "dgbtest" ? "DigiAssets" : c.network === "flop" ? "Flopinals" : "inscriptions";
+  // An imported wallet's own (2026-10-22): its number is what it can send; what is held is said beside it.
+  const held1 = w ? (w.status || {}) : c;
+  if (held1.inscribed) bits.push(["out", `${coinsOf(held1.inscribed)} held in ${inscWord}`]);
+  if (w && held1.unchecked) bits.push(["out", `${coinsOf(held1.unchecked)} in ${Number(held1.unchecked_n || 0).toLocaleString()} `
+    + `small coins protected until checked`]);
+  if (asset && asset.dd) {
+    sub.append(asset.problem ? `${asset.problem} `
+      : asset.balance == null ? "Reading your DigiDollars… "
+      : `DigiByte's stablecoin, one dollar each, on ${c.label}. Sends pay their network fee in ${COIN()}. `);
+    // Mint, vaults, redeem and the operator's mainnet switch: the DigiDollar module's page, the same forms as
+    // ArcadeCore's DigiDollar tab (2026-11-08: one wallet, whatever the look).
+    const more = el("a", "", "Mint, vaults and redeem →"); more.href = "/module/digidollar";
+    more.style.marginRight = "8px";
+    const back = el("button", "wl-backcoin", `Back to ${COIN()}`); back.type = "button";
+    back.onclick = () => { asset = null; keep(DDNET, ""); drawHead(); if (tab === "activity") loadActivity().catch(showError("panel-activity")); };
+    sub.append(more, back);
+    bits.length = 0;
+  } else if (asset && asset.token20) {
+    // A DRC-20 / PRC-20 token on the card (2026-10-22: "load it into the wallet balance display just like any
+    // of the Omni tokens"): what can be sent now, the rest already set aside on transfer notes said beside it.
+    sub.append(`${asset.word} on ${c.label.toLowerCase()}. The network fee is paid in ${COIN()}. `);
+    if (asset.noted && asset.noted !== "0") sub.append(`${units20(asset.noted, asset.decimals)} more on transfer notes. `);
+    const back = el("button", "wl-backcoin", `Back to ${COIN()}`); back.type = "button";
+    back.onclick = () => { asset = null; drawHead(); if (tab === "tokens") drawTokens(); };
+    sub.append(back);
+    bits.length = 0;
+  } else if (asset) {
+    const page = el("a", "", `Token #${asset.property_id}`);
+    page.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
+    sub.append(page, ` on ${c.label.toLowerCase()}. The network fee is paid in ${COIN()}. `);
+    const back = el("button", "wl-backcoin", `Back to ${COIN()}`); back.type = "button";
+    back.onclick = () => { asset = null; drawHead(); if (tab === "tokens") drawTokens(); };
+    sub.append(back);
+    // A managed token of yours: grant, revoke and hand over are one press away
+    // (2026-10-08: "if you have a managed token, then you should be able to click
+    // the manage token button right from your wallet").
+    if (asset.manage) {
+      const manage = el("a", "wl-backcoin", "Manage"); manage.href = `/tokens/${asset.property_id}`;
+      sub.append(" ", manage);
+    }
+    bits.length = 0;
+  } else if (!bits.length) sub.textContent = c.mainnet ? "Real coins: a send cannot be taken back."
+    : c.network === "test" ? "Pepecoin test coins pay message and game fees." : "Test coins, worth nothing.";
+  if (k) {
+    bits.length = 0;
+    sub.textContent = here.address ? `Your ${k.label} address (${k.path}), from the same twelve words.`
+      : `Unlock your wallet to see your ${k.label} address.`;
+    loadKind(c, k).catch(() => {});
+  }
+  if (w) {
+    const held = bits.filter(([, text]) => / held in |protected until checked/.test(text));
+    bits.length = 0;
+    bits.push(...held);
+    sub.textContent = (w.kind === "wif" ? "Imported from a private key." : "Imported from a seed phrase.")
+      + (held.length ? " " : "");
+  }
+  bits.forEach(([cls, text], i) => {
+    if (i) sub.append(" · ");
+    sub.append(el("span", cls, text));
+  });
+  drawPicker();
+  // An imported wallet is never shown by its address: it is under Receive (2026-10-20).
+  const shownAddr = w ? "" : asset && asset.dd ? asset.address : k ? here.address : c.address;
+  $("addrchip").hidden = !shownAddr;
+  $("addrchip").textContent = short(shownAddr || "");
+  // The chip copies too, so it says what Receive says of a Dogecoin/DigiByte legacy address (2026-11-09, security review).
+  const sameChip = asset && asset.dd || !wallet.sameAddressNote ? "" : wallet.sameAddressNote(c.network, shownAddr);
+  $("addrchip").onclick = async () => toast(await copyText(shownAddr)
+    ? (sameChip ? `Address copied. ${sameChip}` : "Address copied")
+    : "Copy blocked here: press Receive and copy it from there");
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem("arcade.wallet.backupx") === "yes"; } catch (e) {}
+  $("not-backed-up").hidden = dismissed || !chains().some((one) => one.backed_up === false);
+}
+$("backup-x").onclick = () => {
+  try { sessionStorage.setItem("arcade.wallet.backupx", "yes"); } catch (e) {}
+  $("not-backed-up").hidden = true;
+};
+
+/* --- tabs --------------------------------------------------------------- */
+
+function showTab(which) {
+  tab = which;
+  for (const name of ["activity", "tokens", "nfts"]) {
+    $("tab-" + name).setAttribute("aria-selected", String(name === which));
+    $("panel-" + name).hidden = name !== which;
+  }
+  try { sessionStorage.setItem("arcade.wallet.tab", which); } catch (e) {}
+  if (pickedNow() && which !== "activity") {
+    // Tokens and arcade NFTs are the account's own wallet's, for now; an imported wallet's Doginals and Pepinals are
+    // shown (2026-10-21: 1,500 of them in one).
+    $("panel-" + which).replaceChildren(el("div", "wl-empty",
+      "Tokens and arcade NFTs are shown for your arcade wallet. Choose it above to see them."));
+    if (which === "nfts") drawDoginals().catch((e) => { $("doginals").replaceChildren(el("div", "wl-empty", String(e.message || e))); });
+    else $("doginals").hidden = true;
+    // arcade-site 2026-11-11 (the operator: "on my imported wallets I don't see my token balances"): an imported Dogecoin or
+    // Pepecoin wallet's DRC-20 / PRC-20 balances on its Tokens tab, read from V1.0's token index for that address.
+    const c20 = chainNow();
+    if (which === "tokens" && c20 && (c20.network === "doge" || c20.network === "main")) {
+      const t20 = el("div", "wl-t20");
+      $("panel-tokens").replaceChildren(t20);
+      drawToken20(t20, c20).catch((e) => { t20.replaceChildren(el("div", "wl-empty", String(e.message || e))); });
+    }
+    return;
+  }
+  if (which === "activity") loadActivity().catch(showError("panel-activity"));
+  if (which === "tokens") drawTokens().catch(showError("panel-tokens"));
+  if (which === "nfts") drawNfts().catch(showError("panel-nfts"));
+  drawDoginals().catch((e) => { $("doginals").replaceChildren(el("div", "wl-empty", String(e.message || e))); });
+}
+for (const name of ["activity", "tokens", "nfts"]) $("tab-" + name).onclick = () => showTab(name);
+// A star pressed (here or on the Exchange, in another tab) moves the token up at once.
+let favsWere = null;
+if (window.arcadeFavs) window.arcadeFavs.onChange((set) => {
+  const now = JSON.stringify(set || []);
+  if (now === favsWere) return;
+  const first = favsWere === null; favsWere = now;
+  if (!first && tab === "tokens" && tokens) drawTokens().catch(showError("panel-tokens"));
+});
+// The list drawn before the stars were read is drawn again once they are.
+if (window.arcadeFavs) window.arcadeFavs.ready.then(() => { if (tab === "tokens" && tokens) drawTokens().catch(() => {}); });
+const showError = (id) => (e) => { $(id).replaceChildren(el("div", "wl-empty", String(e.message || e))); };
+
+/* --- activity ------------------------------------------------------------
+ *
+ * The chain's record (/account/activity, one row per transaction, read from
+ * the index as blocks arrive) under what this browser sent and no block has
+ * carried yet: those are pinned on top as "Waiting for a block", the way
+ * Xverse and Leather do it, and leave that list by themselves when their
+ * block lands -- with a toast, because that is the feedback a send owes.
+ */
+
+let act = {net: null, rows: [], since: null, tip: 0, more: false};
+
+async function loadActivity(older = false) {
+  const c = chainNow();
+  if (!c) { $("panel-activity").replaceChildren(el("div", "wl-empty", "No address yet, so nothing has happened.")); return; }
+  if (asset && asset.dd) return ddActivity(c);
+  const k = kindNow();
+  if (k) {
+    act = {net: null, rows: [], since: null, tip: 0, more: false};
+    $("panel-activity").replaceChildren(el("div", "wl-empty",
+      `The history of your ${k.label} address is not listed yet; its balance is above. `
+      + `Choose ${kinds(c)[0].label} for your ordinary address and its history.`));
+    return;
+  }
+  // An imported wallet's own history (plan item 18): the node answers only this account's own addresses.
+  const w = pickedNow(), addr = w ? w.address : "";
+  if (act.net !== c.network || (act.addr || "") !== addr) older = false;
+  const before = older && act.rows.length ? `&before=${act.rows[act.rows.length - 1].height}` : "";
+  const only = addr ? `&address=${encodeURIComponent(addr)}` : "";
+  const answer = await fetch(`${API}/activity?chain=${encodeURIComponent(c.network)}${before}${only}`, {cache: "no-store"});
+  const got = await answer.json();
+  if (!answer.ok) throw new Error(got.detail || "the node would not say");
+  if (!older) act = {net: c.network, addr, rows: [], since: null, tip: 0, more: false};
+  act.rows = act.rows.concat(got.rows || []);
+  act.since = got.since; act.tip = got.tip; act.more = !!got.more;
+  landed();
+  drawActivity();
+}
+
+/** DigiDollar's activity: the DigiDollars this account holds now, coin by coin, from the arcade's own index
+ * (/account/digidollar), as ArcadeCore's Transactions lists them (2026-11-08, SadFrog: "chose the lites version"). */
+async function ddActivity(c) {
+  const box = $("panel-activity");
+  act = {net: null, rows: [], since: null, tip: 0, more: false};
+  let got;
+  try { got = await ddAsk(`/account/digidollar?chain=${encodeURIComponent(c.network)}&pubkey=${await ddKey(c.network)}`); }
+  catch (e) { box.replaceChildren(el("div", "wl-empty", String(e.message || e))); return; }
+  if (!(asset && asset.dd)) return;
+  box.replaceChildren();
+  const coins = got.coins || [];
+  if (coins.length) box.append(el("div", "wl-day", "Held"));
+  for (const coin of coins) {
+    const b = el("button", "wl-row"); b.type = "button"; b.dataset.ddcoin = coin.txid;
+    const mid = el("span", "wl-mid");
+    mid.append(el("b", "", "DigiDollars held"), el("small", "", coin.height ? `block ${Number(coin.height).toLocaleString()}` : ""));
+    b.append(el("span", "wl-ic in", "$"), mid, el("span", "wl-amt in", dollars(coin.cents)));
+    b.onclick = async () => toast(await copyText(coin.txid) ? "Transaction ID copied" : coin.txid);
+    box.append(b);
+  }
+  if (!coins.length) box.append(el("div", "wl-empty", "No DigiDollars here yet."));
+  box.append(el("p", "wl-since", `${dollars(got.cents)} in all, at ${got.address || "your DigiDollar address"}.`
+    + ddHistory(got)));
+}
+
+/** What a DigiDollar history covers (2026-11-09, security review: "whole: false" alone read like missing coins):
+ * complete, or from which block on, and whether what came before is still being read (/account/digidollar). */
+function ddHistory(got) {
+  if (got.whole) return " History complete.";
+  const from = Number(got.from_block || Number(got.since || 0) + 1).toLocaleString();
+  if (got.earlier === "lender") return ` History from block ${from}; what came before is being read through the arcade this one borrows DigiByte from.`;
+  if (got.earlier) return ` History from block ${from}; what came before is still being read.`;
+  return ` History from block ${from} on; what this address got before then is not read on this arcade.`;
+}
+
+function waiting() {
+  const seen = new Set(act.rows.map((r) => r.txid));
+  const day = Date.now() - 2 * 86400e3;
+  return kept(SENT, []).filter((s) => s.network === act.net && (s.from || "") === (act.addr || "")
+                                && !s.landed && !seen.has(s.txid) && s.at > day);
+}
+
+function landed() {
+  const seen = new Set(act.rows.map((r) => r.txid));
+  const sent = kept(SENT, []);
+  let changed = false;
+  for (const s of sent) {
+    if (s.network === act.net && !s.landed && seen.has(s.txid)) {
+      s.landed = true; changed = true;
+      toast(`Your send of ${s.what || coinsOf(s.amount) + " " + COIN()} to ${s.tag ? "@" + s.tag : short(s.to)} is in a block.`);
+    }
+  }
+  if (changed) keep(SENT, sent);
+}
+
+function rowTitle(r) {
+  const record = kept(SENT, []).find((s) => s.txid === r.txid);
+  if (r.net >= 0) return r.spent ? "Moved within your wallet" : "Received";
+  const tag = r.other_tag || (record && record.tag);
+  if (tag) return `Sent to @${tag}`;
+  if (r.other && mine(r.other)) return "Sent to yourself";
+  if (r.other) return `Sent to ${short(r.other)}`;
+  return "A message, post or inscription";
+}
+
+function when(seconds) {
+  if (!seconds) return "";
+  return new Date(seconds * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+}
+function dayOf(seconds) {
+  if (!seconds) return "Earlier";
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const at = seconds * 1000;
+  if (at >= today) return "Today";
+  if (at >= today - 86400e3) return "Yesterday";
+  return new Date(at).toLocaleDateString([], {month: "short", day: "numeric", year:
+    new Date(at).getFullYear() === today.getFullYear() ? undefined : "numeric"});
+}
+
+function amountCell(net) {
+  const cell = el("span", "wl-amt" + (net > 0 ? " in" : ""), (net > 0 ? "+" : "−") + coinsOf(Math.abs(net)));
+  cell.append(el("small", "", COIN()));
+  return cell;
+}
+
+function drawActivity() {
+  const box = $("panel-activity");
+  box.replaceChildren();
+  const pending = waiting();
+  if (pending.length) box.append(el("div", "wl-day", "Waiting for a block"));
+  for (const s of pending.sort((a, b) => b.at - a.at)) {
+    const b = el("button", "wl-row"); b.type = "button";
+    const mid = el("span", "wl-mid");
+    mid.append(el("b", "", s.tag ? `Sent to @${s.tag}` : `Sent to ${short(s.to)}`),
+               el("small", "", new Date(s.at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})));
+    const pill = el("span", "wl-pill wait"); pill.append(el("span", "wl-spin"), "Pending");
+    mid.append(el("br"), pill);
+    b.append(el("span", "wl-ic", "↑"), mid, s.what ? el("span", "wl-amt", "−" + s.what) : amountCell(-(s.amount + (s.fee || 0))));
+    b.onclick = () => openPending(s);
+    box.append(b);
+  }
+  let last = "";
+  for (const r of act.rows) {
+    const day = dayOf(r.time);
+    if (day !== last) { box.append(el("div", "wl-day", day)); last = day; }
+    const b = el("button", "wl-row"); b.type = "button";
+    const mid = el("span", "wl-mid");
+    mid.append(el("b", "", rowTitle(r)), el("small", "", when(r.time)));
+    if (r.confirmations < 6) {
+      mid.append(el("br"), el("span", "wl-pill wait", `${r.confirmations} of 6 confirmations`));
+    }
+    b.append(el("span", "wl-ic" + (r.net > 0 ? " in" : ""), r.net > 0 ? "↓" : r.other ? "↑" : "★"),
+             mid, amountCell(r.net));
+    b.onclick = () => openRow(r);
+    box.append(b);
+  }
+  if (!pending.length && !act.rows.length) {
+    box.append(el("div", "wl-empty", "Nothing yet. Coins you send and receive show up here."));
+  }
+  if (act.more) {
+    const more = el("button", "ghost wl-more", "Show older");
+    more.type = "button";
+    more.onclick = () => { more.disabled = true; loadActivity(true).catch(showError("panel-activity")); };
+    box.append(more);
+  }
+  // Said rather than implied: the index files an address's history from the
+  // block it began watching it (arcade/utxos.py), never further back.
+  if (act.since != null && !act.more) {
+    box.append(el("p", "wl-since", `This list starts at block ${act.since.toLocaleString()}, when this node began following your address. Coins already there are counted in the balance.`));
+  }
+}
+
+/* --- the sheet ---------------------------------------------------------- */
+
+function sheet() {
+  const scrim = el("div", "wl-scrim"), card = el("div", "wl-sheet");
+  card.setAttribute("role", "dialog"); card.setAttribute("aria-modal", "true");
+  scrim.append(card); document.body.append(scrim);
+  let locked = false;
+  const close = () => { if (locked) return; scrim.remove(); document.removeEventListener("keydown", key); };
+  const key = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", key);
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+  return {
+    close, lock(on) { locked = on; },
+    set(title, back) {
+      card.replaceChildren(el("div", "wl-grab"));
+      const h = el("h2");
+      if (back) { const b = el("button", "wl-x", "←"); b.type = "button"; b.setAttribute("aria-label", "Back"); b.onclick = back; h.append(b); }
+      h.append(el("span", "", title));
+      const x = el("button", "wl-x", "×"); x.type = "button"; x.setAttribute("aria-label", "Close");
+      x.style.marginLeft = "auto"; x.onclick = close; h.append(x);
+      const body = el("div");
+      card.append(h, body);
+      return body;
+    },
+  };
+}
+
+function kv(label, value, mono = false) {
+  const row = el("div", "wl-kv");
+  const v = el("span", mono ? "mono" : "", value);
+  if (mono) v.style.fontSize = ".8rem";
+  row.append(el("span", "", label), v);
+  return row;
+}
+
+function copyRow(label, text) {
+  const row = el("div", "wl-txid");
+  row.append(el("span", "", short(text)));
+  const b = el("button", "wl-link", label); b.type = "button";
+  b.onclick = async () => { b.textContent = (await copyText(text)) ? "Copied" : "Press and hold to copy"; };
+  row.append(b);
+  return row;
+}
+
+function openRow(r) {
+  const s = sheet();
+  const body = s.set(rowTitle(r));
+  const head = el("div", "wl-review");
+  head.append(el("div", "big", (r.net > 0 ? "+" : "−") + coinsOf(Math.abs(r.net)) + " " + COIN()));
+  head.append(r.confirmations >= 6 ? el("span", "wl-pill ok", "Confirmed")
+                                   : el("span", "wl-pill wait", `${r.confirmations} of 6 confirmations`));
+  body.append(head);
+  if (r.net < 0 && r.other) body.append(kv("To", (r.other_tag ? "@" + r.other_tag + " · " : "") + r.other, !r.other_tag));
+  body.append(kv("When", r.time ? new Date(r.time * 1000).toLocaleString() : `block ${r.height}`));
+  if (r.fee) body.append(kv("Network fee", `${coinsOf(r.fee)} ${COIN()}`));
+  body.append(kv("Block", r.height.toLocaleString()));
+  body.append(copyRow("Copy transaction ID", r.txid));
+  const tag = r.other_tag || (kept(SENT, []).find((x) => x.txid === r.txid) || {}).tag;
+  if (r.net < 0 && tag) {
+    const again = el("button", "ghost wl-second", `Send to @${tag} again`); again.type = "button";
+    again.onclick = () => { s.close(); openSend("@" + tag); };
+    body.append(again);
+  }
+}
+
+function openPending(p) {
+  const s = sheet();
+  const body = s.set(p.tag ? `Sent to @${p.tag}` : "Sent");
+  const head = el("div", "wl-review");
+  head.append(el("div", "big", "−" + (p.what || coinsOf(p.amount) + " " + COIN())));
+  const pill = el("span", "wl-pill wait"); pill.append(el("span", "wl-spin"), "Waiting for its block");
+  head.append(pill);
+  body.append(head, kv("To", p.to, true));
+  if (p.fee) body.append(kv("Network fee", `${coinsOf(p.fee)} ${COIN()}`));
+  body.append(kv("Sent", new Date(p.at).toLocaleString()), copyRow("Copy transaction ID", p.txid));
+  body.append(el("p", "wl-note", "The network has it. A block usually carries it within a few minutes, and it moves into your history then."));
+}
+
+/* --- receive ------------------------------------------------------------ */
+
+function openReceive() {
+  const c0 = chainNow();
+  if (!c0) return;
+  const k = kindNow(), here = kindHere();
+  if (k && !here.address) { toast(`Unlock your wallet to see your ${k.label} address`); return; }
+  // the card's address type: Receive shows that kind's address; an imported wallet, its own
+  const w = pickedNow();
+  if (asset && asset.dd && !asset.address) { toast(asset.problem || "Your DigiDollar address is still being read"); return; }
+  const c = asset && asset.dd ? {...c0, address: asset.address}
+    : w ? {...c0, address: w.address} : k ? {...c0, address: here.address} : c0;
+  const s = sheet();
+  const body = s.set(w ? `Receive into ${w.name}` : `Receive ${UNIT}`);
+  // A token arrives at the same address as the coins: there is one per chain.
+  const pic = el("div", "wl-qr");
+  try {
+    const qr = qrcode(0, "M"); qr.addData(c.address); qr.make();
+    pic.innerHTML = qr.createSvgTag({cellSize: 4, margin: 2, scalable: true});
+  } catch (e) { pic.textContent = "The QR code could not be drawn; the address is below."; }
+  const addr = el("div", "wl-addrbig", c.address);
+  const note = el("p", "wl-note", asset && asset.dd
+    ? `Send only DigiDollars here: this is your DigiDollar address, not your ${COIN()} one. `
+      + (c.mainnet ? "Real dollars." : "Test dollars have no value.")
+    : asset
+    ? `${UNIT} and every other ${c.label.toLowerCase()} token, NFT and ${COIN()} arrive at this one address.`
+    : c.mainnet ? `Send only ${UNIT} here: real coins.`
+    : `Send only ${UNIT} here. Test coins have no value.`);
+  note.style.textAlign = "center";
+  const copy = el("button", "wl-go", "Copy address"); copy.type = "button";
+  copy.onclick = async () => {
+    const ok = await copyText(c.address);
+    copy.textContent = ok ? "Copied" : "Select the address above and copy it";
+    if (!ok) getSelection().selectAllChildren(addr);
+    setTimeout(() => { copy.textContent = "Copy address"; }, 2500);
+  };
+  body.append(pic, addr, note);
+  // A legacy Dogecoin or DigiByte address is the same string on the other chain (2026-11-09, security review).
+  const same = asset && asset.dd || !wallet.sameAddressNote ? "" : wallet.sameAddressNote(c.network, c.address);
+  if (same) {
+    const twin = el("p", "wl-note bad", same);
+    twin.id = "receive-same"; twin.style.textAlign = "center";
+    body.append(twin);
+  }
+  body.append(copy);
+  const warn = $("receive-note").content.cloneNode(true);
+  const holder = el("div"); holder.style.marginTop = "14px"; holder.append(warn);
+  body.append(holder);
+  copy.focus();
+}
+
+// navigator.clipboard is only there on https (and localhost); the node's own
+// machine on the LAN is plain http, so the old way stays as the fallback.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  const t = document.createElement("textarea");
+  t.value = text;
+  t.setAttribute("readonly", "");
+  t.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.append(t);
+  t.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  t.remove();
+  return ok;
+}
+
+/* --- send ----------------------------------------------------------------
+ *
+ * Who, how much, a review that is the browser's own reading of the
+ * transaction (wallet.checked -- the fee printed is the one the signature
+ * covers), then the send with each step said, and a screen that says it went
+ * and hands over the transaction id. Every refusal stays in the sheet, next
+ * to what caused it, instead of in a box somewhere behind it.
+ */
+
+// base58, or a native SegWit (bech32) address (2026-10-20: L test pays tltc1q...)
+const ADDRESSY = /^(?:[1-9A-HJ-NP-Za-km-z]{26,35}|[a-z]{1,4}1[02-9ac-hj-np-z]{38,58}|[A-Z]{1,4}1[02-9AC-HJ-NP-Z]{38,58})$/;
+
+/* Scan QR on Send (2026-10-17): templates/qrscan.js. */
+
+const TAGGY = /^@?[a-z0-9_]{1,32}$/i;
+
+async function people() {
+  // The address book (by @name, kept in this browser by messaging.js), the
+  // addresses saved from a send, and whoever this browser sent to lately.
+  const c = chainNow();
+  const out = [], seen = new Set();
+  const add = (value, label, sub) => {
+    const k = value.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k); out.push({value, label, sub});
+  };
+  for (const s of kept(SENT, []).filter((x) => x.network === c.network).sort((a, b) => b.at - a.at)) {
+    if (s.tag) add("@" + s.tag, "@" + s.tag, "sent to lately");
+    else if (!mine(s.to)) add(s.to, short(s.to), "sent to lately");
+  }
+  for (const s of kept(SAVED, []).filter((x) => x.network === c.network)) add(s.address, s.name, short(s.address));
+  try { for (const e of await mail.book()) add("@" + e.tag, "@" + e.tag, "in your address book"); } catch (e) {}
+  return out;
+}
+
+/* What a send carries: the chain's coins, the token on the card, or one NFT
+ * (2026-10-08: "you need to be able to send tokens and NFT's from your wallet").
+ * One sheet for all three; only the offer route and the amount differ. */
+function openSend(prefill = "", piece = null) {
+  const c = chainNow();
+  if (!c) return;
+  const s = sheet();
+  const what = piece && piece.doginal ? {kind: "doginal", doginal: piece,
+                                         name: `${(ORD_WORDS[(chainNow() || {}).network] || ["Doginal"])[0]} ${short(piece.id)}`}
+    : piece ? {kind: "nft", piece, name: piece.name || `#${piece.number}`}
+    : asset && asset.dd ? {...asset, kind: "dd"}
+    : asset ? {kind: asset.token20 ? "token20" : "token", ...asset} : {kind: "coin"};
+  // from the card's address type, when it is not the ordinary one: coins only
+  const k = kindNow();
+  if (k && what.kind === "coin") {
+    if (!kindHere().address) { toast(`Unlock your wallet to send from your ${k.label} address`); return; }
+    Object.assign(what, {from: kindHere().address, fromKind: k.id, balance: kindHere().balance || 0});
+  }
+  // From an imported wallet (plan item 18): its coins, its change back to it, signed with its own key.
+  const w = pickedNow();
+  if (w && what.kind === "coin") {
+    if (!w.status || w.status.state !== "ready") { toast(`${w.name}'s coins are still being read back`); return; }
+    Object.assign(what, {from: w.address, imported: w, balance: w.status.spendable || 0});
+  }
+  step1(s, {to: prefill, amount: piece ? "1" : "", what});
+}
+
+/** The offer for what is being sent, from the node. */
+async function offerFor(what, to, amount, network) {
+  if (what.kind === "coin") return wallet.offerSend(to, amount, network, what.from || "");
+  if (what.kind === "dd") {
+    // The arcade builds it as DigiByte Core does (arcade/digidollar.py), every coin checked to be this account's.
+    return ddAsk("/account/digidollar/send", {chain: network, pubkey: await ddKey(network), to, amount});
+  }
+  // A DRC-20 / PRC-20 send (2026-10-22): the node checks the balance and offers the first of its three transactions.
+  if (what.kind === "token20") return wallet.startToken20(keys, {chain: network, tick: what.tick, amount, to});
+  if (what.kind === "doginal") {
+    // [Claude 2026-10-15] The node builds it (/account/doginal/send) and reads from the chain itself that the coin holds exactly
+    // this Doginal before it will: the one time the server asks, because a send needs it.
+    const g = what.doginal;
+    const asked = await fetch("/account/doginal/send", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({txid: g.txid, vout: g.vout, inscription: g.id, to, chain: network})});
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that inscription cannot be sent");
+    return offer;
+  }
+  const [route, body] = what.kind === "token"
+    ? [`${API}/token/send`, {property_id: what.property_id, to, amount, chain: network}]
+    : [`${API}/nft/send`, {piece: what.piece.txid, to, chain: network}];
+  const asked = await fetch(route, {method: "POST", headers: {"Content-Type": "application/json"{% if node_side %}, "X-Arcade-Admin": "1"{% endif %}},
+                                    body: JSON.stringify(body)});
+  const offer = await asked.json();
+  if (!asked.ok) throw new Error(offer.detail || "that cannot be sent");
+  return offer;
+}
+/** What is being sent, said the way a person reads it. */
+function sayWhat(what, raw) {
+  if (what.kind === "nft" || what.kind === "doginal") return what.name;
+  if (what.kind === "dd") return `${dollars(raw)} in DigiDollars`;
+  if (what.kind === "token") return `${tokenAmt(raw, what)} ${what.name}`;
+  if (what.kind === "token20") return `${typeof raw === "string" ? raw : units20(String(raw), what.decimals)} ${what.name}`;
+  return `${coinsOf(raw)} ${COIN()}`;
+}
+
+async function step1(s, d) {
+  const c = chainNow();
+  const what = d.what || {kind: "coin"};
+  const body = s.set(what.kind === "nft" || what.kind === "doginal" ? `Send ${what.name}`
+    : what.kind === "dd" ? "Send DigiDollars"
+    : `Send ${what.kind === "token" || what.kind === "token20" ? what.name : COIN()}`);
+  if (what.kind === "nft") {
+    const card = el("div", "wl-sendpiece");
+    const pic = thumb(what.piece); if (!isImage(what.piece.content_type)) pic.className = "wl-kind";
+    card.append(pic, el("span", "", `${what.name} goes to whoever you pick. One piece, all of it.`));
+    body.append(card);
+  }
+  if (what.kind === "doginal") {
+    const card = el("div", "wl-sendpiece");
+    card.append(doginalPic(what.doginal), el("span", "", `${what.name} goes to whoever you pick, on the coin it sits on. `
+      + "The fee comes from your other coins, never from another inscription."));
+    body.append(card);
+  }
+  const all = await people();
+  const recent = all.filter((p) => p.sub === "sent to lately").slice(0, 5);
+  if (recent.length) {
+    body.append(Object.assign(el("label", "l", "Recent"), {}));
+    const row = el("div", "wl-recent");
+    for (const p of recent) {
+      const b = el("button"); b.type = "button";
+      const av = el("span", "wl-av", p.label.replace(/^@/, "").slice(0, 1).toUpperCase());
+      av.style.cssText = "width:30px;height:30px;background:var(--accent);color:var(--accent-fg);font-size:.8rem";
+      b.append(av, p.label);
+      b.onclick = () => { to.value = p.value; check(); amount.focus(); };
+      row.append(b);
+    }
+    body.append(row);
+  }
+  const lt = el("label", "l", "To"); lt.htmlFor = "send-to";
+  const scan = el("button", "wl-scan", "\u{1F4F7} Scan QR"); scan.type = "button";
+  scan.title = "Scan an address with the camera";
+  const tohead = el("div", "wl-tohead"); tohead.append(lt, scan);
+  const field = el("div", "wl-field");
+  const to = el("input"); to.id = "send-to"; to.autocomplete = "off"; to.spellcheck = false;
+  to.setAttribute("autocapitalize", "off");
+  to.placeholder = "@name or address"; to.value = d.to || "";
+  const sugg = el("div", "wl-sugg"); sugg.hidden = true;
+  field.append(to, sugg);
+  const toNote = el("div", "wl-note");
+  const la = el("label", "l", "Amount"); la.htmlFor = "send-amount";
+  const arow = el("div", "wl-amtrow");
+  const amount = el("input"); amount.id = "send-amount"; amount.inputMode = "decimal";
+  amount.autocomplete = "off"; amount.placeholder = "0"; amount.value = d.amount || "";
+  const max = el("button", "wl-max", "Max"); max.type = "button";
+  arow.append(amount, max);
+  const avail = el("div", "wl-note");
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
+  const go = el("button", "wl-go", "Review"); go.type = "button";
+  body.append(tohead, field, toNote, la, arow, avail, problem, go);
+  scan.onclick = async () => {
+    const text = await scanQR();
+    if (!text) return;
+    const got = parseQR(text);
+    // Which coin a payment code names, against the one picked (Litecoin: "litecoin:" / "ltc:", 2026-10-17).
+    const family = (s) => s.startsWith("doge") ? "doge" : (s.startsWith("lite") || s.startsWith("ltc")) ? "ltc"
+      : (s.startsWith("bel")) ? "bel" : (s.startsWith("lucky") || s.startsWith("lky")) ? "lky"
+      : (s.startsWith("kotia") || s.startsWith("kot")) ? "kot"
+      : (s.startsWith("wojak") || s.startsWith("wjk")) ? "wjk"
+      : (s.startsWith("digibyte") || s.startsWith("dgb")) ? "dgb"
+      : (s.startsWith("flop")) ? "flop" : "pep";
+    const named = {doge: "Dogecoin", ltc: "Litecoin", pep: "Pepecoin", bel: "Bellscoin", lky: "Luckycoin", kot: "Kotia", wjk: "Wojakcoin",
+                   dgb: "DigiByte", flop: "Flopcoin"};
+    const here = c.network === "doge" ? "doge" : (c.network === "ltc" || c.network === "ltctest") ? "ltc"
+      : (c.network === "bel" || c.network === "lky" || c.network === "kot" || c.network === "wjk" || c.network === "dgb"
+         || c.network === "flop")
+        ? c.network : "pep";
+    if (got.coin && family(got.coin) !== here)
+      toast(`That code asks for ${named[family(got.coin)]}: switch coins at the top first.`);
+    to.value = got.to;
+    if (got.amount && !single) amount.value = got.amount;
+    check();
+    (got.amount || single ? go : amount).focus();
+  };
+  const single = what.kind === "nft" || what.kind === "doginal";
+  if (single) { la.hidden = true; arow.hidden = true; avail.hidden = true; }
+
+  // A DRC-20 / PRC-20 amount is counted in BigInt units (18 decimal places pass a Number's 2^53).
+  const t20 = what.kind === "token20", dd = what.kind === "dd";
+  if (dd) { to.placeholder = c.mainnet ? "a DigiDollar address, DD…" : "@name or a DigiDollar address, TD…"; scan.hidden = true; }
+  const spendable = t20 ? BigInt(String(what.balance || "0")) : dd ? Number(what.balance || 0)
+    : what.kind === "token" || what.from ? Number(what.balance || 0) : Number(c.spendable ?? c.balance ?? 0);
+  const unitNow = dd ? "in DigiDollars" : what.kind === "token" || t20 ? what.name : COIN();
+  const fmt = (raw) => dd ? dollars(raw) : t20 ? units20(String(raw), what.decimals) : what.kind === "token" ? tokenAmt(raw, what) : coinsOf(raw);
+  let shown = [], hi = -1;
+  function check() {
+    d.to = to.value.trim(); d.amount = amount.value.trim();
+    toNote.className = "wl-note";
+    if (!d.to) toNote.textContent = "";
+    else if (dd && !c.mainnet && !DD_ADDRESSY.test(d.to) && TAGGY.test(d.to)) {
+      // An @name's DigiDollar address, from the key its own claim was signed with (arcade/ddaddress.py, PR #95).
+      toNote.textContent = `@${d.to.replace(/^@/, "")} · their DigiDollar address is looked up when you review`;
+    } else if (dd) {
+      const want = c.mainnet ? "DD" : "TD";
+      toNote.className = "wl-note" + (DD_ADDRESSY.test(d.to) && d.to.startsWith(want) ? "" : " bad");
+      toNote.textContent = !DD_ADDRESSY.test(d.to) ? (c.mainnet ? "Paste a DigiDollar address: it starts DD."
+                                                                : "Type an @name or paste a DigiDollar address: it starts TD.")
+        : !d.to.startsWith(want) ? `That's a DigiDollar address on the other chain: this one's start ${want}.`
+        : d.to === what.address ? "That's your own DigiDollar address." : "A DigiDollar address · checked when you review";
+    } else if (ADDRESSY.test(d.to)) {
+      const other = chains().find((x) => x.address === d.to && x.network !== c.network);
+      if (other) {
+        toNote.className = "wl-note bad";
+        toNote.textContent = `That's your ${other.label.toLowerCase()} address, and this is a ${c.label.toLowerCase()} send. Switch at the top to send ${other.label.toLowerCase()} coins.`;
+      } else toNote.textContent = d.to === c.address ? "That's your own address: only the fee leaves, and a coin is split in two."
+        : (all.find((p) => p.value === d.to) || {}).label !== short(d.to)
+          ? `${(all.find((p) => p.value === d.to) || {}).label || "An address"} · checked when you review`
+          : "An address · checked when you review";
+    } else if (TAGGY.test(d.to)) {
+      toNote.textContent = `@${d.to.replace(/^@/, "")} · their ${c.label.toLowerCase()} address is looked up when you review`;
+    } else {
+      toNote.className = "wl-note bad";
+      toNote.textContent = "Type an @name or paste an address.";
+    }
+    const n = Number(d.amount);
+    const raw = single ? 1 : dd ? centsOf(d.amount) : t20 ? parse20(d.amount, what.decimals) : what.kind === "token" ? rawOf(d.amount, what) : satsOf(d.amount);
+    let bad = "";
+    if (single) bad = "";
+    else if (d.amount && !(n > 0)) bad = "Type an amount above zero.";
+    else if (t20 && d.amount && raw == null) bad = `${what.name} has ${what.decimals} decimal places at most.`;
+    else if (dd && d.amount && raw == null) bad = "Dollars and cents: two decimal places at most.";
+    else if (dd && raw != null && raw < 100) bad = "A DigiDollar send is $1 at least.";
+    else if (d.amount && raw == null) bad = what.kind === "token" && !what.divisible
+      ? `${what.name} comes in whole units only.` : "Up to 8 decimal places.";
+    else if (raw != null && raw > spendable) bad = `That's more than you have: ${fmt(spendable)} ${unitNow}.`;
+    avail.className = "wl-note" + (bad ? " bad" : "");
+    avail.textContent = bad || `Available: ${fmt(spendable)} ${unitNow}`
+      + (what.kind === "token" || t20 || dd ? `. The fee is paid in ${COIN()}.` : "");
+    go.disabled = !(d.to && (dd ? DD_ADDRESSY.test(d.to) || (!c.mainnet && TAGGY.test(d.to)) : ADDRESSY.test(d.to) || TAGGY.test(d.to)) && n > 0 && !bad
+                    && !toNote.classList.contains("bad"));
+  }
+  function suggest() {
+    const q = to.value.trim().replace(/^@/, "").toLowerCase();
+    shown = q ? all.filter((p) => p.value.toLowerCase().replace(/^@/, "").startsWith(q)
+                              || p.label.toLowerCase().replace(/^@/, "").includes(q)).slice(0, 6) : [];
+    if (shown.length === 1 && shown[0].value === to.value.trim()) shown = [];
+    hi = shown.length ? 0 : -1;
+    sugg.replaceChildren();
+    shown.forEach((p, i) => {
+      const b = el("button", i === hi ? "hi" : ""); b.type = "button";
+      const av = el("span", "wl-av", p.label.replace(/^@/, "").slice(0, 1).toUpperCase());
+      av.style.cssText = "width:28px;height:28px;background:var(--accent);color:var(--accent-fg);font-size:.78rem";
+      const words = el("span"); words.append(p.label, el("small", "", p.sub));
+      b.append(av, words);
+      b.onmousedown = (e) => { e.preventDefault(); pick(p); };
+      sugg.append(b);
+    });
+    sugg.hidden = !shown.length;
+  }
+  function pick(p) { to.value = p.value; sugg.hidden = true; check(); amount.focus(); }
+  to.oninput = () => { suggest(); check(); };
+  to.onfocus = suggest;
+  to.onblur = () => setTimeout(() => { sugg.hidden = true; }, 150);
+  to.onkeydown = (e) => {
+    if (sugg.hidden || !shown.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      hi = (hi + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;
+      [...sugg.children].forEach((x, i) => x.classList.toggle("hi", i === hi));
+    } else if (e.key === "Enter" && hi >= 0) { e.preventDefault(); pick(shown[hi]); }
+  };
+  amount.oninput = check;
+  // The fee is not known until the node builds the transaction, so Max keeps
+  // a little back for it; the review says what it really is.
+  max.onclick = () => {
+    if (t20) { amount.value = units20(String(spendable), what.decimals).replace(/,/g, ""); check(); return; }
+    if (dd) { amount.value = (spendable / 100).toFixed(2); check(); return; }   // the fee is DGB
+    if (what.kind === "token") {          // the fee is coins, so all of the token can go
+      amount.value = what.divisible ? String(spendable / 1e8) : String(spendable); check(); return;
+    }
+    const room = Math.max(0, spendable - 1000000);
+    amount.value = String(room / 1e8); check();
+    avail.textContent = `Max keeps 0.01 ${COIN()} back for the network fee.`;
+  };
+  go.onclick = async () => {
+    problem.hidden = true;
+    // Read the boxes again, now, rather than trusting what an earlier event
+    // left in `d` (2026-10-08: two sends of 5 to @yourfirstname went out when
+    // the second was typed as 500 to @bigchiefenergy). What is asked for is
+    // what is in the boxes at the moment Review is pressed, and the offer
+    // that comes back has to be for exactly that before anything is signed.
+    const typedTo = to.value.trim(), typedAmount = amount.value.trim();
+    d.to = typedTo; d.amount = single ? "1" : typedAmount;
+    go.disabled = true; go.textContent = "Checking…";
+    try {
+      if (!keys) keys = NODE_SIDE ? await wallet.opened() : await arcadeKeys(TAGCHAIN);
+      // that address type's key signs (the same words, another path)
+      d.keys = what.fromKind ? await wallet.asKind(keys, c.network, what.fromKind)
+        : what.imported ? await wallet.importedKeys(what.imported, c) : null;
+      let payTo = typedTo, payTag = "";
+      if (what.kind === "dd" && !DD_ADDRESSY.test(typedTo)) {
+        const named = await ddAsk(`/lite/api/ddaddress?to=${encodeURIComponent("@" + typedTo.replace(/^@/, ""))}`
+                                  + `&chain=${encodeURIComponent(c.network)}`);
+        payTo = named.address; payTag = named.tag || typedTo.replace(/^@/, "").toLowerCase();
+      }
+      const offer = await offerFor(what, payTo, typedAmount, c.network);
+      if (what.kind === "dd") {
+        // What it pays, from the transaction's own bytes: one DigiDollar output of exactly the dollars typed to exactly
+        // the address typed, and nothing else to anybody but this wallet (the record of the dollars is 0 DGB).
+        const read = await wallet.checked(offer, d.keys || keys);
+        const theirs = (read.pays || []).filter((x) => !x.mine);
+        const ddPaid = theirs.filter((x) => x.dd !== undefined);
+        const other = theirs.filter((x) => x.dd === undefined && Number(x.value || 0) > 0);
+        if (ddPaid.length !== 1 || ddPaid[0].to !== payTo || Number(ddPaid[0].dd) !== centsOf(typedAmount) || other.length) {
+          throw new Error("The transaction the arcade prepared is not the send you typed. Nothing was signed.");
+        }
+        // The fee, read from the bytes, held to DigiDollar's own cap here too (ddtx.MAX_FEE; 2026-11-08: only the
+        // arcade checked it, so a changed arcade could have asked for more).
+        if (Number(read.fee) > DD_MAX_FEE) {
+          throw new Error("The network fee is more than 0.5 DGB, more than a DigiDollar send ever needs. Nothing was signed.");
+        }
+        Object.assign(offer, {to: payTo, to_tag: payTag, amount: Number(ddPaid[0].dd)});
+        step2(s, d, offer, read, {to: payTo, amount: typedAmount});
+        return;
+      }
+      const wrong = mismatch(offer, typedTo, typedAmount, what);
+      if (wrong) throw new Error(wrong);
+      const read = await wallet.checked(offer, d.keys || keys);
+      step2(s, d, offer, read, {to: typedTo, amount: typedAmount});
+    } catch (e) {
+      problem.textContent = String(e.message || e); problem.hidden = false;
+      go.disabled = false; go.textContent = "Review";
+    }
+  };
+  check();
+  if (!d.to) to.focus(); else amount.focus();
+}
+
+/** DRC-20 / PRC-20 units from what was typed, by the digits, as a BigInt; null past `dec` places. */
+function parse20(text, dec) {
+  const m = /^(\d*)(?:\.(\d*))?$/.exec(String(text || "").trim());
+  if (!m || (!m[1] && !m[2]) || (m[2] || "").length > dec) return null;
+  return BigInt((m[1] || "0") + (m[2] || "").padEnd(dec, "0"));
+}
+
+/** Satoshis from what was typed, by the digits, never through a float. */
+function satsOf(text) {
+  const m = /^(\d*)(?:\.(\d{0,8}))?$/.exec(String(text).trim());
+  if (!m || (!m[1] && !m[2])) return null;
+  return Number(m[1] || "0") * 1e8 + Number((m[2] || "").padEnd(8, "0"));
+}
+
+/** Why an offer is not the send that was typed, or "" when it is. */
+function mismatch(offer, typedTo, typedAmount, what = {kind: "coin"}) {
+  if (what.kind === "dd") {
+    if (Number(offer.amount) !== centsOf(typedAmount) || offer.to !== typedTo) {
+      return "The prepared send is not the one you typed. Nothing was signed.";
+    }
+    return "";
+  }
+  if (what.kind === "nft") {
+    if (String(offer.number) !== String(what.piece.number)) {
+      return `The node built a send of #${offer.number}, not ${what.name}. Nothing was signed.`;
+    }
+  } else if (what.kind === "doginal") {
+    const g = what.doginal;
+    if (offer.inscription !== g.id || offer.txid !== g.txid || Number(offer.vout) !== Number(g.vout)
+        || !offer.inputs || offer.inputs[0].txid !== g.txid || Number(offer.inputs[0].vout) !== Number(g.vout)) {
+      return `The node built a send of another coin, not ${what.name}. Nothing was signed.`;
+    }
+  } else if (what.kind === "token20") {
+    if (String(offer.tick || "").toLowerCase() !== String(what.tick).toLowerCase()) {
+      return `The node built a send of ${offer.tick}, not ${what.tick}. Nothing was signed.`;
+    }
+    const want = parse20(typedAmount, what.decimals);
+    if (want == null || parse20(offer.amount, what.decimals) !== want
+        || !String(offer.note || "").includes(`"amt":"${offer.amount}"`)) {
+      return `The node built a send of ${offer.amount} ${offer.tick}, and you typed ${typedAmount}. Nothing was signed.`;
+    }
+  } else {
+    const want = what.kind === "token" ? rawOf(typedAmount, what) : satsOf(typedAmount);
+    if (what.kind === "token" && String(offer.property_id) !== String(what.property_id)) {
+      return `The node built a send of another token (#${offer.property_id}). Nothing was signed.`;
+    }
+    if (want == null || Number(offer.amount) !== want) {
+      return `The node built a send of ${sayWhat(what, offer.amount)}, and you typed ${typedAmount}. `
+        + "Nothing was signed. Check the amount and press Review again.";
+    }
+  }
+  if (ADDRESSY.test(typedTo)) {
+    if (offer.to !== typedTo) return `The node built a send to ${offer.to}, not ${typedTo}. Nothing was signed.`;
+  } else {
+    const tag = typedTo.replace(/^@/, "").toLowerCase();
+    if (String(offer.to_tag || "").toLowerCase() !== tag) {
+      return `The node built a send to ${offer.to_tag ? "@" + offer.to_tag : offer.to}, not @${tag}. Nothing was signed.`;
+    }
+  }
+  return "";
+}
+
+function step2(s, d, offer, read, typed) {
+  const c = chainNow();
+  const what = d.what || {kind: "coin"};
+  const body = s.set("Review", () => step1(s, d));
+  const amount = what.kind === "token20" ? String(offer.amount) : Number(offer.amount || 0);
+  const head = el("div", "wl-review");
+  head.append(el("div", "wl-note", "You're sending"), el("div", "big", sayWhat(what, amount)));
+  body.append(head);
+  const who = el("span");
+  if (offer.to_tag) { who.append("@" + offer.to_tag, el("br")); }
+  const at = el("span", "mono", offer.to); at.style.cssText = "font-size:.78rem;color:var(--muted)";
+  who.append(at);
+  const row = el("div", "wl-kv"); row.append(el("span", "", "To"), who);
+  // A DRC-20 / PRC-20 send is three transactions (the commit, the note, the send): their fees, the note itself, and
+  // the small coin that carries the note to them (token20_send).
+  const f = offer.fees || {};
+  const fees20 = Number(f.commit || 0) + Number(f.reveal || 0) + Number(f.send || 0) + Number(f.postage || 0);
+  if (what.kind === "token20") {
+    body.append(row, kv("Network fees", `about ${coinsOf(fees20)} ${COIN()}`),
+                kv("The note", offer.note || ""),
+                el("p", "wl-note", `Three transactions: the transfer note is inscribed on your own address, then sent to `
+                  + `them on a ${coinsOf(f.postage || 0)} ${COIN()} coin; the ${what.name} moves when it arrives. `
+                  + "The fees include that coin."));
+  } else body.append(row, kv("Network fee", `${read.coinsOf(read.fee)} ${COIN()}`));
+  // Every other cost read from the bytes too (wallet.mainnetCosts), as ArcadeCore's review lists them (2026-11-08): the
+  // arcade's fee and a data output's coins, and the total that leaves. An account's own send only: the node's
+  // wallet builds and signs its own.
+  const costs = !NODE_SIDE && what.kind !== "token20" && what.kind !== "dd" && wallet.mainnetCosts
+    ? wallet.mainnetCosts(offer, read) : null;
+  if (costs && costs.operator) body.append(kv("Arcade's fee", `${coinsOf(costs.operator)} ${COIN()}`));
+  if (costs && costs.data) body.append(kv("Data", `${coinsOf(costs.data)} ${COIN()}`));
+  if (read.change && what.kind !== "token20") body.append(kv(what.kind === "coin" ? "Comes back to you" : `${COIN()} back to you`, `${read.coinsOf(read.change)} ${COIN()}`));
+  const extra = costs && (costs.operator || costs.data);
+  const total = el("div", "wl-kv total");
+  total.append(el("span", "", "Leaves your wallet"), el("span", "", what.kind === "coin"
+    ? `${coinsOf(extra ? costs.total : amount + Number(read.fee || 0))} ${COIN()}`
+    : what.kind === "token20" ? `${sayWhat(what, amount)} + about ${coinsOf(fees20)} ${COIN()}`
+    : extra ? `${sayWhat(what, amount)} + ${coinsOf(costs.total)} ${COIN()} in all`
+    : `${sayWhat(what, amount)} + ${read.coinsOf(read.fee)} ${COIN()} fee`));
+  body.append(total);
+  if (mine(offer.to)) body.append(el("div", "wl-warn", "That's your own address. Nothing leaves your wallet but the fee: this splits a coin into two, which selling and answering offers need."));
+  else if (c.mainnet || what.kind !== "coin") {
+    const w = el("div", "wl-warn");
+    w.append(el("strong", "", c.mainnet ? "Real coins. " : "Final. "), "A send can't be taken back. Check the name and the address.");
+    body.append(w);
+  }
+  body.append(el("p", "wl-note", NODE_SIDE ? "Built and signed by this node's own wallet; nothing goes until you press Send."
+                                           : "Worked out in this browser from the transaction's own bytes."));
+  const go = el("button", "wl-go", `Send ${sayWhat(what, amount)}`); go.type = "button";
+  const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
+  body.append(problem);
+  let pressed = false;
+  go.onclick = () => {
+    if (pressed) return;               // one press, one send: a double tap is not two
+    const wrong = mismatch(offer, typed.to, typed.amount, what);
+    if (wrong) { problem.textContent = wrong; problem.hidden = false; return; }
+    pressed = true; go.disabled = true;
+    step3(s, d, offer, read);
+  };
+  body.append(go);
+  go.focus();
+}
+
+async function step3(s, d, offer, read) {
+  const body = s.set("Sending…");
+  const list = el("ul", "wl-steps");
+  const one = el("li", "now"), two = el("li");
+  const t20 = (d.what || {}).kind === "token20";
+  one.append(el("span", "wl-dot"), NODE_SIDE ? "Sending from this node's wallet"
+    : t20 ? "Signing 1 of 3: the commit" : "Signing in this browser and sending");
+  two.append(el("span", "wl-dot"), "Taken by the network");
+  list.append(one, two);
+  body.append(list, el("p", "wl-note", "Keep this open for a moment."));
+  s.lock(true);
+  try {
+    // Its own Review listed every cost from wallet.checked, so not asked twice.
+    const names = {commit: "Signing 1 of 3: the commit", reveal: "Signing 2 of 3: the note", send: "Signing 3 of 3: the send"};
+    const out = t20
+      ? await wallet.sendToken20(d.keys || keys, offer, (step) => { one.lastChild.textContent = names[step] || step; })
+          .then((txids) => ({txid: txids.send}))
+      : await wallet.confirm(d.keys || keys, offer, {reviewed: true});
+    one.className = "done"; one.firstChild.textContent = "✓";
+    two.className = "done"; two.firstChild.textContent = "✓";
+    s.lock(false);
+    const what = d.what || {kind: "coin"};
+    const record = {txid: out.txid, network: offer.chain || chainNow().network, from: what.imported ? what.from : "",
+                    to: offer.to,
+                    tag: offer.to_tag || "", amount: what.kind === "coin" ? Number(offer.amount) : 0,
+                    fee: Number(read.fee || 0), at: Date.now(),
+                    what: what.kind === "coin" ? "" : sayWhat(what, what.kind === "token20" ? String(offer.amount)
+                                                                          : Number(offer.amount || 0))};
+    const sent = kept(SENT, []);
+    sent.unshift(record);
+    keep(SENT, sent.slice(0, 40));
+    d.to = ""; d.amount = "";            // the next send starts from empty boxes
+    done(s, d, record);
+    if (what.kind === "token20") tokens = null;            // the Tokens tab reads the held-back amount again
+    if (what.kind === "token20" && asset && asset.token20) {
+      asset.balance = (BigInt(String(asset.balance)) - (parse20(offer.amount, asset.decimals) || 0n)).toString();
+    }
+    if (what.kind === "token") { tokens = null; if (asset) asset.balance = Math.max(0, Number(asset.balance) - Number(offer.amount || 0)); }
+    if (what.kind === "nft") nft.colls = null;
+    if (what.kind === "doginal") dg.coins = null;
+    if (what.kind === "dd" && asset && asset.dd) { asset.balance = Math.max(0, Number(asset.balance) - Number(offer.amount)); ddLoad(); }
+    refresh();
+  } catch (e) {
+    s.lock(false);
+    one.className = ""; one.firstChild.textContent = "!";
+    const problem = el("div", "msg err", String(e.message || e)); problem.style.marginTop = "14px";
+    const again = el("button", "wl-go", "Start again"); again.type = "button";
+    again.onclick = () => step1(s, d);
+    body.append(problem, again);
+  }
+}
+
+function done(s, d, record) {
+  const body = s.set("");
+  const box = el("div", "wl-done");
+  box.append(el("div", "wl-check", "✓"));
+  const head = el("div", "", `Sent ${record.what || coinsOf(record.amount) + " " + COIN()}`);
+  head.style.cssText = "font-size:1.25rem;font-weight:700";
+  box.append(head, el("div", "wl-note", `to ${record.tag ? "@" + record.tag : record.to}`));
+  const pill = el("span", "wl-pill wait"); pill.append(el("span", "wl-spin"), "Waiting for its block");
+  const p = el("div"); p.style.marginTop = "12px"; p.append(pill);
+  box.append(p, copyRow("Copy transaction ID", record.txid));
+  body.append(box);
+  // A raw address, nobody's @name: offer to keep it under one (2026-10-08:
+  // "The address should auto complete if somebody is in your address book").
+  const saved = kept(SAVED, []);
+  if (!record.tag && !mine(record.to) && !saved.some((x) => x.address === record.to)) {
+    const save = el("div", "wl-save");
+    save.append(el("strong", "", "Save this address?"),
+                el("div", "wl-note", "Next time, start typing its name and it comes up."));
+    const row = el("div", "wl-amtrow"); row.style.marginTop = "8px";
+    const name = el("input"); name.placeholder = "a name, e.g. my exchange"; name.autocomplete = "off";
+    const ok = el("button", "wl-max", "Save"); ok.type = "button";
+    ok.onclick = () => {
+      const label = name.value.trim().slice(0, 40);
+      if (!label) { name.focus(); return; }
+      const all = kept(SAVED, []);
+      all.push({name: label, address: record.to, network: record.network});
+      keep(SAVED, all);
+      save.replaceChildren(el("strong", "", `Saved as “${label}”`));
+    };
+    row.append(name, ok);
+    save.append(row);
+    body.append(save);
+  }
+  const close = el("button", "wl-go", "Done"); close.type = "button";
+  close.onclick = s.close;
+  body.append(close);
+}
+
+$("do-send").onclick = () => openSend();
+$("do-recv").onclick = openReceive;
+
+/* --- tokens --------------------------------------------------------------- */
+
+let tokens = null;
+async function drawTokens() {
+  const box = $("panel-tokens");
+  if (!tokens) {
+    box.replaceChildren(el("div", "wl-empty", "Reading your tokens…"));
+    tokens = await (await fetch(`${API}/tokens`, {cache: "no-store"})).json();
+  }
+  const c = chainNow();
+  const here = ((tokens.chains || []).find((x) => x.network === (c && c.network)) || {}).tokens || [];
+  box.replaceChildren();
+  // Stars, favorites on top (2026-10-17: "In your wallet for your tokens list, they should also have
+  // stars and favorites on top"). A token's star is its market's (`/exchange/pair/<id>@<chain>`, the same
+  // key the Exchange keeps), so starring it here stars its market there, and the other way round.
+  const favs = window.arcadeFavs;
+  const favKey = (t) => `/exchange/pair/${t.property_id}@${c.network}`;
+  const starred = (t) => !!(favs && favs.has(favKey(t)));
+  const held = here.filter((t) => Number(t.balance) > 0 || t.issuer_is_me)
+    .map((t, i) => [t, i]).sort((a, b) => (starred(b[0]) - starred(a[0])) || (a[1] - b[1])).map((p) => p[0]);
+  // Where DRC-20 / PRC-20 follow below (2026-11-05), "no tokens" was read as none at all: these are the arcade's own.
+  const has20 = !!(c && (c.network === "doge" || c.network === "main"));
+  if (!held.length) box.append(el("div", "wl-empty", `No ${has20 ? "arcade " : ""}tokens on ${c ? c.label.toLowerCase() : "this chain"} yet.`));
+  const anyStar = held.some(starred);
+  if (anyStar) box.append(el("div", "wl-favhead", "Favorites"));
+  let shownRest = false;
+  for (const t of held) {
+    if (anyStar && !shownRest && !starred(t)) { box.append(el("div", "wl-favhead", "Other tokens")); shownRest = true; }
+    const row = el("button", "wl-tok"); row.type = "button";
+    if (asset && asset.property_id === t.property_id) row.classList.add("on");
+    row.onclick = () => {
+      asset = {network: c.network, property_id: t.property_id, divisible: !!t.divisible,
+               name: t.sensitive ? `Token ${t.property_id}` : (t.name || `Token ${t.property_id}`),
+               balance: Number(t.balance || 0), manage: !!(t.managed && t.issuer_is_me)};
+      drawHead(); drawTokens();
+      window.scrollTo({top: 0, behavior: "smooth"});
+      toast(`${asset.name}: Send and Receive are for it now`);
+    };
+    const av = el("span", "wl-av", String(t.name || "?").slice(0, 1).toUpperCase());
+    av.style.background = `hsl(${(Number(t.property_id) * 47) % 360} 45% 42%)`;
+    const mid = el("span", "wl-mid");
+    mid.append(el("b", "", t.sensitive ? "Hidden name" : (t.name || `Token ${t.property_id}`)),
+               el("small", "", `#${t.property_id}${t.issuer_is_me ? " · you made it" : ""}`));
+    row.append(av, mid, el("span", "wl-amt", t.display ?? String(t.balance)));
+    const wrap = el("div", "wl-tokrow");
+    const star = el("button", "ex-star", starred(t) ? "\u2605" : "\u2606"); star.type = "button";
+    star.dataset.fav = favKey(t); star.setAttribute("aria-pressed", starred(t) ? "true" : "false");
+    star.setAttribute("aria-label", `Favorite ${t.name || "token " + t.property_id}`);
+    wrap.append(star, row);
+    if (t.managed && t.issuer_is_me) {
+      const manage = el("a", "wl-backcoin", "Manage"); manage.href = `/tokens/${t.property_id}`;
+      manage.setAttribute("aria-label", `Manage ${t.name || "token " + t.property_id}`);
+      wrap.append(manage);
+    }
+    box.append(wrap);
+  }
+  if (held.length) box.prepend(el("p", "wl-note", "Tap a token to send or receive it from the card above."));
+  // Sending is the card's Send now, so no link away to do it (2026-10-08).
+  if (c && (c.network === "doge" || c.network === "main")) {
+    const t20 = el("div", "wl-t20");
+    box.append(t20);
+    drawToken20(t20, c).catch(() => {});
+  }
+}
+
+/* DRC-20 (Dogecoin) and PRC-20 (Pepecoin) balances, from the most complete copy of the chain's ord index (the operator
+ * 2026-10-22: "DRC-20 and PRC-20 balances should be displayed updated as the index is updated"): asked again every
+ * T20_MS while the Tokens tab is open, with how far that copy has walked. */
+const T20_MS = 60000;
+let t20Timer = null;
+function units20(units, dec) {
+  const neg = String(units).startsWith("-"), digits = String(units).replace(/^-/, "").replace(/^0+(?=\d)/, "");
+  if (!dec) return (neg ? "-" : "") + BigInt(digits || "0").toLocaleString();
+  const pad = digits.padStart(dec + 1, "0");
+  const whole = BigInt(pad.slice(0, -dec)).toLocaleString(), frac = pad.slice(-dec).replace(/0+$/, "");
+  return (neg ? "-" : "") + whole + (frac ? "." + frac : "");
+}
+async function drawToken20(box, c) {
+  clearTimeout(t20Timer);
+  const w = pickedNow(), only = w ? `&address=${encodeURIComponent(w.address)}` : "";
+  const word = c.network === "doge" ? "DRC-20" : "PRC-20";
+  const r = await fetch(`/account/token20?chain=${encodeURIComponent(c.network)}${only}`, {cache: "no-store"});
+  const got = await r.json().catch(() => ({}));
+  if (!box.isConnected) return;
+  const rows = [el("div", "wl-favhead", word)];
+  if (!r.ok || got.balances == null) {
+    rows.push(el("p", "wl-note", `${word} balances can't be read right now: ${got.detail || "no arcade's index answered"}. `
+      + "Asked again in a minute."));
+  } else {
+    const walked = Number(got.walked_to || 0), tip = Number(got.tip || 0);
+    const reading = walked && tip && walked < tip - 30;
+    // 2026-10-22 ("Add drc-20 balances to doge wallet tokens"): an empty list while the index still walks is not
+    // "none" -- it is "none found yet", with how far the index has read.
+    if (!got.balances.length) {
+      rows.push(el("div", "wl-empty", reading
+        ? `No ${word} tokens found yet on ${w ? w.name + "'s" : "your"} address: the arcades' index has read the chain up `
+          + `to block ${walked.toLocaleString()} of ${tip.toLocaleString()} (${Math.floor(100 * walked / tip)}%), and `
+          + "balances appear here as it reaches them."
+        : `No ${word} tokens on ${w ? w.name + "'s" : "your"} address.`));
+    }
+    for (const b of got.balances) {
+      // Sent from this account's own wallet in one press (2026-10-22); an imported wallet's, later.
+      const sendable = !w && !NODE_SIDE;
+      const row = el(sendable ? "button" : "div", "wl-tok");
+      // Sent and not read from the chain yet (2026-10-22): off the balance until the index has the note.
+      const onWay = BigInt(String(b.pending_units || "0"));
+      // Listed on the exchange (2026-10-22): held until it is unlisted or sold, so not on hand.
+      const listed = BigInt(String(b.listed_units || "0"));
+      // Never below nothing, whatever an order claims (2026-10-22: a listing of 100,000,000,000 frgy showed a
+      // negative balance).
+      const left = BigInt(String(b.units || "0")) - BigInt(String(b.transferable_units || "0")) - onWay - listed;
+      const onHand = (left > 0n ? left : 0n).toString();
+      if (asset && asset.token20 && asset.tick === b.tick) {
+        row.classList.add("on");
+        if (asset.balance !== onHand) { asset.balance = onHand; drawHead(); }   // the index walked on: the card follows
+      }
+      if (sendable) {
+        row.type = "button";
+        row.onclick = () => {
+          asset = {network: c.network, token20: true, word, tick: b.tick, name: b.tick, decimals: Number(b.decimals || 0),
+                   balance: onHand, noted: String(b.transferable_units || "0")};
+          drawHead(); drawTokens();
+          window.scrollTo({top: 0, behavior: "smooth"});
+          toast(`${b.tick}: Send is for it now`);
+        };
+      }
+      const av = el("span", "wl-av", String(b.tick || "?").slice(0, 1).toUpperCase());
+      const mid = el("span", "wl-mid");
+      const free = b.transferable_units && b.transferable_units !== "0"
+        ? ` · ${units20(b.transferable_units, b.decimals)} transferable` : "";
+      const way = (onWay > 0n ? ` · ${units20(onWay.toString(), b.decimals)} on its way` : "")
+        + (listed > 0n ? ` · ${units20(listed.toString(), b.decimals)} listed` : "");
+      mid.append(el("b", "", b.tick), el("small", "", word + free + way));
+      const shownLeft = BigInt(String(b.units || "0")) - onWay - listed;
+      row.append(av, mid, el("span", "wl-amt", units20((shownLeft > 0n ? shownLeft : 0n).toString(), b.decimals)));
+      rows.push(row);
+    }
+    if (reading && got.balances.length) {
+      rows.push(el("p", "wl-note", `Read from the arcades' ord index, at block ${walked.toLocaleString()} of `
+        + `${tip.toLocaleString()}: these balances update as it walks.`));
+    }
+  }
+  box.replaceChildren(...rows);
+  t20Timer = setTimeout(() => {
+    if (tab === "tokens" && box.isConnected && !document.hidden) drawToken20(box, c).catch(() => {});
+    else if (tab === "tokens" && box.isConnected) t20Timer = setTimeout(() => drawToken20(box, c).catch(() => {}), T20_MS);
+  }, T20_MS);
+}
+
+/* --- NFTs ----------------------------------------------------------------
+ *
+ * Collections first, then the pieces of the one that is opened (2026-10-08:
+ * "we have collections that have thousands of items and we need to be able to
+ * sort through our collections before we look at the items"). The node groups
+ * and pages (/account/nfts/collections, /account/nfts/pieces); a collection of
+ * six thousand is sixty pieces at a time.
+ */
+
+let nft = {net: null, colls: null, open: null, cq: "", csort: "most", iq: "", isort: "number",
+           pieces: [], total: 0};
+const isImage = (type) => String(type || "").startsWith("image/");
+function thumb(piece) {
+  if (isImage(piece.content_type)) {
+    const img = el("img"); img.loading = "lazy"; img.alt = ""; img.src = "/content/" + piece.txid;
+    return img;
+  }
+  return el("span", "", String(piece.content_type || "file").split("/").pop().split(";")[0].slice(0, 8));
+}
+function mosaic(cover) {
+  const box = el("span", "wl-mosaic");
+  for (let i = 0; i < 4; i++) {
+    const cell = el("span");
+    if (cover[i]) cell.append(thumb(cover[i]));
+    box.append(cell);
+  }
+  return box;
+}
+
+async function drawNfts() {
+  const c = chainNow();
+  const box = $("panel-nfts");
+  if (!c) { box.replaceChildren(el("div", "wl-empty", "No address yet.")); return; }
+  if (nft.net !== c.network) nft = {...nft, net: c.network, colls: null, open: null};
+  if (nft.open != null) return drawCollection();
+  if (!nft.colls) {
+    box.replaceChildren(el("div", "wl-empty", "Reading what you hold…"));
+    const answer = await fetch(`${API}/nfts/collections?chain=${encodeURIComponent(c.network)}`, {cache: "no-store"});
+    const got = await answer.json();
+    if (!answer.ok) throw new Error(got.detail || "the node would not say");
+    nft.colls = got.collections || [];
+  }
+  box.replaceChildren();
+  const total = nft.colls.reduce((n, x) => n + x.count, 0);
+  if (!total) {
+    box.append(el("div", "wl-empty", `No NFTs on ${c.label.toLowerCase()} yet.`));
+    const make = el("a", "btn ghost wl-more", "Open your NFTs page"); make.href = "/me/nfts";
+    make.style.cssText = "display:block;text-align:center"; box.append(make);
+    return;
+  }
+  const named = nft.colls.filter((x) => x.collection).length;
+  box.append(el("div", "wl-count", `${named} collection${named === 1 ? "" : "s"} · ${total.toLocaleString()} piece${total === 1 ? "" : "s"}`));
+  const tools = el("div", "wl-tools");
+  const q = el("input"); q.type = "search"; q.id = "coll-q"; q.placeholder = "Search your collections"; q.value = nft.cq;
+  q.setAttribute("aria-label", "Search your collections");
+  const sort = el("select"); sort.id = "coll-sort"; sort.setAttribute("aria-label", "Sort collections");
+  for (const [v, t] of [["most", "Most pieces"], ["recent", "Recently received"], ["az", "A–Z"]]) {
+    const o = el("option", "", t); o.value = v; sort.append(o);
+  }
+  sort.value = nft.csort;
+  tools.append(q, sort);
+  const grid = el("div", "wl-colls");
+  box.append(tools, grid);
+  const fill = () => {
+    const text = nft.cq.trim().toLowerCase();
+    const list = nft.colls.filter((x) => (x.collection || "not in a collection").toLowerCase().includes(text));
+    list.sort((a, b) => (a.collection === "") - (b.collection === "")
+      || (nft.csort === "az" ? a.collection.localeCompare(b.collection)
+          : nft.csort === "recent" ? b.latest - a.latest : b.count - a.count));
+    grid.replaceChildren();
+    if (!list.length) grid.append(el("div", "wl-empty", "No collection by that name."));
+    for (const x of list) {
+      const card = el("button", "wl-coll"); card.type = "button";
+      card.append(mosaic(x.cover || []), el("b", "", x.collection || "Not in a collection"),
+                  el("small", "", `${x.count.toLocaleString()} piece${x.count === 1 ? "" : "s"}`));
+      card.onclick = () => { nft.open = x.collection; nft.iq = ""; drawCollection(); };
+      grid.append(card);
+    }
+  };
+  q.oninput = () => { nft.cq = q.value; fill(); };
+  sort.onchange = () => { nft.csort = sort.value; fill(); };
+  fill();
+}
+
+let typing = null;
+async function drawCollection() {
+  const c = chainNow();
+  const x = (nft.colls || []).find((one) => one.collection === nft.open) || {collection: nft.open, count: 0, cover: []};
+  const box = $("panel-nfts");
+  box.replaceChildren();
+  const back = el("button", "wl-back", "← Collections"); back.type = "button";
+  back.onclick = () => { nft.open = null; drawNfts(); };
+  const head = el("div", "wl-collhead");
+  const words = el("span", "wl-mid");
+  words.append(el("b", "", x.collection || "Not in a collection"),
+               el("small", "", `${x.count.toLocaleString()} piece${x.count === 1 ? "" : "s"} in this wallet`));
+  head.append(mosaic(x.cover || []), words);
+  const tools = el("div", "wl-tools");
+  const q = el("input"); q.type = "search"; q.id = "piece-q"; q.placeholder = "Search by name or #number"; q.value = nft.iq;
+  q.setAttribute("aria-label", "Search this collection");
+  const sort = el("select"); sort.id = "piece-sort"; sort.setAttribute("aria-label", "Sort pieces");
+  for (const [v, t] of [["number", "Number"], ["recent", "Newest"], ["name", "Name"]]) {
+    const o = el("option", "", t); o.value = v; sort.append(o);
+  }
+  sort.value = nft.isort;
+  tools.append(q, sort);
+  const count = el("div", "wl-count");
+  const grid = el("div", "wl-pieces");
+  const more = el("button", "ghost wl-more", "Show more"); more.type = "button"; more.hidden = true;
+  box.append(back, head, tools, count, grid, more);
+  const load = async (append) => {
+    const offset = append ? nft.pieces.length : 0;
+    const answer = await fetch(`${API}/nfts/pieces?chain=${encodeURIComponent(c.network)}`
+      + `&collection=${encodeURIComponent(nft.open)}&q=${encodeURIComponent(nft.iq)}`
+      + `&sort=${nft.isort}&offset=${offset}&limit=60`, {cache: "no-store"});
+    const got = await answer.json();
+    if (!answer.ok) throw new Error(got.detail || "the node would not say");
+    nft.pieces = append ? nft.pieces.concat(got.pieces) : got.pieces;
+    nft.total = got.total;
+    if (!append) grid.replaceChildren();
+    for (const p of got.pieces) {
+      const card = el("div", "wl-piececard");
+      const a = el("a", "wl-piece"); a.href = `/inscriptions/${p.txid}/view`;
+      const pic = thumb(p);
+      if (!isImage(p.content_type)) pic.className = "wl-kind";
+      a.append(pic, el("em", "", p.name || `#${p.number}`));
+      // Send it from here (2026-10-08: "there should be a send button for each one").
+      const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+      send.setAttribute("aria-label", `Send ${p.name || "#" + p.number}`);
+      send.onclick = () => openSend("", p);
+      card.append(a, send);
+      grid.append(card);
+    }
+    if (!nft.pieces.length) grid.append(el("div", "wl-empty", nft.iq ? "Nothing here matches. Try a number like 42." : "Nothing here."));
+    count.textContent = nft.iq
+      ? `${nft.total.toLocaleString()} of ${x.count.toLocaleString()} match`
+      : `Showing ${nft.pieces.length.toLocaleString()} of ${nft.total.toLocaleString()}`;
+    more.hidden = nft.pieces.length >= nft.total;
+    more.textContent = `Show ${Math.min(60, nft.total - nft.pieces.length)} more`;
+  };
+  more.onclick = () => { more.disabled = true; load(true).finally(() => { more.disabled = false; }); };
+  q.oninput = () => { nft.iq = q.value; clearTimeout(typing); typing = setTimeout(() => load(false), 250); };
+  sort.onchange = () => { nft.isort = sort.value; load(false); };
+  await load(false);
+  window.scrollTo({top: Math.max(0, $("panel-nfts").getBoundingClientRect().top + scrollY - 120)});
+}
+
+
+/* --- inscriptions on the account's own coins -------------------------------
+ *
+ * [Claude 2026-10-15] Which of this account's coins carry an inscription: Doginals on Dogecoin, ord inscriptions on
+ * Pepecoin mainnet and the other ord chains. Nothing outside this arcade is asked (2026-10-15: the outside
+ * Doginals API removed). Since 2026-11-06 the arcade builds the list itself and this page asks one page of it at a time
+ * (/account/doginals/page, below). A small coin the node could not read is said so and never shown as a plain coin.
+ */
+
+let dg = {net: null, addr: "", data: null, page: 0};
+
+/** An inscription's content, from this arcade's own /content/<id> (read off the chain by the node), in a sandboxed
+ *  frame: a picture shows as itself, and a recursive page (HTML that loads other inscriptions) draws itself. */
+function doginalPic(g) {
+  const box = el("span", "wl-dgpic");
+  const frame = el("iframe");
+  frame.src = `/content/${encodeURIComponent(g.id)}/fit`;   // a picture scaled to the frame (2026-10-18)
+  frame.loading = "lazy"; frame.title = g.id;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("scrolling", "no");
+  frame.style.cssText = "width:100%;aspect-ratio:1;border:0;display:block;background:transparent;pointer-events:none";
+  box.append(frame);
+  return box;
+}
+/** Doginals sent to this account's TESTNET key's Dogecoin address (2026-10-17: six Anti Doginal Dogs went to
+ * @apple's that way) -- the account's own coins, signed for with the testnet coin key, moved home in one transaction.
+ * The browser checks the bytes itself: every output pays this wallet's own Dogecoin address, and every hash it signs it
+ * worked out from the transaction, not from what the node said. */
+async function strayDoginals(box) {
+  const r = await fetch("/account/doge-stray", {cache: "no-store"});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok || !said.doginals || !said.doginals.length) {
+    if (r.ok && said.checking) box.append(el("p", "wl-note", "Checking your other Dogecoin address for Doginals…"));
+    return;
+  }
+  const panel = el("div", "msg");
+  panel.style.marginTop = "12px";
+  const names = said.doginals.flatMap((d) => d.names.filter(Boolean));
+  const n = said.doginals.length;
+  panel.append(el("p", "", `${n} Doginal${n === 1 ? " was" : "s were"} sent to ${said.stray} -- an address of yours `
+    + "made from your Pepecoin test key, which this wallet does not show. "
+    + (names.length ? names.join(", ") + ". " : "") + "Move them here with one transaction."));
+  const go = el("button", "btn small", said.fee_short ? "Add the fee, then move them" : `Move ${n === 1 ? "it" : "them"} to my wallet`);
+  go.type = "button";
+  const note = el("p", "wl-note", "");
+  panel.append(go, note);
+  box.append(panel);
+  go.onclick = async () => {
+    go.disabled = true; note.style.color = ""; note.textContent = "";
+    try {
+      const wallet = await import("/wallet.js"), coins = await import("/coins.js");
+      const DOGE = {network: "doge", version: 30};
+      const held = (await wallet.opened(DOGE)) || await arcadeKeys(DOGE);
+      const test = held.on && held.on.test, home = held.on && held.on.doge;
+      if (!test || !home) throw new Error("this wallet has no Pepecoin test or Dogecoin key open here");
+      const testHash = await coins.hash160(test.pubkey), homeHash = await coins.hash160(home.pubkey);
+      if (home.address !== said.home) throw new Error("the node named another home address. Nothing was signed.");
+      if (said.fee_short) {
+        const offer = await wallet.offerSend(said.stray, String(said.fee_short / 1e8), "doge");
+        const shown = await wallet.checked(offer, held);
+        const ok = await arcadeAsk("First, the network fee",
+          `The address holding them has no DOGE to pay the fee. This sends ${said.fee_short / 1e8} DOGE there from your `
+          + `wallet (${shown.says}). Press Move again once its block lands, about a minute.`, "Send the fee");
+        if (ok) { await wallet.confirm(held, offer); note.textContent = "Fee sent. Press Move again in a minute or two."; }
+        go.disabled = false; go.textContent = `Move ${n === 1 ? "it" : "them"} to my wallet`;
+        return;
+      }
+      const asked = await fetch("/account/doge-stray/move", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const move = await asked.json();
+      if (!asked.ok) throw new Error(move.detail || "the node would not build it");
+      const tx = coins.parseTx(move.raw);
+      const mine = coins.p2pkh(homeHash);
+      const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+      if (!tx.outputs.every((o) => same(o.script, mine))) throw new Error("that transaction pays somewhere else. Nothing was signed.");
+      if (tx.inputs.length !== move.inputs.length) throw new Error("the node's inputs do not match. Nothing was signed.");
+      const ok = await arcadeAsk(`Move ${n} Doginal${n === 1 ? "" : "s"} to your wallet?`,
+        `${n === 1 ? "It goes" : "Each goes"} whole to ${said.home}, your Dogecoin address here. Network fee ${move.fee / 1e8} DOGE.`,
+        "Move them");
+      if (!ok) { go.disabled = false; return; }
+      const from = coins.p2pkh(testHash), signatures = [];
+      for (let i = 0; i < tx.inputs.length; i++) {
+        signatures.push(coins.hex(await coins.signInput(test.key, await coins.sighashAll(tx, i, from))));
+      }
+      const sent = await fetch("/account/doge-stray/move/sign", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({raw: move.raw, signatures, pubkey: coins.hex(test.pubkey)})});
+      const done = await sent.json();
+      if (!sent.ok) throw new Error(done.detail || "the node refused it");
+      panel.replaceChildren(el("p", "", `Moved. They show here once the block lands (transaction ${done.txid.slice(0, 16)}…).`));
+    } catch (e) {
+      go.disabled = false; note.textContent = String(e.message || e); note.style.color = "var(--bad)";
+    }
+  };
+}
+
+/* 2026-10-21: "I have like over 1500 doginals in that wallet. Make sure they have good pagination. And lazy
+ * loading and caching ... whatever is lightest weight for the server ... right now it looks like the doginals in my
+ * Wallet load like three times when I'm looking at them". So: DG_PAGE cards a page, asked of the arcade one page at a
+ * time (arcade/doginal_pages.py, only small coins looked at, every answer kept by the arcade), and a page's cards (each a
+ * picture frame) are built only when what is on it changes -- a poll, a block, or a redraw no longer rebuilds them,
+ * which reloaded every picture each time. */
+const DG_PAGE = 30;
+const DG_PAGEKEY = "arcade.wallet.dgpage:";
+let dgUi = null;                      // {head, status, notes, stray, grid, pager, shown, paged}
+
+function dgPageGo(n) {
+  dg.page = n; dg.focus = null;
+  try { sessionStorage.setItem(DG_PAGEKEY + dg.net + ":" + (dg.addr || ""), String(n)); } catch (e) {}
+  dgFetch();
+  if (dgUi) dgUi.head.scrollIntoView({block: "start", behavior: "smooth"});
+}
+
+//: The chains whose inscriptions the wallet shows (arcade/ord_chains.py): one word for one, its coin, how its coins are
+//: named, and whether one is sent, listed (on which Exchange tab) and swapped (priced first in which coin) from here.
+const ORD = {{ ord_wallet()|tojson }};
+// Listing one for sale waits on this arcade's buyers while the seller is away, so it is offered only where the operator
+// has that on (node_trades; the arcade refuses it otherwise), as ArcadeCore's Assets offers it (2026-11-08).
+const LISTS = {{ 'true' if node_trades() else 'false' }};
+const ORD_WORDS = Object.fromEntries(Object.entries(ORD).map(([net, o]) => [net, o.words]));
+
+// --- The Wallet's Doginals in order, each with its card (2026-11-05, the operator: "they should be ordered by inscription
+// number earliest first", "sent and listed on the marketplace right from my wallet", "if they are a part of a
+// collection, they should have the collection metadata with them", "Each one should be able to be clicked, and their
+// card should open with all of the information and a content link") ---------------------------------------------------
+const DG_VIEW = "arcade.wallet.dgview:", DG_POLL_MS = 1500, DG_LIVE_MS = 60000;
+function dgViewLoad(net) {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem(DG_VIEW + net) || "{}") || {}; } catch (e) {}
+  return {kind: ["all", "art", "text"].includes(v.kind) ? v.kind : "all", coll: typeof v.coll === "string" ? v.coll : "",
+          order: v.order === "new" ? "new" : "old"};
+}
+function dgViewSet(change) {
+  dg.view = {...dg.view, ...change};
+  try { localStorage.setItem(DG_VIEW + dg.net, JSON.stringify(dg.view)); } catch (e) {}
+  dg.page = 0; dg.focus = null; dg.go = "";
+  dgFetch();
+}
+/* One page at a time (2026-11-06, the operator: "build it", #91): the arcade builds this address's list itself -- its coins
+ * read once, each small coin's inscriptions as the inscription guard says (the same answer that keeps them out of an
+ * ordinary send), their numbers kept for good, their collections looked up in one go -- and this page asks only for the
+ * DG_PAGE shown (/account/doginals/page). Where it was some 85 calls for a wallet of 7,000 coins before page 1, it is
+ * one; while the arcade is still building it, the page asks again every DG_POLL_MS and shows how far it has got. */
+async function dgFetch(fresh = false) {
+  const mine = dg;
+  if (!mine.net) return;
+  clearTimeout(mine.poll); mine.poll = null;
+  const q = new URLSearchParams({chain: mine.net, page: String(mine.page | 0), size: String(DG_PAGE), kind: mine.view.kind,
+                                 coll: mine.view.coll, order: mine.view.order});
+  if (mine.addr) q.set("address", mine.addr);
+  if (mine.go) q.set("go", mine.go);
+  if (fresh) q.set("fresh", "1");
+  const seq = mine.seq = (mine.seq || 0) + 1;
+  mine.inflight = true;
+  let got = null;
+  try {
+    const r = await fetch(`/account/doginals/page?${q}`, {cache: "no-store"});
+    got = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(got.detail || `the node could not say (${r.status})`);
+    mine.err = "";
+  } catch (e) {
+    mine.err = String(e.message || e);
+  }
+  if (dg !== mine || seq !== mine.seq) return;            // the wallet, or the page asked for, changed meanwhile
+  mine.inflight = false;
+  mine.fetchedAt = Date.now();
+  if (got && !mine.err) {
+    mine.data = got;
+    mine.page = got.page;
+    if (mine.go) {
+      if (got.missed) toast("That one is not among those shown here.");
+      else if (got.focus) {
+        mine.focus = got.focus;
+        const g = (got.items || []).find((x) => x.id === got.focus);
+        if (g) openDgCard(g);
+      }
+      mine.go = "";
+    }
+    try { sessionStorage.setItem(DG_PAGEKEY + mine.net + ":" + (mine.addr || ""), String(got.page)); } catch (e) {}
+  }
+  // Still being built: asked again shortly. Coins waiting for the index (or not numbered yet): asked again in a minute,
+  // when the arcade has built the list again with what the index has reached since.
+  const d = mine.data;
+  const again = mine.err ? DG_LIVE_MS : !d || !d.done || d.building ? DG_POLL_MS
+    : (d.waiting || d.unnumbered || d.failed) ? DG_LIVE_MS : 0;
+  if (again) {
+    mine.poll = setTimeout(() => {
+      mine.poll = null;
+      if (dg === mine && tab === "nfts" && !document.hidden) dgFetch();   // else asked when the tab is drawn again
+    }, again);
+  }
+  drawDoginals().catch(() => {});
+}
+// "Go to #number or id": the arcade finds the page holding it; it is marked, and its card opened.
+function dgGoTo(said) {
+  const q = String(said || "").trim();
+  if (!q) return;
+  dg.go = q;
+  dgFetch();
+}
+// A text inscription's first words in place of a picture.
+function dgTextPic(g) {
+  const box = el("span", "wl-dgpic dg-textpic");
+  const words = el("span", "", dg.texts[g.id] || "…");
+  box.append(words);
+  if (dg.texts[g.id] == null) {
+    dg.texts[g.id] = "…";
+    fetch(`/content/${encodeURIComponent(g.id)}`).then((r) => r.ok ? r.text() : "")
+      .then((t) => { dg.texts[g.id] = (t || "").slice(0, 160) || "(empty)"; words.textContent = dg.texts[g.id]; })
+      .catch(() => { dg.texts[g.id] = "(not readable just now)"; words.textContent = dg.texts[g.id]; });
+  }
+  return box;
+}
+async function dgPost(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, credentials: "same-origin",
+                               body: JSON.stringify(body)});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || "the node would not do that");
+  return said;
+}
+async function dgKeys(net) {
+  const w = await import("/wallet.js");
+  const chain = {network: net, version: ORD[net].version};
+  const held = (await w.opened(chain)) || await arcadeKeys(chain);
+  return {w, held, keys: w.keysOn(held, net)};
+}
+// List one on the NFT Exchange at a price (the Exchange's own two calls, /account/doginals/list then /list/sign: the
+// seller signs one SINGLE|ANYONECANPAY input, so anybody may buy it at that price, paid to the seller's own address).
+async function dgList(g, amount) {
+  const net = dg.net, [W, C] = ORD_WORDS[net];
+  const coins = await import("/coins.js");
+  const ask = await dgPost("/account/doginals/list", {chain: net, txid: g.txid, vout: g.vout, inscription: g.id, amount});
+  const {keys} = await dgKeys(net);
+  const digest = await coins.verifyDoginalAsk(ask, keys);
+  if (!await arcadeAsk(`List this ${W} for ${Number(ask.price) / 1e8} ${C}?`,
+        "Anybody can buy it for that price, paid to your own address, until you unlist it. It stays held as listed "
+        + `meanwhile. Unlisting is a small send of the ${W} to yourself.`, "List it")) return false;
+  const signature = coins.hex(await coins.signInput(keys.key, digest, coins.SINGLE_ANYONECANPAY));
+  await dgPost("/account/doginals/list/sign", {chain: net, txid: ask.coin.txid, vout: ask.coin.vout,
+                                               inscription: ask.inscription, amount, signature,
+                                               pubkey: coins.hex(keys.pubkey)});
+  return true;
+}
+// Unlist: the Doginal moves to this wallet's own address, which ends the signature the listing gave.
+async function dgUnlist(listing) {
+  const net = dg.net, [W] = ORD_WORDS[net];
+  const offer = await dgPost("/account/doginals/cancel", {chain: net, listing});
+  const {w, held} = await dgKeys(net);
+  const shown = await w.checked(offer, held);
+  if (!await arcadeAsk("Unlist it?", `The ${W} moves to your own address, which is what ends the listing: ${shown.says}`,
+                       "Unlist")) return false;
+  await w.confirm(held, offer);
+  return true;
+}
+// The card: everything about one, its content link, and Send and List.
+async function openDgCard(g, wantPrice = false) {
+  const net = dg.net, [W, C] = ORD_WORDS[net], can = ORD[net];
+  const owned = !pickedNow() && can.send;
+  document.querySelector(".dg-shade")?.remove();
+  const shade = el("div", "dg-shade"), modal = el("div", "dg-modal");
+  modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true");
+  const close = () => { shade.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  shade.onclick = (e) => { if (e.target === shade) close(); };
+  const x = el("button", "dg-x", "×"); x.type = "button"; x.setAttribute("aria-label", "Close"); x.onclick = close;
+  const left = el("div", "dg-left");
+  if (g.text) {
+    const pre = el("pre", "dg-bigtext", dg.texts[g.id] || "…"); left.append(pre);
+    fetch(`/content/${encodeURIComponent(g.id)}`).then((r) => r.ok ? r.text() : "").then((t) => { pre.textContent = t.slice(0, 4000); });
+  } else {
+    const frame = el("iframe", "dg-big"); frame.src = `/content/${encodeURIComponent(g.id)}/fit`; frame.title = g.id;
+    frame.setAttribute("sandbox", "allow-scripts"); frame.setAttribute("scrolling", "no");
+    left.append(frame);
+  }
+  const side = el("div", "dg-side");
+  const title = el("h3", "", g.number != null ? `#${Number(g.number).toLocaleString()}` : W); title.id = "dg-card-title";
+  modal.setAttribute("aria-labelledby", title.id);
+  const coll = el("div", "dg-cn", g.collection ? (g.collection.item || g.collection.name) : "");
+  const body = el("div", "", "Reading its details…");
+  side.append(title, coll, body);
+  modal.append(x, left, side);
+  shade.append(modal);
+  document.body.append(shade);
+  x.focus();
+  let got;
+  try {
+    const r = await fetch(`/account/doginal-card?chain=${encodeURIComponent(net)}&id=${encodeURIComponent(g.id)}`,
+                          {cache: "no-store"});
+    got = await r.json();
+    if (!r.ok) throw new Error(got.detail || "the node would not say");
+  } catch (e) {
+    body.replaceChildren(el("p", "msg err", `Its details can't be read just now: ${e.message || e}`));
+    got = null;
+  }
+  const parts = [];
+  const ins = got ? got.inscription : {id: g.id};
+  if (got) {
+    title.textContent = `#${Number(ins.number).toLocaleString()}`;
+    const k = got.collection;
+    if (k) {
+      coll.textContent = k.item && k.item !== k.name ? `${k.name} · ${k.item}` : (k.name || k.item || "");
+      if (k.description) parts.push(el("p", "dg-desc", k.description));
+      const facts = [k.supply ? `${Number(k.supply).toLocaleString()} pieces` : "",
+                     k.holders ? `${Number(k.holders).toLocaleString()} holders` : "",
+                     k.created ? `since ${new Date(k.created * 1000).toLocaleDateString()}` : ""].filter(Boolean);
+      if (facts.length) parts.push(el("p", "dg-desc", facts.join(" · ")));
+      if (k.traits && k.traits.length) {
+        parts.push(el("p", "dg-label", "Traits"));
+        const grid = el("div", "dg-attrs");
+        for (const t of k.traits) {
+          const a = el("div", "dg-attr");
+          a.append(el("i", "", t.trait), el("span", "", t.value));
+          if (t.share != null) a.append(el("em", "", `${(t.share * 100).toFixed(t.share < 0.1 ? 1 : 0)}%`));
+          grid.append(a);
+        }
+        parts.push(grid);
+      }
+    } else coll.textContent = "No collection";
+    const dl = el("dl", "dg-dl");
+    const row = (k2, v, mono) => { dl.append(el("dt", "", k2)); const d = el("dd", mono ? "mono" : "", v); dl.append(d); return d; };
+    const idd = row("Inscription id", ins.id, true);
+    const copy = el("button", "dg-copy", "copy"); copy.type = "button";
+    copy.onclick = () => navigator.clipboard.writeText(ins.id).then(() => toast("Copied.")).catch(() => {});
+    idd.append(" ", copy);
+    row("Content", `${ins.content_type || "unknown"}${ins.size != null ? ` · ${Number(ins.size).toLocaleString()} bytes` : ""}`);
+    row("Inscribed", `block ${Number(ins.height).toLocaleString()}${got.made ? " · " + new Date(got.made * 1000).toLocaleDateString() : ""}`);
+    if (ins.output) row("On coin", `${short(ins.output.split(":")[0])}:${ins.output.split(":")[1]} · offset ${ins.offset ?? 0}`
+                        + (g.value != null ? ` · ${coinsOf(g.value)} ${C}` : ""), true);
+    if (ins.owner) row("Owner", ins.owner + (owned ? " (you)" : ""), true);
+    parts.push(dl);
+    const links = el("div", "dg-links");
+    const open = el("a", "", "Open content ↗"); open.href = got.content || `/content/${g.id}`; open.target = "_blank"; open.rel = "noopener";
+    links.append(open);
+    if (k && k.root) { const a = el("a", "", "Collection page"); a.href = `/exchange/ord/${k.root}`; links.append(a); }
+    const ex = el("a", "", "In Explore"); ex.href = `/explore?net=${encodeURIComponent(net)}&id=${encodeURIComponent(g.id)}`;
+    links.append(ex);
+    parts.push(links);
+  }
+  // Send, and one price box with List (2026-11-05, the operator: "There shouldn't be two list options"). A listed one: Unlist.
+  if (owned) {
+    const listing = got && got.listing;
+    const acts = el("div", "dg-bigacts");
+    if (listing) {
+      acts.append(el("span", "dg-listed", `Listed for ${Number(listing.price) / 1e8} ${C}`));
+      const un = el("button", "", "Unlist"); un.type = "button";
+      un.onclick = async () => {
+        un.disabled = true;
+        try { if (await dgUnlist(listing.id)) { toast("Unlisted: it ends when its block lands."); close(); } }
+        catch (e) { toast(String(e.message || e)); } finally { un.disabled = false; }
+      };
+      acts.append(un);
+    } else {
+      const send = el("button", "dg-send", "Send"); send.type = "button";
+      send.onclick = () => { close(); openSend("", g); };
+      acts.append(send);
+      if (can.list && LISTS) {
+        const box = el("span", "dg-pricebox");
+        const price = el("input"); price.inputMode = "decimal"; price.placeholder = "Price";
+        price.setAttribute("aria-label", `Price in ${C}`);
+        const list = el("button", "dg-send", "List"); list.type = "button";
+        list.onclick = async () => {
+          const amount = price.value.trim();
+          if (!amount) { price.focus(); return; }
+          list.disabled = true;
+          try {
+            if (await dgList(g, amount)) {
+              toast(`Listed for ${amount} ${C} on the NFT Exchange.`);
+              dg.listed = null; close(); drawDoginals().catch(() => {});
+            }
+          } catch (e) { toast(String(e.message || e)); } finally { list.disabled = false; }
+        };
+        price.onkeydown = (e) => { if (e.key === "Enter") list.click(); };
+        box.append(price, el("span", "", C), list);
+        acts.append(box);
+        if (wantPrice) setTimeout(() => price.focus(), 0);
+      }
+    }
+    parts.push(acts);
+    if (!listing && can.list && LISTS) parts.push(el("p", "wl-note", "List puts it on the NFT Exchange at your price. It stays held until it sells or you unlist it."));
+  }
+  body.replaceChildren(...parts);
+}
+
+async function drawDoginals() {
+  const box = $("doginals");
+  const c = chainNow();
+  if (NODE_SIDE || tab !== "nfts" || !c || !ORD_WORDS[c.network]) { box.hidden = true; return; }
+  box.hidden = false;
+  const doge = c.network === "doge";
+  // Shown only where the Doginals routes do not move them (ord_chains.MOVED; every ord chain since 2026-10-25).
+  const can = ORD[c.network];
+  const viewOnly = !can.send;
+  // An imported wallet's own Doginals too (they are shown; sending one from it comes later).
+  const w = pickedNow(), addr = w ? w.address : "";
+  if (dg.net !== c.network || (dg.addr || "") !== addr) {
+    let page = 0;
+    try { page = Number(sessionStorage.getItem(DG_PAGEKEY + c.network + ":" + addr) || 0) || 0; } catch (e) {}
+    if (dg.poll) clearTimeout(dg.poll);
+    // `data`: the page the arcade last sent (/account/doginals/page). `view`: which kind, collection and order the
+    // grid shows (2026-11-05: earliest number first), kept in this browser.
+    dg = {net: c.network, addr, data: null, err: "", page, poll: null, go: "", focus: null, texts: {},
+          view: dgViewLoad(c.network)};
+    dgUi = null;
+  }
+  // Pepinals (2026-10-17: "Add pepinals support"): the same ord inscriptions on Pepecoin mainnet. Bellinals and
+  // Luckinals (2026-10-22) the same way, read through each chain's own guard.
+  const [W, C, coinWord] = ORD_WORDS[c.network];
+  if (!dgUi || !box.contains(dgUi.head)) {
+    const head = el("h2", "", `${W}s`); head.id = "dg-title";
+    dgUi = {head, credit: el("p", "wl-note dg-credit", "Read from the chain by this arcade's node."),
+            status: el("div", ""), notes: el("div", ""), stray: el("div", ""), bar: el("div", "dg-bar"),
+            grid: el("div", "wl-pieces dg-grid"), pager: el("div", "wl-dgpager"), shown: null, paged: null, barKey: null};
+    box.replaceChildren(head, dgUi.credit, dgUi.status, dgUi.notes, dgUi.stray, dgUi.bar, dgUi.grid, dgUi.pager);
+    if (doge && !w) strayDoginals(dgUi.stray).catch(() => {});
+  }
+  const ui = dgUi;
+  // Asked when there is nothing yet, when a send has just gone (dg.coins set to null there: built again now), and when
+  // the tab is drawn again after a minute or after a poll that found the tab hidden.
+  if (dg.coins === null) { dg.coins = undefined; dgFetch(true); }
+  else if (!dg.inflight && !dg.poll && (!dg.fetchedAt || Date.now() - dg.fetchedAt > DG_LIVE_MS
+                                        || (dg.data && (!dg.data.done || dg.data.building)))) dgFetch();
+  const d = dg.data;
+  if (!d) {
+    ui.status.replaceChildren(dg.err ? el("div", "msg err", `Your ${W}s can't be read just now: ${dg.err}`)
+                                     : el("div", "wl-empty", `Reading your ${coinWord} coins…`));
+    return;
+  }
+  const counts = d.counts || {all: 0, art: 0, text: 0, tokens: 0};
+  // The few lines above the cards: redrawn freely, they hold no pictures.
+  const status = [];
+  if (dg.err) status.push(el("p", "msg err", `Not updated just now (${dg.err}); asked again in a minute.`));
+  if (d.failed) {
+    status.push(el("div", "msg err", `Inscriptions can't be checked right now: the node could not read `
+      + `${d.failed} transaction${d.failed === 1 ? "" : "s"}. Those coins are not shown, and not spent, until it can.`));
+    const again = el("button", "ghost wl-more", "Try again"); again.type = "button";
+    again.onclick = () => dgFetch(true);
+    status.push(again);
+  }
+  if (!d.done && d.phase === "checking") {
+    status.push(el("p", "wl-note", `Checking ${Number(d.checked || 0).toLocaleString()} of `
+      + `${Number(d.of || 0).toLocaleString()} small coins' transactions… (each is checked once, then remembered)`));
+  } else if (!d.done) {
+    status.push(el("p", "wl-note", d.phase === "collections" ? "Looking up their collections…"
+      : `Reading their numbers… (${Number(counts.all + counts.tokens - (d.unnumbered || 0)).toLocaleString()} of `
+        + `${Number(counts.all + counts.tokens).toLocaleString()})`));
+  }
+  // Waiting for the arcades' ord index (2026-10-22): protected, never traced back one by one any more.
+  if (d.waiting) {
+    const at = d.reach ? ` (at block ${Number(d.reach).toLocaleString()})` : "";
+    status.push(el("p", "wl-note", `${d.waiting.toLocaleString()} small coin${d.waiting === 1 ? " is" : "s are"} `
+      + `protected until the arcades' ${W} index${at} reaches ${d.waiting === 1 ? "its block" : "their blocks"}: `
+      + `kept out of ordinary sends meanwhile, and shown here as the index gets to each.`));
+  }
+  if (d.unread > d.waiting) {
+    const n = d.unread - d.waiting;
+    status.push(el("p", "wl-note", `${n} small coin${n === 1 ? "" : "s"} could not be traced all `
+      + "the way back, so they are kept out of ordinary sends in case they carry one."));
+  }
+  if (d.done && d.unnumbered) {
+    status.push(el("p", "wl-note", d.error
+      ? `Numbers for ${d.unnumbered.toLocaleString()} of them can't be read just now (${d.error}); `
+        + "they are shown last and asked again in a minute."
+      : `${d.unnumbered.toLocaleString()} of them ${d.unnumbered === 1 ? "is" : "are"} not in `
+        + `the ${W} index yet: shown last, and asked again in a minute.`));
+  }
+  if (counts.tokens) {
+    status.push(el("p", "wl-note", `${counts.tokens.toLocaleString()} token inscription${counts.tokens === 1 ? " is" : "s are"} `
+      + "not shown here: your token balances are on the Tokens tab."));
+  }
+  if (d.done && !d.failed && !counts.all && !counts.tokens) {
+    status.push(el("div", "wl-empty", `No ${W}s on ${w ? w.name + "'s" : "your"} ${coinWord} coins.`));
+  }
+  ui.status.replaceChildren(...status);
+  ui.credit.textContent = "Read from the chain by this arcade's node." + (counts.all
+    ? ` ${counts.all.toLocaleString()} on ${w ? w.name + "'s" : "your"} coins, in inscription order, `
+      + `${dg.view.order === "new" ? "newest" : "earliest"} first.` : "");
+  // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
+  // top of their asset"): the send's fee. `spendable` already leaves the Doginals out. A listing costs the seller nothing.
+  const free = Number(c.spendable || 0);
+  const sendShort = !w && free < Number(c.doginal_send_need || 0);
+  const notes = [];
+  if (viewOnly && counts.all) {
+    notes.push(el("p", "wl-note", `Your ${W}s, read from the chain. Sending and listing a ${W} from the `
+      + "arcade is not ready yet: they stay safe here, and an ordinary send never spends one."));
+  } else if (w && counts.all) {
+    notes.push(el("p", "wl-note", `These are ${w.name}'s. Sending or listing a ${W} from an imported wallet is not `
+      + "ready yet: choose your arcade wallet above to send one of its own."));
+  } else if (counts.all && sendShort) {
+    notes.push(el("p", "wl-note dg-need", `To send a ${W} you need some ${C} besides it for the network fee: about `
+      + `${coinsOf(c.doginal_send_need)} ${C}. This wallet has ${coinsOf(free)} ${C} to spend.`));
+  }
+  ui.notes.replaceChildren(...notes);
+  // Listed ones are held (2026-10-22: "locked as listed until it is unlisted or purchased"): no Send.
+  if (!w && !dg.listed) {
+    dg.listed = new Set();
+    fetch("/account/listed", {cache: "no-store"}).then((r) => r.json()).then((got) => {
+      dg.listed = new Set(((got.doginals || {})[c.network]) || []);
+      if (dg.listed.size) { ui.shown = null; drawDoginals().catch(() => {}); }
+    }).catch(() => {});
+  }
+  const isListed = (g) => !!(dg.listed && dg.listed.has(g.id));
+  // The bar: which kind, which collection, which order, and a box to go to one (2026-11-05 mockup).
+  const view = dg.view;
+  const colls = d.collections || [];
+  const barKey = JSON.stringify([counts, colls.map((k) => k.key + ":" + k.n), d.loose, view, !!d.done]);
+  if (ui.barKey !== barKey) {
+    ui.barKey = barKey;
+    const chip = (kind, label, n) => {
+      const b = el("button", "dg-chip" + (view.kind === kind ? " on" : ""), label); b.type = "button";
+      b.append(el("b", "", n.toLocaleString()));
+      b.setAttribute("aria-pressed", String(view.kind === kind));
+      b.onclick = () => dgViewSet({kind});
+      return b;
+    };
+    const pickColl = el("select", "dg-pick"); pickColl.setAttribute("aria-label", "Collection");
+    const opts = [["", "Every collection"], ...colls.map((k) => [k.key, `${k.name} (${k.n.toLocaleString()})`]),
+                  ["-", `Not in a collection (${Number(d.loose || 0).toLocaleString()})`]];
+    for (const [v, t] of opts) { const o = el("option", "", t); o.value = v; o.selected = v === (view.coll || ""); pickColl.append(o); }
+    pickColl.onchange = () => dgViewSet({coll: pickColl.value});
+    const pickOrder = el("select", "dg-pick"); pickOrder.setAttribute("aria-label", "Order");
+    for (const [v, t] of [["old", "Earliest first"], ["new", "Newest first"]]) {
+      const o = el("option", "", t); o.value = v; o.selected = v === view.order; pickOrder.append(o);
+    }
+    pickOrder.onchange = () => dgViewSet({order: pickOrder.value});
+    const go = el("input", "dg-go"); go.type = "search"; go.placeholder = "Go to #number or id";
+    go.setAttribute("aria-label", `Go to a ${W} by number or id`);
+    go.onkeydown = (e) => { if (e.key === "Enter") dgGoTo(go.value); };
+    ui.bar.replaceChildren(chip("all", "All", counts.all), chip("art", "Pictures & pages", counts.art),
+                           chip("text", "Text", counts.text), el("span", "dg-sp"), pickColl, pickOrder, go);
+    ui.bar.style.display = counts.all ? "" : "none";
+  }
+  // The page the arcade sent, in number order (one whose number is not known yet comes last).
+  const here = d.items || [];
+  const num = (g) => g.number != null ? Number(g.number) : null;
+  const pages = d.pages || 1, page = d.page || 0;
+  const shown = JSON.stringify([here.map((g) => g.id + ":" + g.txid + ":" + g.vout + (isListed(g) ? ":L" : "")
+                                          + ":" + (num(g) ?? "") + ":" + dgCollKey(g.collection)), sendShort, !!w,
+                                dg.focus, !!d.done]);
+  if (ui.shown !== shown) {
+    ui.shown = shown;
+    const cards = [];
+    for (const g0 of here) {
+      const g = {...g0, doginal: true};
+      const card = el("div", "wl-piececard dg-tile" + (dg.focus === g.id ? " dg-focus" : ""));
+      card.dataset.doginal = g.id;
+      card.tabIndex = 0; card.setAttribute("role", "button");
+      const n = num(g), k = g.collection;
+      card.setAttribute("aria-label", `${W} ${n !== null ? "#" + n.toLocaleString() : g.id}: open its card`);
+      card.onclick = (e) => { if (!e.target.closest("button,a,input")) openDgCard(g); };
+      card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card) openDgCard(g); };
+      card.append(g.text ? dgTextPic(g) : doginalPic(g));
+      card.append(el("div", "dg-num", n !== null ? `#${n.toLocaleString()}` : "#…"));
+      card.append(el("div", "dg-coll" + (k ? "" : " none"),
+                     k ? (k.item || k.name) : (n !== null && d.done ? "No collection" : "")));
+      if (viewOnly || w) {
+        // shown only (above)
+      } else if (isListed(g)) {
+        const un = el("button", "wl-piecesend ghost", "Unlist"); un.type = "button";
+        un.setAttribute("aria-label", `Unlist ${W} ${g.id}`);
+        un.onclick = () => openDgCard(g);
+        card.append(un);
+      } else {
+        const row = el("div", "dg-acts");
+        const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+        send.setAttribute("aria-label", `Send ${W} ${g.id}`);
+        send.onclick = () => openSend("", g);
+        if (sendShort) { send.disabled = true; send.title = `Needs ${C} besides the ${W} for the network fee`; }
+        row.append(send);
+        if (can.list && LISTS) {
+          const list = el("button", "wl-piecesend ghost", "List"); list.type = "button";
+          list.setAttribute("aria-label", `List ${W} ${g.id}`);
+          list.onclick = () => openDgCard(g, true);
+          row.append(list);
+        }
+        card.append(row);
+      }
+      cards.push(card);
+    }
+    ui.grid.replaceChildren(...cards);
+    ui.grid.style.display = cards.length ? "" : "none";
+  }
+  const paged = `${page}/${pages}/${d.total}/${here.length ? num(here[0]) + "-" + num(here[here.length - 1]) : ""}`;
+  if (ui.paged !== paged) {
+    ui.paged = paged;
+    ui.pager.replaceChildren();
+    if (pages > 1) {
+      const prev = el("button", "ghost small", "‹ Previous"); prev.type = "button";
+      prev.disabled = page === 0; prev.onclick = () => dgPageGo(page - 1);
+      const next = el("button", "ghost small", "Next ›"); next.type = "button";
+      next.disabled = page >= pages - 1; next.onclick = () => dgPageGo(page + 1);
+      const pick = el("select"); pick.setAttribute("aria-label", `Page of ${W}s`);
+      for (let n = 0; n < pages; n++) {
+        const o = el("option", "", `Page ${n + 1} of ${pages}`); o.value = String(n); o.selected = n === page;
+        pick.append(o);
+      }
+      pick.onchange = () => dgPageGo(Number(pick.value));
+      const a = here.length ? num(here[0]) : null, b = here.length ? num(here[here.length - 1]) : null;
+      ui.pager.append(prev, pick, next, el("span", "wl-note", a !== null && b !== null
+        ? `#${a.toLocaleString()} – #${b.toLocaleString()} on this page · ${Number(d.total).toLocaleString()} ${W}s`
+        : `${Number(d.total).toLocaleString()} ${W}s`));
+    }
+  }
+}
+function dgCollKey(k) { return k ? String(k.slug || k.root || k.name || "") : ""; }
+
+/* --- drawing it all ----------------------------------------------------- */
+
+// A wallet's balance is read only when it is picked (2026-10-27: "lazy loaded as the user selects the Wallet
+// that they want to view"): the node sends the rest without one.
+async function fillNow() {
+  const c = chainNow();
+  if (c && c.lazy) { try { said = await wallet.filled(said, c.network); } catch (e) { /* drawn as "—" */ } }
+}
+
+function drawAll() {
+  drawHead();
+  showTab(tab);
+}
+
+async function refresh() {
+  kindSeen = {};                       // a send moves the other address types' balances too
+  said = await wallet.state(net || "");
+  await loadImports(true);
+  if (!chainNow()) net = null;
+  await fillNow();
+  drawHead();
+  if (tab === "activity") await loadActivity();
+  if (tab === "nfts") drawDoginals().catch(() => {});
+}
+
+keys = await wallet.opened(TAGCHAIN);
+$("shut").hidden = !!keys;
+// A read-back of this account's coins cut short (a restart) is finished on a Wallet visit; done chains cost nothing.
+if (!NODE_SIDE) fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                  body: "{}"}).catch(() => {});
+// A coin's shortcut (the Desktop View, 2026-10-28: "shortcuts ... for every coin type so people can click that to
+// quickly get to their favorite wallet") opens its Wallet on that coin: ?coin=<network>.
+const coinAsked = new URLSearchParams(location.search).get("coin");
+net = /^[a-z0-9]{1,16}$/.test(coinAsked || "") ? coinAsked : kept(NET, null);
+said = await wallet.state(net || "");
+if (!chains().some((c) => c.network === net)) {
+  net = (chains().find((c) => c.mainnet) || chains()[0] || {}).network || null;
+}
+await fillNow();
+if (!coinAsked && DD_NETS.includes(net) && kept(DDNET, "") === net && chainNow()) asset = ddAsset(chainNow());
+try { tab = sessionStorage.getItem("arcade.wallet.tab") || "activity"; } catch (e) {}
+await loadImports(true);
+drawAll();
+if (asset && asset.dd) ddLoad();
+// Pay buttons elsewhere (the address book, a profile) land here as
+// /me/wallet?to=@name: the Send sheet opens with that name in To, and the
+// address leaves the URL so a reload does not open it again.
+const asked = new URLSearchParams(location.search).get("to");
+if (asked && chainNow()) {
+  history.replaceState(null, "", location.pathname + location.hash);
+  // A coin named too (a profile's Pay) is the coin to pay in. chainNow() falls back on another wallet when that one
+  // is hidden or has no address here, and a Send opened there would pay in something they did not pick.
+  if (coinAsked && chainNow().network !== coinAsked) {
+    const named = (said.chains || []).find((c) => c.network === coinAsked);
+    toast(`Your ${named ? named.label : "chosen"} wallet isn't showing here, so nothing was opened. `
+      + "Turn it on under Your arcade, then press Pay again.");
+  } else openSend(asked.trim().slice(0, 64));
+}
+document.body.dataset.walletReady = "yes";
+
+// Balances and the history are drawn here from what the node says, so the
+// server's copy of the page has only placeholders: they redraw themselves when
+// a block brings something (base.html's `arcade:changed`), and while a send of
+// ours waits for its block the history is asked again every 20 seconds, so
+// "Pending" turns into a row without anybody pressing anything.
+document.body.dataset.selfRefreshing = "yes";
+document.addEventListener("arcade:changed", () => { refresh().catch(() => {}); });
+setInterval(() => {
+  if (!document.hidden && kept(SENT, []).some((s) => !s.landed && s.at > Date.now() - 2 * 86400e3)) {
+    refresh().catch(() => {});
+  }
+}, 20000);
+</script>
+{% if not node_side %}
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+wallet.keepCoinsSoon().catch(() => {});             // this browser's copy of the coin list, both ways (2026-10-25)
+async function drawEscrows() {
+  const box = document.getElementById("escrow-panel");
+  let said = null;
+  try { said = await (await fetch("/account/escrows", {cache: "no-store"})).json(); } catch (e) { return; }
+  const list = (said && said.escrows) || [];
+  box.hidden = !list.length;
+  box.innerHTML = list.length ? '<h2 style="margin-top:0">Held in escrow</h2>'
+    + '<p class="muted" style="font-size:.86rem">A game holds these for you. Until the time shown, '
+    + 'the game\u2019s referee decides who gets them; after it, take them back here.</p>' : "";
+  for (const e of list) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.cssText = "gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0";
+    const what = e.inscriptions.length + " NFT" + (e.inscriptions.length === 1 ? "" : "s")
+      + (Object.keys(e.tokens).length ? " and " + Object.keys(e.tokens).length + " token"
+         + (Object.keys(e.tokens).length === 1 ? "" : "s") : "");
+    const when = new Date(e.unlock * 1000).toLocaleString();
+    row.innerHTML = '<span style="flex:1"></span>';
+    row.firstChild.textContent = what + (e.open ? " \u00b7 yours to take back" : " \u00b7 the game\u2019s until " + when);
+    if (e.open) {
+      const button = document.createElement("button");
+      button.className = "small"; button.textContent = "Take back";
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const chain = {network: said.chain, version: {{ (state.messaging.params.pubkeyhash_version) }}};
+          const keys = (await wallet.opened(chain)) || await arcadeKeys(chain);
+          const done = await wallet.reclaimEscrow(keys, e.escrow, said.chain);
+          row.firstChild.textContent = "On its way home (" + done.txids.length + " transaction"
+            + (done.txids.length === 1 ? "" : "s") + "): it shows when its block lands.";
+          button.remove();
+        } catch (err) {
+          row.firstChild.textContent = String(err.message || err);
+          button.disabled = false;
+        }
+      };
+      row.append(button);
+    }
+    box.append(row);
+  }
+}
+drawEscrows();
+document.addEventListener("arcade:changed", () => { drawEscrows().catch(() => {}); });
+async function drawPending() {
+  const box = document.getElementById("pending-panel");
+  let me = null;
+  try { me = await (await fetch("/account", {cache: "no-store"})).json(); } catch (e) { return; }
+  const addresses = [...new Set(((me && me.chains) || []).map((c) => c.address).filter(Boolean))];
+  const rows = [];
+  // Coins on their way, from anybody, on every chain (2026-10-17).
+  for (const c of ((me && me.chains) || [])) {
+    // The chain's own coin (2026-10-18: L main's arriving LTC was called PEP).
+    if (Number(c.arriving || 0) > 0) rows.push(["arriving", {kind: "coin", amount: Number(c.arriving) / 1e8,
+                                                              name: coinOf(c)}]);
+  }
+  for (const address of addresses) {
+    let said = null;
+    try { said = await (await fetch("/r/pending/" + address, {cache: "no-store"})).json(); }
+    catch (e) { continue; }
+    for (const m of (said.incoming || [])) rows.push(["arriving", m]);
+    for (const m of (said.outgoing || [])) rows.push(["leaving", m]);
+  }
+  box.hidden = !rows.length;
+  box.textContent = "";
+  if (!rows.length) return;
+  const h = document.createElement("h2");
+  h.style.marginTop = "0"; h.textContent = "On its way";
+  const p = document.createElement("p");
+  p.className = "muted"; p.style.fontSize = ".86rem";
+  p.textContent = "In a transaction waiting for its block. Arriving things are yours when it lands, "
+    + "usually within a minute; if the transaction is dropped, nothing moves.";
+  box.append(h, p);
+  for (const [way, m] of rows) {
+    const row = document.createElement("div");
+    row.style.margin = "4px 0";
+    const what = m.kind === "token" || m.kind === "coin" ? `${m.amount} ${m.name}`
+      : (m.number != null ? `#${m.number}` : "an NFT") + (m.name ? ` (${m.name})` : "");
+    row.textContent = (way === "arriving" ? "Arriving: " : "Leaving: ") + what;
+    box.append(row);
+  }
+}
+drawPending();
+document.addEventListener("arcade:changed", () => { drawPending().catch(() => {}); });
+</script>
+
+{% endif %}
+{% endblock %}

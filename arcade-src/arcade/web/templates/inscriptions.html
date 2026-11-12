@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% import "_chain_line.html" as cl with context %}
+{% import "_chains.html" as chains %}
+{% import "_token_confirm.html" as tk %}
+{% block title %}NFTs · {{ brand.name }}{% endblock %}
+{% import "_not_ordinals.html" as notord %}
+{% import "_share_nft.html" as share %}
+{% block body %}
+{# Macros first: Jinja does not hoist them, and one
+   defined below its first use is undefined there. #}
+{% macro card(row, tags) %}
+<div class="card">
+  <div class="row" style="align-items:baseline">
+    <strong>#{{ "{:,}".format(row.number) }}</strong>
+    <span class="muted">{{ row.contenttype if row.contenttype else row.content_type }}</span>
+    <span class="muted" style="margin-left:auto">
+      {{ "{:,}".format(row.content_len) }} bytes</span>
+  </div>
+  {% if row.held and row.content_type.startswith('image/') %}
+    <a class="media" href="/content/{{ row.txid }}?download=1"
+       title="{{ row.txid }} — click to open"
+       data-view="/content/{{ row.txid }}" data-view-name="#{{ row.number }}">
+      <img src="/content/{{ row.txid }}" alt="inscription {{ row.number }}"
+           loading="lazy" style="max-width:100%;border-radius:8px;margin:8px 0"></a>
+  {% endif %}
+  <table>
+    <tr><td class="muted" style="width:74px">Owner</td>
+        <td class="mono" style="word-break:break-all">
+           {{ row.owner|who }}</td></tr>
+    <tr><td class="muted">Block</td>
+        <td>{{ "{:,}".format(row.block_height) }}</td></tr>
+    {% if row.collection %}
+    <tr><td class="muted">Collection</td>
+        <td><a href="/collections/{{ row.creator }}/{{ row.collection|urlencode }}">{{ wall(row.collection, 'collection name') }}</a>
+          {% if row.edition is not none %}<span class="muted">#{{ row.edition }}</span>{% endif %}</td></tr>
+    {% endif %}
+  </table>
+  <div class="row" style="margin-top:8px">
+    <a class="btn ghost small" href="/inscriptions/{{ row.txid }}/view">Open</a>
+    {{ share.button(row.txid, (wall_text(row.collection) ~ ' #' ~ row.edition) if row.collection else ('#' ~ row.number), row.content_type) }}
+    {% if row.owner in owned %}
+    <span class="muted" style="font-size:.8rem">yours &mdash;
+      <a href="{{ '/me/nfts' if public else '/wallet/nfts' }}">send it from your
+        wallet</a></span>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{% from "_pager.html" import pager %}
+
+<h1>NFTs {{ tk.chain_switch(chain, other_chains, csrf, "/inscriptions", public) }}</h1>
+{{ cl.line(chain, "/nfts") }}
+<p class="sub">A file written onto the chain in full, owned by an address.
+  The ones <em>you</em> hold, and the way to send them, are on the
+  <a href="{{ '/me/nfts' if public else '/wallet/nfts' }}">wallet's NFTs tab</a>.</p>
+{{ notord.pieces() }}
+
+<div class="row" style="margin-bottom:14px">
+  <a class="btn ghost small" href="/collections">Collections</a>
+  {# The wizard spends THIS NODE's wallet and names a folder on its disk, so
+     the door shuts it on a public instance (door.py NEVER_PUBLIC) -- and a
+     button that answers "Not here" is worse than no button. What a public
+     visitor inscribes with is below, out of their own coins. #}
+  {% if not public %}
+  <a class="btn ghost small" href="/inscriptions/collection">Inscribe a collection</a>
+  {% endif %}
+</div>
+
+<div class="chainbar">
+  {# hide_wallet for visitors and accounts: the Balance here is the NODE's wallet (2026-09-25). #}
+  {{ chains.card(chain, node, "Inscriptions live here.",
+                 "Wallet disabled on this node." if not node.wallet and not public else None,
+                 hide_wallet=public) }}
+</div>
+
+{% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+{% if public %}
+  {# Whose inscribe this page offers belongs to the door, not to the page. On a
+     public instance this node has no key that can put a file on the chain --
+     `/inscriptions/create` spends its own wallet and the door shuts it -- so
+     what is offered here is the account's: the same two panels the account's
+     own page has, from `_account_inscribe.html`, in one copy. Which of the
+     three sentences below is true is the account's, not this node's, and the
+     middle one matters most: a page that answers "sign in first" to somebody
+     who did sign in is a page that lies. #}
+  {% if account_address %}
+    <h2>Inscribe</h2>
+    <div class="msg err" id="trouble" hidden></div>
+    <div class="msg ok" id="news" hidden></div>
+    {% include "_account_inscribe.html" %}
+  {% elif account_signed %}
+    <h2>Inscribe</h2>
+    <div class="panel">
+      <p class="muted" style="margin:0">This page is showing {{ chain.label|lower }}
+        inscriptions, and this account has not told this node an address there,
+        so there is nothing here for it to sign. Click the other chain's tag
+        above, or open <a href="/me">your wallet</a> &mdash; that is the page
+        that tells this node your address on every chain it runs.</p>
+    </div>
+  {% else %}
+    <h2>Inscribe</h2>
+    <div class="panel">
+      <p class="muted" style="margin:0">An inscription is one transaction out of
+        your own wallet, which this node cannot sign on your behalf.
+        <a href="/me">Sign in and open your wallet</a>, and the way to put a
+        file up appears here.</p>
+    </div>
+  {% endif %}
+{% elif plan %}
+  <h2>Confirm before inscribing</h2>
+  <div class="panel" {% if chain.is_mainnet %}style="border-color:var(--bad);border-width:2px"{% endif %}>
+    {% if chain.is_mainnet %}
+      <p style="color:var(--bad);font-weight:600;margin-top:0">
+        This is mainnet. It is permanent, it cannot be taken back, and it is
+        paid for now.</p>
+    {% endif %}
+    <table>
+      <tr><td class="muted" style="width:130px">File</td>
+          <td>{{ attached_name }} <span class="muted">{{ attached_type }}</span></td></tr>
+      <tr><td class="muted">Size</td>
+          <td>{{ "{:,}".format(plan.content_len) }} bytes, uncompressed</td></tr>
+      <tr><td class="muted">Transactions</td>
+          <td>{{ "{:,}".format(plan.chunks) }}</td></tr>
+      <tr><td class="muted">Fee</td><td>{{ "%.2f"|format(plan.estimate.fee) }}</td></tr>
+      <tr><td class="muted">Dust</td>
+          <td>{{ "%.2f"|format(plan.estimate.dust) }}
+            <span class="muted">&mdash; in outputs you can sweep back later</span></td></tr>
+      <tr><td class="muted">Total now</td>
+          <td><strong>{{ "%.2f"|format(plan.estimate.total) }}</strong></td></tr>
+      <tr><td class="muted">Net after sweeping</td>
+          <td>{{ "%.2f"|format(plan.estimate.net) }}</td></tr>
+      {% if plan.json %}
+      <tr><td class="muted">JSON</td>
+          <td><code style="word-break:break-all">{{ plan.json }}</code></td></tr>
+      {% endif %}
+    </table>
+    <form method="post" action="/inscriptions/create" class="row" style="margin-top:14px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="attached_b64" value="{{ attached_b64 }}">
+      <input type="hidden" name="attached_name" value="{{ attached_name }}">
+      <input type="hidden" name="attached_type" value="{{ attached_type }}">
+      <input type="hidden" name="json_field" value="{{ json_field or '' }}">
+      <input type="hidden" name="confirmed" value="yes">
+      <button type="submit" class="{{ 'danger' if chain.is_mainnet }}">
+        Inscribe it</button>
+      <a class="btn ghost" href="/nfts">Cancel</a>
+    </form>
+  </div>
+{% else %}
+  <h2>Inscribe a file</h2>
+  <div class="panel">
+    <form method="post" action="/inscriptions/create" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="field">
+        <label for="file">The file</label>
+        <input autocomplete="off" type="file" name="attachment" id="file"
+               data-price>
+        <p class="muted" id="priced" hidden style="margin:8px 0 0"></p>
+      </div>
+      <div class="field">
+        <label for="json_field">JSON, optional &mdash; inscribed with it and never editable</label>
+        <textarea autocomplete="off" name="json_field" id="json_field" rows="3"
+                  style="min-height:70px">{{ json_field or '' }}</textarea>
+      </div>
+      <button type="submit">Price it</button>
+      <p class="muted" style="margin-bottom:0">
+        Nothing is spent until you see the cost and press again. It goes on
+        uncompressed, exactly as it is.</p>
+    </form>
+  </div>
+{% endif %}
+
+{% if unfinished %}
+<h2>Unfinished</h2>
+<div class="panel">
+  <p style="margin-top:0">Pieces of yours are on the chain and the set is not
+    complete. They are paid for and will never become an inscription until the
+    rest goes out.</p>
+  <table>
+    <tr><th>Id</th><th>Pieces</th><th>First seen</th></tr>
+    {% for u in unfinished %}
+    <tr><td class="mono">{{ u.inscription_id[:16] }}…</td>
+        <td>{{ u.have }} of {{ u.expected }}</td>
+        <td>block {{ "{:,}".format(u.first_block) }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<h2>Everything on {{ chain.label }}
+  {% if total %}<span class="muted" style="text-transform:none;letter-spacing:0">
+    &mdash; {{ "{:,}".format(total) }}</span>{% endif %}</h2>
+{% if not inscriptions %}
+  <p class="muted">None indexed yet.</p>
+{% else %}
+  <div class="cards">
+    {% for row in inscriptions %}{{ card(row, tags) }}{% endfor %}
+  </div>
+  {{ pager(page, pages, "/nfts") }}
+{% endif %}
+
+<script nonce="{{ csp_nonce }}">
+function priceInscription(input){
+  var note = document.getElementById('priced');
+  var file = input.files && input.files[0];
+  if (!file) { note.hidden = true; return; }
+  // Priced from the length alone, so choosing a 40 MB file does not mean
+  // holding a second copy of it to find out what it costs.
+  var perChunk = 7628, perOutput = 60, dust = 0.01, feePerKb = 0.01;
+  var chunks = Math.max(1, Math.ceil(file.size / perChunk));
+  var outputs = Math.ceil(file.size / perOutput) + chunks;
+  var chainKb = (chunks * 300 + outputs * 114) / 1000;
+  var fee = chainKb * feePerKb, dustTotal = outputs * dust;
+  note.hidden = false;
+  note.innerHTML = '<strong></strong> — ' + arcadeSize(file.size) +
+    ', about <strong>' + chunks.toLocaleString() + '</strong> transaction' +
+    (chunks === 1 ? '' : 's') + ', ' + arcadeCoins(fee + dustTotal) +
+    ' to send and ' + arcadeCoins(fee) + ' once the dust is swept back.';
+  // The name as text (2026-11-09, security review): a file can be called anything, markup included.
+  note.querySelector('strong').textContent = file.name;
+}
+// Attached here, not written into the markup (the script policy, 2026-11-09): the file is priced as it is chosen,
+// and a picture opens in the viewer, the link's own href being the download the viewer offers.
+document.addEventListener('change', function (e) {
+  if (e.target.matches && e.target.matches('input[data-price]')) priceInscription(e.target);
+});
+document.addEventListener('click', function (e) {
+  var a = e.target.closest && e.target.closest('a.media[data-view]');
+  if (!a) return;
+  e.preventDefault();
+  arcadeOpenImage(a.dataset.view, a.dataset.viewName, a.getAttribute('href'));
+});
+</script>
+{% endblock %}

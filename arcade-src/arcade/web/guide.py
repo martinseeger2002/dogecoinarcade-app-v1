@@ -1,0 +1,285 @@
+"""The written documentation, inside the application.
+
+Somebody offline, or on a clone, or who does not know there is a website,
+still has to be able to find out what the thing in front of them does. So
+the documents ship WITH the application rather than only on a site: the
+whole of `docs/` is copied into `web/docs/` at release time and checked by
+a test, and every instance serves it -- which is also what lets a clone be
+a complete copy rather than a program with its manual somewhere else.
+
+There used to be a second, shorter guide written by hand in this module,
+kept in step by a test that compared section titles. Two descriptions of
+one program is one too many: the short one was always a little behind, and
+the test only noticed when a heading changed, never when a sentence went
+stale.
+
+Markdown is rendered here rather than by a library. The subset these
+documents use is small -- headings, bullets, emphasis, code, links, tables,
+rules -- and a wallet should not grow a dependency to show its own help.
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from pathlib import Path
+
+GUIDE = Path(__file__).parent / "templates" / "guide.md"
+
+#: The working plans: who builds what next, and the notes the agents building
+#: it follow. They ship with the program for its operator and are served to
+#: nobody else -- not on /docs to a stranger, and not in the source archive a
+#: clone downloads (2026-09-28: "make the plan private"). A plan read
+#: by the public is a plan whose agent instructions are public too.
+#: arcade/bootstrap.py keeps the same list; a test holds them together.
+PRIVATE = ("multi-user.md", "voice-plan.md", "doginals-index-plan.md",
+           # The engineering history too (2026-09-28: the public docs are
+           # general documentation -- what it is, how it works, how to run a node).
+           "DECISIONS.md", "M0-notes.md", "M1-notes.md", "M2-notes.md", "03-companion-app-design.md", "p2p-messaging.md", "tokens-notes.md", "messaging/04-testnet-results.md")
+
+#: Everything else, as shipped. One directory, read at request time like the
+#: templates are, so a document can be corrected without a restart.
+DOCS = Path(__file__).parent / "docs"
+
+#: The order they are offered in: what somebody arriving wants first, then
+#: what somebody building on it wants, then the history. A document not
+#: named here is still served -- it goes at the end under its own file name
+#: -- so adding one to `docs/` is enough to publish it.
+ORDER = (
+    ("how-it-works.md", "How DogecoinArcade works",
+     "What it is, what lives on the chain, and what your browser and a node each do."),
+    ("features.md", "What it does", "Every part of the application, in one page."),
+    ("llm.md", "AI models and pictures on the exchange",
+     "Use, buy, sell and share AI models and pictures: credit, chat, API keys, the arcade helper."),
+    ("ords.md", "Inscribing ords from your wallet",
+     "Doginals, Pepinals, Bellinals, Luckinals and Wojakinals from the Creator tab, each chain's rules, and collection indexes."),
+    ("collections.md", "Collections: putting a set of inscriptions on the arcade",
+     "Step by step: run a HashLips build or a folder of pictures, inscribe a set as ords, or index ords already inscribed."),
+    ("lora.md", "LoRa: reaching an arcade by radio",
+     "Run a Meshtastic gateway on your arcade, and flash T-Decks with the arcade firmware."),
+    ("mesh-web.md", "The .mesh web: pages for the T-Deck",
+     "Claim a .mesh name, publish a page in MeshText, and read pages on a T-Deck over WiFi or LoRa."),
+    ("prize-pools.md", "Prize pools",
+     "How a game or any page pays out tokens to whoever wins, and how to make one."),
+    ("referee.md", "The referee: prizes for a verified win",
+     "Make a prize pool pay only for a real win: a judge, seeds and replays."),
+    ("mintpads.md", "Mintpads: designing your own",
+     "Build your own mintpad page instead of using the ready-made looks."),
+    ("games.md", "Apps: making one and listing it on the Apps tab",
+     "Make an app step by step, put it on the Apps tab and the App Store: its card, versions, switches and launchers."),
+    ("multiplayer.md", "Multiplayer and trades",
+     "Rooms where players meet in your game, and trades between them: arcade.realtime and arcade.swap.trade."),
+    ("swaps.md", "Swaps between chains: how a trade works here",
+     "Trade PEP for DOGE and more with anyone, trustlessly: lock scripts, two minutes, nothing held."),
+    ("exchange-safety.md", "Exchange safety: what may be signed ahead, and why",
+     "For whoever changes the exchange: the rules that keep pre-signed listings, lots and swap locks from being "
+     "taken, learned from the Doginal Dogs theft (2026-10-26)."),
+    ("litecoin.md", "Litecoin on this arcade",
+     "What works on Litecoin, inscriptions and Taproot, and what to know before exchanging across chains."),
+    ("bellscoin.md", "Bellscoin on this arcade",
+     "Running a Bells node, its B and D addresses, fees, and Bellinals numbered like the official indexer."),
+    ("luckycoin.md", "Luckycoin on this arcade",
+     "Running a Luckycoin node, its K and L addresses, fees, and Luckinals."),
+    ("kotia.md", "Kotia on this arcade",
+     "Running a Kotia node, its K addresses, timed transactions, fees, and data outputs."),
+    ("moonbrix.md", "MoonBrix 2",
+     "tbuuol's protocol on Kotia: TLDs, spaces, inscriptions, files, tokens, NFTs and a DEX, byte by byte."),
+    ("wojakcoin.md", "Wojakcoin on this arcade",
+     "Running a Wojakcoin node, its W addresses, fees, and Wojakinals."),
+    ("digibyte.md", "DigiByte on this arcade",
+     "Running a DigiByte node, its D and S addresses, fees, and why its proof of work is the sharer's word."),
+    ("flopcoin.md", "Flopcoin on this arcade",
+     "Running a Flopcoin node, finding peers, its F addresses, shared keys, fees, and Flopinals."),
+    ("escrow.md", "Escrow: holding players' items for your game",
+     "Put a player's NFTs and tokens at stake: your judge decides who gets them, the player can always take them back after the unlock time."),
+    ("game-state.md", "Game state: a game's own record on each NFT",
+     "Conditions, charges and counts that travel with a piece, written only by its game: arcade.state."),
+    ("broadcasts.md", "Broadcasts: one node telling every node",
+     "Public machine talk under a topic, and the sensitive-material flags it carries."),
+    ("mining.md", "Mining on this arcade",
+     "The Mining module: this machine's CPU on test chains, and your own ASICs over stratum, chain by chain."),
+    ("shared-cores.md", "Shared Cores: running some chains, borrowing the rest",
+     "Share a chain's Core with other arcades, borrow the chains you do not run, and compare indexes."),
+    ("adding-a-chain.md", "Adding a chain: the checklist",
+     "For whoever adds the next coin: what is data, what still needs a hand, and how to prove it."),
+    ("inscription-api.md", "The inscription API",
+     "What an inscribed page may ask the wallet, and what it is refused."),
+    ("bot-rpc.md", "The bot RPC",
+     "The JSON-RPC endpoint for programs running beside the wallet."),
+    ("multi-user.md", "Letting other people in",
+     "The plan for accounts, seats and keys that never leave the browser."),
+    ("00-node-setup.md", "Setting up a node",
+     "What the installer does, and how to do it by hand."),
+    ("remote-access.md", "Reaching your node from elsewhere",
+     "The loopback default and why, the tunnel wizard, and what each way in exposes."),
+    ("messaging/02-design.md", "Messaging: the design",
+     "The envelope, the encryption and what the chain carries."),
+    ("messaging/01-node.md", "Messaging: the node", "The Pepecoin test side of it."),
+    ("messaging/04-testnet-results.md", "Messaging: measured",
+     "What it actually cost and how long it actually took."),
+    ("p2p-messaging.md", "Why not peer-to-peer",
+     "The design that was rejected, and why."),
+    ("tokens-notes.md", "Tokens: notes", "Working notes on the token layer."),
+    ("03-companion-app-design.md", "The companion app", "An earlier design."),
+    ("M0-notes.md", "Milestone 0", "Working notes."),
+    ("M1-notes.md", "Milestone 1", "Working notes."),
+    ("M2-notes.md", "Milestone 2", "Working notes."),
+    ("DECISIONS.md", "Every decision, and why",
+     "The engineering record: what was chosen, what was rejected, and what "
+     "went wrong first. The longest document here and the most useful one "
+     "if you are going to change something."),
+)
+
+
+def pages(private: bool = True) -> list[dict]:
+    """Every document that ships, in the order above and then the rest.
+
+    `private=False` leaves out the plans (PRIVATE), for anybody who is not
+    the operator."""
+    named = {name for name, _, _ in ORDER}
+    found = []
+    for name, title, blurb in ORDER:
+        if not private and name in PRIVATE:
+            continue
+        if (DOCS / name).exists() or name == "features.md":
+            found.append({"name": name, "title": title, "blurb": blurb})
+    for path in sorted(DOCS.rglob("*.md")):
+        name = str(path.relative_to(DOCS))
+        if name not in named and (private or name not in PRIVATE):
+            found.append({"name": name, "title": path.stem.replace("-", " "),
+                          "blurb": ""})
+    return found
+
+
+def page(name: str) -> str | None:
+    """One document's text, or None. Never a path somebody handed us."""
+    if name == "features.md":
+        return GUIDE.read_text(encoding="utf-8") if GUIDE.exists() else None
+    if any(part in ("..", "") for part in Path(name).parts):
+        return None
+    target = (DOCS / name).resolve()
+    if not str(target).startswith(str(DOCS.resolve())) or not target.is_file():
+        return None
+    if target.suffix != ".md":
+        return None
+    return target.read_text(encoding="utf-8")
+
+
+def title_of(name: str) -> str:
+    for known, title, _ in ORDER:
+        if known == name:
+            return title
+    return Path(name).stem.replace("-", " ")
+
+
+def document(text: str) -> list[dict]:
+    """A whole document as (title, html) sections, one per `## ` heading."""
+    found: list[dict] = [{"title": "", "body": []}]
+    for line in (text or "").splitlines():
+        if line.startswith("## "):
+            found.append({"title": line[3:].strip(), "body": []})
+        elif line.startswith("# "):
+            continue                      # the document's own title
+        else:
+            found[-1]["body"].append(line)
+    return [{"title": s["title"], "html": render(s["body"])}
+            for s in found if any(line.strip() for line in s["body"])]
+
+#: Where a bug goes. In the application because that is where somebody is
+#: standing when they find one.
+BUGS_URL = "https://dogecoinarcade.com/bugs"
+
+#: The dashes-and-colons row under a table's header. It has to contain a
+#: dash: a table with no header starts `| | |`, which is pipes and spaces
+#: and would otherwise be eaten as a rule -- and then the first real row
+#: becomes a heading and reads as one.
+_RULE = re.compile(r"^\|[\s:|-]*-[\s:|-]*\|?$")
+
+_INLINE = (
+    (re.compile(r"`([^`]+)`"), r"<code>\1</code>"),
+    (re.compile(r"\*\*([^*]+)\*\*"), r"<strong>\1</strong>"),
+    (re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)"), r"<em>\1</em>"),
+    (re.compile(r"\[([^\]]+)\]\(([^)]+)\)"), r'<a href="\2">\1</a>'),
+)
+
+
+def inline(text: str) -> str:
+    """Escape first, then mark up: a document is text, not markup."""
+    out = html.escape(text, quote=False)
+    for pattern, replacement in _INLINE:
+        out = pattern.sub(replacement, out)
+    return out
+
+
+def sections() -> list[dict]:
+    """The document as (title, html) pairs, one per `## ` heading.
+
+    The lead paragraphs before the first heading come back as a section with
+    no title, so nothing in the file is silently dropped.
+    """
+    text = GUIDE.read_text(encoding="utf-8") if GUIDE.exists() else ""
+    found: list[dict] = [{"title": "", "body": []}]
+    for line in text.splitlines():
+        if line.startswith("## "):
+            found.append({"title": line[3:].strip(), "body": []})
+        elif line.startswith("# "):
+            continue                      # the document's own title
+        else:
+            found[-1]["body"].append(line)
+    return [{"title": s["title"], "html": render(s["body"])}
+            for s in found if any(line.strip() for line in s["body"])]
+
+
+def render(lines: list[str]) -> str:
+    """One section's lines as HTML. Blocks are separated by blank lines."""
+    out: list[str] = []
+    bullets: list[str] = []
+    paragraph: list[str] = []
+    table: list[str] = []
+
+    def flush() -> None:
+        if bullets:
+            out.append("<ul>" + "".join(f"<li>{inline(b)}</li>" for b in bullets)
+                       + "</ul>")
+            bullets.clear()
+        if table:
+            # A pipe table. The separator row is the one made of dashes and
+            # colons; the row before it, if there is one, is the header.
+            rows = [[cell.strip() for cell in line.strip().strip("|").split("|")]
+                    for line in table if not _RULE.match(line)]
+            header = bool(rows) and any(cell for cell in rows[0])
+            rows = [r for r in rows if any(cell for cell in r)]
+            body = []
+            for n, cells in enumerate(rows):
+                tag = "th" if header and n == 0 else "td"
+                body.append("<tr>" + "".join(
+                    f"<{tag}>{inline(c)}</{tag}>" for c in cells) + "</tr>")
+            out.append("<table>" + "".join(body) + "</table>")
+            table.clear()
+        if paragraph:
+            out.append(f"<p>{inline(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            flush()
+        elif stripped == "---":
+            flush()
+        elif stripped.startswith("### "):
+            flush()
+            out.append(f"<h3>{inline(stripped[4:])}</h3>")
+        elif stripped.startswith("|"):
+            if paragraph or bullets:
+                flush()
+            table.append(stripped)
+        elif stripped.startswith(("* ", "- ")):
+            if paragraph:
+                flush()
+            bullets.append(stripped[2:])
+        elif bullets and line.startswith(("  ", "\t")):
+            bullets[-1] += " " + stripped     # a bullet wrapped onto more lines
+        else:
+            paragraph.append(stripped)
+    flush()
+    return "".join(out)

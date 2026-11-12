@@ -1,0 +1,488 @@
+{# A tab's own lock-script swaps (2026-10-13, trustless-trading-plan.md): its trades in
+   progress and its listed swaps, run by this page while the tab is open. Included by the
+   Exchange's "Swaps between arcades" card and by a coin pair's market (coin_pair.html).
+   Binds [data-take-order] buttons, #tab-list-form and form[data-pair-side]. #}
+    <div id="tab-trades" hidden style="margin-top:10px">
+      <div class="ex-h">Your swaps <span class="muted" style="font-weight:500">&middot; once yours is locked, your node finishes it even if you close the page</span></div>
+      <div id="tab-trades-list"></div>
+    </div>
+    {# A tab LISTS its own swap (2026-10-13): inscribed from this account, answered by this
+       tab, so it stands only while the tab is open (it lapses about an hour after). #}
+    <div id="tab-orders" hidden style="margin-top:10px">
+      <div class="ex-h">Your listed swaps <span class="muted" style="font-weight:500">&middot; your arcade fills them</span></div>
+      <div id="tab-orders-list"></div>
+    </div>
+    <script type="module" nonce="{{ csp_nonce }}">
+    import * as wallet from "/wallet.js";
+    const CHAIN = {network: "{{ state.messaging.network }}", version: {{ state.messaging.params.pubkeyhash_version }}};
+    const box = document.getElementById("tab-trades"), list = document.getElementById("tab-trades-list");
+    let held = null;
+    const keys = async () => held || (held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN));
+    const coinName = (n) => n === "doge" ? "DOGE" : n === "main" ? "PEP" : n === "ltc" ? "LTC"
+      : n === "ltctest" ? "LTC TEST" : n === "bel" ? "BEL" : n === "lky" ? "LKY" : n === "kot" ? "KOT" : n === "wjk" ? "WJK" : n === "dgb" ? "DGB" : n === "flop" ? "FLOP" : "PEP TEST";
+    const amt = (leg) => leg.label || (leg.kind === "doginal" ? `Doginal ${String(leg.asset).slice(0, 8)}\u2026${String(leg.asset).replace(/^[0-9a-f]{64}/, "")}`
+      : leg.kind === "token" ? `${leg.amount} of token #${leg.asset}`
+      : leg.kind === "token20" ? `${leg.amount} ${leg.asset}`
+      : leg.kind === "nft" ? `NFT ${String(leg.asset).slice(0, 10)}\u2026` : `${(leg.amount / 1e8).toString()} ${coinName(leg.network)}`);
+    const obox = document.getElementById("tab-orders"), olist = document.getElementById("tab-orders-list");
+    // The reader's own swap is a row of the market's own book where that book is on the page
+    // (2026-10-17: "the user's order should go into the order book and instead of a buy or
+    // take button it should have a cancel button"): marked yours, Cancel withdraws it. Only the
+    // ones on no book here are listed below.
+    function markBook(w, o) {
+      const take = document.querySelector(`[data-take-id="${CSS.escape(o.id)}"]`);
+      if (!take) return false;
+      const row = take.closest(".obrow");
+      if (row) {
+        row.classList.add("mine");
+        const who = row.querySelector(".obamt small");
+        if (who && !who.dataset.yours) { who.dataset.yours = "1"; who.textContent = who.textContent.replace(/\u00b7[^\u00b7]*$/, "\u00b7 yours"); }
+      }
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "ghost small"; cancel.textContent = "Cancel";
+      cancel.dataset.mineId = o.id;
+      cancel.addEventListener("click", async () => {
+        cancel.disabled = true; cancel.textContent = "Cancelling\u2026"; step("withdrawing");
+        try { await wallet.withdrawOrder(w, o.id); if (row) row.remove(); else cancel.remove(); step("withdrawn"); drawOrders(w); }
+        catch (e) { cancel.disabled = false; cancel.textContent = "Cancel"; step("failed", e); alert(String(e.message || e)); }
+      });
+      take.replaceWith(cancel);
+      return true;
+    }
+    // A listing of the reader's own for THIS market that the book does not show yet (the node reads
+    // order batches once they are in a block): drawn into the book at once, yours, with Cancel.
+    const legKey = (l) => l.kind === "coin" ? `${l.network}-coin` : `${l.network}-${l.kind}-${l.asset}`;
+    function addToBook(w, o) {
+      const book = document.getElementById("swap-pair");
+      if (!book || !o.give || !o.get) return false;
+      const B = book.dataset.base, Q = book.dataset.quote, gk = legKey(o.give), tk = legKey(o.get);
+      const sell = gk === B && tk === Q, buy = gk === Q && tk === B;
+      if (!sell && !buy) return false;
+      const scale = (div) => div === "1" ? 1e8 : 1;
+      const base = sell ? o.give : o.get, quote = sell ? o.get : o.give;
+      const units = Number(base.amount) / scale(book.dataset.baseDiv), paid = Number(quote.amount) / scale(book.dataset.quoteDiv);
+      const fmt = (n) => Number(n).toLocaleString(undefined, {maximumFractionDigits: 8});
+      const row = document.createElement("div");
+      row.className = `obrow ${sell ? "ask" : "bid"} mine`; row.style.setProperty("--depth", "100%");
+      row.dataset.local = o.id;               // this page's own copy, until the node's row for it arrives
+      const px = document.createElement("span"); px.className = "obprice mono"; px.textContent = fmt(units ? paid / units : 0);
+      const amt = document.createElement("span"); amt.className = "obamt";
+      const n = document.createElement("span"); n.className = "mono"; n.textContent = book.dataset.whole === "1" ? "1" : fmt(units);
+      const who = document.createElement("small"); who.className = "muted"; who.textContent = "yours \u00b7 listed just now";
+      amt.append(n, who);
+      const take = document.createElement("span"); take.className = "obdo";
+      const btn = document.createElement("button"); btn.dataset.takeId = o.id; take.append(btn);
+      row.append(px, amt, take);
+      document.getElementById("book-empty")?.remove();
+      const mid = book.querySelector(".obmid");
+      if (sell && mid) mid.before(row); else book.append(row);
+      return markBook(w, o);
+    }
+    function drawOrders(w) {
+      // The node's own row for an order replaces this page's copy of it (2026-10-17: shown twice until a refresh).
+      document.querySelectorAll(".obrow[data-local]").forEach((r) => {
+        if (document.querySelector(`[data-cancel-order="${CSS.escape(r.dataset.local)}"]`)) r.remove();
+      });
+      // A swap the reader withdrew stays off the page, though a node still lists it until it hears.
+      for (const id of wallet.myCancelled(w)) {
+        document.querySelectorAll(`[data-take-id="${CSS.escape(id)}"], [data-mine-id="${CSS.escape(id)}"]`)
+          .forEach((b) => (b.closest(".obrow") || b).remove());
+      }
+      // One being filled right now is off the book, here as everywhere: no row, no Cancel (2026-10-17).
+      const every = wallet.myOrders(w).filter((o) => !o.taking);
+      for (const o of wallet.myOrders(w).filter((x) => x.taking)) {
+        document.querySelectorAll(`.obrow[data-local="${CSS.escape(o.id)}"]`).forEach((r) => r.remove());
+      }
+      globalThis.myOrderIds = new Set(every.map((o) => o.id));
+      const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`)
+                                      && !addToBook(w, o));
+      if (globalThis.swapBoxDraw) globalThis.swapBoxDraw();
+      obox.hidden = !all.length;
+      olist.replaceChildren(...all.map((o) => {
+        const row = document.createElement("div");
+        row.className = "row"; row.style.cssText = "gap:8px;align-items:center;padding:4px 0";
+        const what = document.createElement("span");
+        what.style.flex = "1"; what.textContent = `${(o.labels && o.labels[0]) || amt(o.give)} for ${(o.labels && o.labels[1]) || amt(o.get)}`;
+        const out = document.createElement("button");
+        out.type = "button"; out.className = "ghost small"; out.textContent = "Withdraw";
+        out.addEventListener("click", async () => {
+          out.disabled = true; out.textContent = "Withdrawing\u2026"; step("withdrawing");
+          try { await wallet.withdrawOrder(w, o.id); step("withdrawn"); drawOrders(w); }
+          catch (e) { out.disabled = false; out.textContent = "Withdraw"; step("failed", e); alert(String(e.message || e)); }
+        });
+        row.append(what, out);
+        return row;
+      }));
+    }
+    document.getElementById("tab-list-form")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = ev.target, button = f.querySelector("button");
+      const sats = (v) => Math.round(Number(String(v).trim()) * 1e8);
+      // "regtest" is a coin; "token:<network>:<id>:<divisible>" a token this account holds.
+      const pick = f.give_network.value.split(":");
+      const label = f.give_network.selectedOptions[0].textContent.trim();
+      const give = pick[0] === "nft"
+        ? {network: pick[1], kind: "nft", asset: pick[2], amount: 1, label}
+        : pick[0] === "token"
+        ? {network: pick[1], kind: "token", asset: pick[2],
+           amount: pick[3] === "1" ? sats(f.give_amount.value) : Math.round(Number(f.give_amount.value)),
+           label: `${String(f.give_amount.value).trim()} ${f.give_network.selectedOptions[0].textContent.trim()}`}
+        : {network: pick[0], amount: sats(f.give_amount.value)};
+      const get = {network: f.get_network.value, amount: sats(f.get_amount.value)};
+      if (!(give.amount > 0 && get.amount > 0)) return alert("Both amounts, please.");
+      if (give.network === get.network) {
+        // One chain: instant, one transaction, on that chain's own market (2026-10-13).
+        if (give.kind === "nft") {
+          if (await approve("Sell it on its own page?", "Both sides are on one chain, so this trade settles "
+              + "instantly in a single transaction: list the piece for a price on its own page.", "Open the piece"))
+            location.href = `/inscriptions/${give.asset}`;
+          return;
+        }
+        if (give.kind === "token") {
+          if (await approve("Trade it on its own market?", "Both sides are on one chain, so this trade "
+              + "settles instantly in a single transaction on the token's own market -- no locks, no waiting.",
+              "Open the market")) location.href = `/exchange/pair/${give.asset}`;
+          return;
+        }
+        return alert("A swap is one coin for another, on two different chains.");
+      }
+      if (await overCap(give)) return;
+      const ok = await arcadeAsk("List this swap?",
+        `${amt(give)} for ${amt(get)}. ` + listWords(give) + await wallet.swapFees(give, get), "List it");
+      if (!ok) { step("cancelled"); return; }
+      button.disabled = true;
+      step("listing");
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
+        track("Listed", -1, delegates(give) ? "Your arcade's node fills it now, with every page closed. When it sells you get a notification."
+          : "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
+        step("listed");
+        f.reset(); drawOrders(w);
+      } catch (e) { step("failed", e); alert(String(e.message || e)); }
+      finally { button.disabled = false; }
+    });
+    // What happened to the reader's swaps, said as it happens (2026-10-17: "there needs
+    // to be some kind of notification that it happened"): a toast at each step, and on a market
+    // page (#swap-progress) a card with the swaps still running or just finished.
+    // What a press is doing, said at once (2026-10-17: "As soon as buttons are pressed by
+    // users, they need to have clarity that the action that they took is taking place"): a toast,
+    // and an event the market's Buy/Sell box shows on its own button (swap_pair.html).
+    const PRESS = {asking: "Asking the seller's page to swap\u2026",
+                   asked: "Asked. The seller's page answers in seconds; each step pops up here.",
+                   listing: "Listing your swap\u2026", withdrawing: "Taking your swap off the book\u2026",
+                   withdrawn: "Your swap is off the book."};
+    // One live card instead of a toast per step (2026-10-17: taking an order is "very confusing and there's a lot
+    // of ok to click. It needs to be smooth, seamless, and instant"): the swap's steps tick by in place, nothing to press,
+    // and it goes away by itself a few seconds after the swap ends.
+    const STEPS = [["asked", "Asked the seller"], ["accepted", "Accepted"], ["locked", "Your side locked"],
+                   ["theirs", "Their side locked"], ["done", "Done"]];
+    let trackHide = null;
+    function track(head, at, sub, bad) {
+      let card = document.getElementById("swap-tracker");
+      if (!card) {
+        card = document.createElement("div"); card.id = "swap-tracker"; card.setAttribute("role", "status");
+        card.setAttribute("aria-live", "polite");
+        card.style.cssText = "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:58;width:min(92vw,420px);"
+          + "background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 14px;"
+          + "box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:.9rem;transition:opacity .4s";
+        card.addEventListener("click", () => { card.style.opacity = "0"; setTimeout(() => card.remove(), 400); });
+        document.body.append(card);
+      }
+      card.style.opacity = "1";
+      const h = document.createElement("div"); h.style.cssText = "font-weight:700;margin-bottom:6px"; h.textContent = head;
+      card.replaceChildren(h);
+      if (at >= 0) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:center";
+        STEPS.forEach(([, label], i) => {
+          const dot = document.createElement("span");
+          const done = i < at || (i === at && at === STEPS.length - 1), now = i === at && !done;
+          dot.title = label;
+          dot.style.cssText = "flex:1;height:6px;border-radius:3px;background:" + (bad ? "var(--bad)" : done ? "var(--ok)"
+            : now ? "var(--accent)" : "var(--line)") + (now && !bad ? ";animation:swpulse 1s ease-in-out infinite alternate" : "");
+          row.append(dot);
+        });
+        card.append(row);
+        const lab = document.createElement("div"); lab.className = "muted"; lab.style.cssText = "font-size:.8rem;margin-top:5px";
+        lab.textContent = sub || (STEPS[Math.max(0, Math.min(at, STEPS.length - 1))][1] + (at < STEPS.length - 1 ? "\u2026" : ""));
+        card.append(lab);
+      } else if (sub) {
+        const lab = document.createElement("div"); lab.className = "muted"; lab.style.fontSize = ".84rem"; lab.textContent = sub;
+        card.append(lab);
+      }
+      if (!document.getElementById("swpulse-css")) {
+        const st = document.createElement("style"); st.id = "swpulse-css";
+        st.textContent = "@keyframes swpulse{from{opacity:.45}to{opacity:1}}"; document.head.append(st);
+      }
+      clearTimeout(trackHide);
+      if (at === STEPS.length - 1 || bad || at < 0) trackHide = setTimeout(() => { card.style.opacity = "0";
+        setTimeout(() => card.remove(), 400); }, bad ? 9000 : 5000);
+    }
+    globalThis.arcadeSwapTrack = track;
+    // Every swap fills with the seller away (2026-10-17: "I want pre-signed ... for all orders. So that orders
+    // can be filled without the counterparty being on Arcade"): its side waits at the order's own key and this
+    // account's node finishes it (wallet.js delegateOrder). A Doginal still settles from a page.
+    // A DRC-20 / PRC-20 token too (2026-10-22): its lock is four steps from the page (token20_swap), none by the node.
+    function delegates(give) { return !["doginal", "token20"].includes(give.kind || "coin"); }
+    // Not trustless, said before the press (2026-10-25): the node holds a delegated order's key (wallet.js
+    // delegateOrder), so it is capped per order (node_trader.DELEGATE_CAP).
+    const HELD_WORDS = "This arcade holds this order's key while it trades for you: its operator could spend what you "
+      + "deposit. Only delegate amounts you'd trust this arcade with.";
+    async function overCap(give) {
+      const over = delegates(give) ? await wallet.delegateOver(give).catch(() => "") : "";
+      if (over) alert(`You can't list this swap: ${over}.`);
+      return !!over;
+    }
+    function listWords(give) {
+      return delegates(give)
+        ? "Yours moves to this order's own address now, and your arcade's node fills the order for you -- you can close "
+          + "every page. Cancel sends it straight back. " + HELD_WORDS + " "
+        : "It stands while an arcade page is open here; it settles through lock scripts on both chains. ";
+    }
+    if (!document.getElementById("cant-css")) {
+      const st = document.createElement("style"); st.id = "cant-css";
+      st.textContent = "[data-take-order].cant{opacity:.4;filter:grayscale(1)}";
+      document.head.append(st);
+    }
+    function step(what, error) {
+      const SAY = {asking: ["Taking the swap", 0, "Asking the seller's page\u2026"], asked: ["Taking the swap", 0, ""],
+                   listing: ["Listing your swap", -1, "Writing it to the book\u2026"],
+                   withdrawing: ["Taking your swap off the book", -1, "\u2026"],
+                   withdrawn: ["Your swap is off the book", -1, ""]};
+      if (what === "failed" && error) track("That did not work", -1, String(error.message || error), true);
+      else if (SAY[what]) track(SAY[what][0], SAY[what][1], SAY[what][2]);
+      try { document.dispatchEvent(new CustomEvent("arcade:swap-step", {detail: {what, error: error ? String(error.message || error) : ""}})); } catch (e) {}
+    }
+    // One OK, and only for listing or buying (2026-10-17: "The only time you should confirm
+    // anything is when you're listing it or buying it" -- "only ... once"): the Take and List dialogs
+    // stay, and approve every lock, claim and refund after them. Anything else (sending you to a
+    // one-chain trade's own page) just happens, said in a toast.
+    async function approve(title, body) {
+      track(String(title).replace(/\?$/, ""), -1, `${String(body).split(". ")[0]}.`);
+      return true;
+    }
+    const SAID = {proposed: "Swap asked: waiting for the seller's page to accept",
+                  accepted: "Swap accepted: locking your side", locked: "Your side is locked: waiting for theirs, then it settles",
+                  done: "Swap done", aborted: "Swap called off"};
+    const seenStates = (() => { try { return JSON.parse(sessionStorage.getItem("arcade-swap-states") || "{}"); } catch (e) { return {}; } })();
+    function tell(all) {
+      let changed = false;
+      for (const t of all) {
+        if (seenStates[t.id] === t.state) continue;
+        const first = !(t.id in seenStates);
+        seenStates[t.id] = t.state; changed = true;
+        // A swap already finished before this page opened is history, not news.
+        if (first && (t.state === "done" || t.state === "aborted") && Date.now() - (t.created || 0) > 10 * 60 * 1000) continue;
+        const at = {proposed: 0, accepted: 1, locked: t.theirLock ? 3 : 2, done: 4}[t.state];
+        const head = `${amt(t.give)} for ${amt(t.get)}`;
+        if (t.state === "aborted") track(`Called off: ${head}`, -1, t.note || "Nothing was locked.", true);
+        else track(t.state === "done" ? `Swap done: ${head}` : head, at ?? 0, t.state === "done" ? "Done. It's in your wallet." : "");
+      }
+      if (changed) try { sessionStorage.setItem("arcade-swap-states", JSON.stringify(seenStates)); } catch (e) {}
+    }
+    function progress(all) {
+      const card = document.getElementById("swap-progress");
+      if (!card) return;
+      const shown = all.filter((t) => !["done", "aborted"].includes(t.state) || Date.now() - (t.created || 0) < 30 * 60 * 1000).slice(0, 5);
+      card.hidden = !shown.length;
+      card.querySelector("[data-list]").replaceChildren(...shown.map((t) => {
+        const p = document.createElement("div");
+        p.style.cssText = "display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:.88rem";
+        const pill = document.createElement("span");
+        pill.className = "ex-pill" + (t.state === "done" ? " done" : "");
+        pill.textContent = t.state === "proposed" ? "asked" : t.state === "aborted" ? "called off" : t.state;
+        const what = document.createElement("span");
+        what.textContent = `${amt(t.give)} for ${amt(t.get)}${t.note ? " \u00b7 " + t.note : ""}`;
+        p.append(pill, what);
+        return p;
+      }));
+    }
+    // Buttons the reader cannot fund are greyed, the reason on them (one /account read per draw).
+    let marking = false;
+    async function markAffordable() {
+      if (marking) return;
+      const buttons = [...document.querySelectorAll("[data-take-order]")];
+      if (!buttons.length) return;
+      marking = true;
+      try {
+        const can = await wallet.fundsReader();
+        for (const b of buttons) {
+          let order = null;
+          try { order = JSON.parse(b.dataset.takeOrder); } catch (e) { continue; }
+          const short = await can(order.get);
+          b.classList.toggle("cant", !!short);
+          b.setAttribute("aria-disabled", short ? "true" : "false");
+          b.title = short ? short.charAt(0).toUpperCase() + short.slice(1) : "";
+        }
+      } finally { marking = false; }
+    }
+    function draw(w) {
+      drawOrders(w);
+      markAffordable();
+      const every = wallet.myTrades(w).sort((a, b) => b.created - a.created);
+      tell(every); progress(every);
+      // On a market's Trade history: that market's swaps only (2026-10-17).
+      const pair = globalThis.HISTORY_PAIR, lk = (l) => l.kind === "coin" || !l.kind ? `${l.network}-coin` : `${l.network}-${l.kind}-${l.asset}`;
+      const mine = pair ? every.filter((t) => new Set([lk(t.give), lk(t.get)]).size === 2
+                                            && [lk(t.give), lk(t.get)].every((k) => pair.includes(k))) : every;
+      const all = mine.slice(0, pair ? 50 : 10);
+      box.hidden = !all.length;
+      list.replaceChildren(...all.map((t) => {
+        const p = document.createElement("div");
+        p.style.cssText = "display:flex;gap:8px;align-items:baseline;padding:5px 0;font-size:.88rem;border-bottom:1px solid var(--line)";
+        const pill = document.createElement("span");
+        pill.className = "ex-pill" + (t.state === "done" ? " done" : "");
+        pill.textContent = t.state === "proposed" ? "asked" : t.state === "aborted" ? "called off" : t.state;
+        const what = document.createElement("span");
+        what.innerHTML = "";
+        const head = document.createElement("b"); head.textContent = `${amt(t.give)} for ${amt(t.get)}`;
+        const note = document.createElement("small"); note.className = "muted"; note.style.display = "block";
+        note.textContent = [t.note || "", t.created ? new Date(t.created).toLocaleString() : ""].filter(Boolean).join(" \u00b7 ");
+        what.append(head, note);
+        p.append(pill, what);
+        return p;
+      }));
+    }
+    // The trades themselves run on every page (wallet.js startTradeRunner, base.html);
+    // this only shows them, whenever a pass ends here or another tab changes them.
+    async function redraw() {
+      const w = await wallet.opened(CHAIN);
+      if (!w) return;
+      await wallet.syncDelegated(w).catch(() => {});   // node-filled orders off this page's own list
+      draw(w);
+    }
+    globalThis.addEventListener("arcade:trades", redraw);
+    document.addEventListener("arcade:changed", redraw);   // a live update redrew the book: mark it again
+    globalThis.addEventListener("storage", (e) => { if (!e.key || e.key.startsWith("arcade-trades") || e.key.startsWith("arcade-my-orders")) redraw(); });
+    // A coin pair's own forms (the PEP/DOGE market, 2026-10-13): sell or buy `amount` of the
+    // base coin at `price` of the quote coin each.
+    document.querySelectorAll("form[data-pair-side]").forEach((f) => f.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const button = f.querySelector("button");
+      const amount = Number(String(f.amount.value).trim()), price = Number(String(f.price.value).trim());
+      if (!(amount > 0 && price > 0)) return alert("An amount and a price, please.");
+      // Any market's side (swap_pair.html, 2026-10-15): a coin, a token or a piece, said on the
+      // form; a form that says nothing is a coin.
+      const leg = (which) => {
+        const d = f.dataset, kind = d[which + "Kind"] || "coin", net = d[which];
+        const label = d[which + "Label"] || coinName(net), whole = d[which + "Div"] === "0";
+        return {kind, label, whole, net, asset: d[which + "Asset"] || ""};
+      };
+      const B = leg("base"), Q = leg("quote");
+      if ((B.kind === "token" && B.whole || B.kind === "token20") && !Number.isInteger(amount))
+        return alert(`${B.label} comes in whole units only.`);
+      const one = (L) => L.kind === "nft" || L.kind === "doginal";
+      const units = (L, n) => one(L) ? 1 : (L.kind === "token" && L.whole) || L.kind === "token20" ? Math.round(n)
+        : Math.round(n * 1e8);
+      const side = (L, n) => L.kind === "coin" ? {network: L.net, amount: units(L, n)}
+        : {network: L.net, kind: L.kind, asset: L.asset, amount: units(L, n),
+           label: one(L) ? L.label : `${n} ${L.label}`};
+      const base = side(B, amount), quote = side(Q, amount * price);
+      if (!(quote.amount > 0)) return alert(`That comes to less than one unit of ${Q.label}.`);
+      const label = B.label;
+      const kind = B.kind;
+      const [give, get] = f.dataset.pairSide === "sell" ? [base, quote] : [quote, base];
+      if (await overCap(give)) return;
+      const ok = await arcadeAsk(f.dataset.pairSide === "sell" ? "List this sale?" : "List this bid?",
+        `${amt(give)} for ${amt(get)} (${price} ${Q.label} ${kind === "nft" || kind === "doginal" ? "for it" : "per " + label}). `
+        + listWords(give) + await wallet.swapFees(give, get), "List it");
+      if (!ok) { step("cancelled"); return; }
+      button.disabled = true;
+      step("listing");
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
+        track("Listed", -1, delegates(give) ? "Your arcade's node fills it now, with every page closed. When it sells you get a notification."
+          : "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
+        step("listed");
+        f.reset(); drawOrders(w);
+      } catch (e) { step("failed", e); alert(String(e.message || e)); }
+      finally { button.disabled = false; }
+    }));
+    // The Exchange's one trade box (2026-10-15): "I want to buy/sell <amount> A at <price> B per A".
+    // Two chains: listed from this tab, then its market opens. One chain, or a token typed by
+    // number: the box opens the market (the chain's own instant one, or the swap market's form).
+    const box2 = document.querySelector("form[data-account-trade]");
+    box2?.addEventListener("submit", async (ev) => {
+      const pick = (sel) => sel.selectedOptions[0]?.dataset || {};
+      const A = pick(box2.base), B = pick(box2.quote);
+      const amount = Number(String(box2.amount.value).trim()), price = Number(String(box2.price.value).trim());
+      if (!A.net || A.net === B.net || A.kind === "other" || !(amount > 0 && price > 0)) return;
+      ev.preventDefault();
+      // The asset is everything after "<net>-<kind>-" (a tick may hold a dash).
+      const assetA = box2.base.value.split("-").slice(2).join("-"), assetB = box2.quote.value.split("-").slice(2).join("-");
+      // A DRC-20 / PRC-20 token is counted in whole tokens (2026-10-22: 1,000 frgy went on the book as 100,000,000,000).
+      const whole = (d) => d.kind === "nft" || d.kind === "token20" || (d.kind === "token" && d.div === "0");
+      if ((A.kind === "token" && A.div === "0" || A.kind === "token20") && !Number.isInteger(amount))
+        return alert(`${A.name} comes in whole units only.`);
+      const units = (d, n) => d.kind === "nft" ? 1 : whole(d) ? Math.round(n) : Math.round(n * 1e8);
+      const side = (d, asset, n) => d.kind === "coin" ? {network: d.net, amount: units(d, n)}
+        : {network: d.net, kind: d.kind, asset, amount: units(d, n), label: d.kind === "nft" ? d.name : `${n} ${d.name}`};
+      const a = side(A, assetA, A.kind === "nft" ? 1 : amount), b = side(B, assetB, (A.kind === "nft" ? 1 : amount) * price);
+      if (!(b.amount > 0)) return alert(`That comes to less than one unit of ${B.name}.`);
+      const selling = box2.side.value === "sell";
+      const [give, get] = selling ? [a, b] : [b, a];
+      if (await overCap(give)) return;
+      const ok = await arcadeAsk(selling ? "List this ask?" : "List this bid?",
+        `${amt(give)} for ${amt(get)} (${price} ${B.name} per ${A.kind === "nft" ? "it" : A.name}). `
+        + listWords(give) + await wallet.swapFees(give, get), "List it");
+      if (!ok) return;
+      const go = box2.querySelector("button[type=submit]");
+      go.disabled = true;
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
+        // No toast here (2026-10-17, of the "Listed!" toast: "The OK button does not work"): the page was
+        // already on its way to the market, and a leaving page takes no taps. The button says it; the market page's
+        // callout says the rest (swap_pair.html #stay-open, "Your swap is listed: keep the arcade open").
+        go.textContent = "Listed \u2713 Opening your market\u2026";
+        location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
+      } catch (e) { go.disabled = false; alert(String(e.message || e)); }
+    });
+    // Cancel on one of your own rows the node drew (any device): withdrawn here, off the node's book, its side back.
+    document.addEventListener("click", async (ev) => {
+      const c = ev.target.closest && ev.target.closest("[data-cancel-order]");
+      if (!c || c.disabled) return;
+      ev.preventDefault();
+      c.disabled = true; c.textContent = "Cancelling\u2026"; step("withdrawing");
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to cancel.");
+        await wallet.withdrawOrder(w, c.dataset.cancelOrder);
+        (c.closest(".obrow") || c).remove(); step("withdrawn"); draw(w);
+      } catch (e) { c.disabled = false; c.textContent = "Cancel"; step("failed", e); }
+    });
+    // One listener for the whole page (2026-10-17: pressed Buy "and nothing happened. He had
+    // to refresh"): a market's book is redrawn every couple of seconds by the live update, and a row
+    // drawn after this page loaded carried a button nobody was listening to.
+    document.addEventListener("click", async (ev) => {
+      const b = ev.target.closest && ev.target.closest("[data-take-order]");
+      if (!b || b.disabled) return;
+      ev.preventDefault();
+      const order = JSON.parse(b.dataset.takeOrder);
+      // What you would give, checked before anything is asked (2026-10-17: 75 GOLD could press Sell on 100).
+      const short = await wallet.canFund(order.get);
+      if (short) { track("You can't take this one", -1, short.charAt(0).toUpperCase() + short.slice(1) + ".", true); return; }
+      const ok = await arcadeAsk("Take this swap?",
+        `You give ${order.get_label || amt(order.get)} and get ${order.give_label || amt(order.give)}. `
+        + "Either both sides get paid or both get their own back. " + await wallet.swapFees(order.get, order.give, {taking: true})
+        + " This is the only question: the rest happens by itself.", "Take it");
+      if (!ok) { step("cancelled"); return; }
+      b.disabled = true;
+      const was = b.textContent; b.textContent = "Asking\u2026";
+      step("asking");
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.takeOrder(w, order, {approved: true});
+        b.textContent = "Asked";
+        step("asked");
+        draw(w);
+        wallet.kickTrades();
+      } catch (e) { b.disabled = false; b.textContent = was; step("failed", e); alert(String(e.message || e)); }
+    });
+    redraw();
+    </script>

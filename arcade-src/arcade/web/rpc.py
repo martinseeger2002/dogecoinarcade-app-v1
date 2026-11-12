@@ -1,0 +1,845 @@
+"""A JSON-RPC endpoint for bots, in Omni Core's vocabulary.
+
+Anyone who has scripted against Omni Core knows `omni_getbalance`,
+`omni_getallbalancesforid`, `omni_send` and the rest
+(https://github.com/OmniLayer/omnicore/blob/master/src/omnicore/doc/rpc-api.md).
+The same names answer here, with the same fields where the index holds them,
+so an airdrop bot written for Omni needs a URL change and little else.
+
+Two things are deliberately not Omni's:
+
+* **Sending is two calls.** `omni_send` and the other `omni_send*` methods
+  build and sign a transaction and return it decoded -- fee, outputs, txid --
+  without broadcasting. `omni_broadcast <txid>` then sends exactly those bytes.
+  This is the rule the whole interface follows (D-016: broadcast what was
+  shown); a bot gets to see the fee before paying it, and nothing goes out on
+  a typo. A bot that wants Omni's one-call behaviour calls both in a row.
+
+* **One endpoint per chain.** Omni Core serves the chain its node is on. The
+  arcade indexes both, so `/rpc/main` speaks for mainnet and `/rpc/test` for
+  testnet. A bot names its chain in the URL; nothing about the Tokens page's
+  own main/test switch leaks into what a bot sees.
+
+Authentication is bitcoind's cookie scheme: the server writes
+`~/.dogecoinarcade/rpc.cookie` as `__cookie__:<secret>` (mode 0600) at every
+start, and a caller sends that as HTTP basic auth. No password to configure,
+nothing to paste into a script, and a browser tab cannot present it -- which
+is what keeps this endpoint out of reach of the cross-site posts the forms'
+CSRF token guards against.
+
+Error codes are bitcoind's (src/rpc/protocol.h): -32601 unknown method,
+-32602 bad arguments, -8 invalid parameter, -5 bad address, -4 wallet error.
+"""
+
+from __future__ import annotations
+
+import base64
+import inspect
+import json
+import os
+import secrets
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from .. import __version__, tokens as tokenlib
+from ..messaging import api as apilib
+from ..ledger import COIN, AmountError, LedgerIndex, parse_amount
+from ..state import ECOSYSTEM_MAIN, ECOSYSTEM_TEST
+
+# bitcoind's codes, so a client library that maps them keeps working.
+PARSE_ERROR = -32700
+INVALID_REQUEST = -32600
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+MISC_ERROR = -1
+TYPE_ERROR = -3
+WALLET_ERROR = -4
+INVALID_ADDRESS = -5
+INVALID_PARAMETER = -8
+
+COOKIE_USER = "__cookie__"
+
+#: Prepared-but-unsent transactions kept per process. A bot prepares and
+#: broadcasts one at a time (two prepares in a row would pick the same coins),
+#: so this only needs to outlast a slow loop, not an airdrop's whole run.
+KEEP_PREPARED = 100
+
+
+class RpcError(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# --- the cookie ---------------------------------------------------------------
+
+
+def write_cookie(path: Path, secret: str) -> None:
+    """Write `__cookie__:<secret>` readable by this user alone.
+
+    Created 0600 rather than chmod-ed afterwards, so there is no moment when
+    the file exists world-readable.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"{COOKIE_USER}:{secret}\n")
+    tmp.replace(path)
+
+
+def read_cookie(path: Path) -> tuple[str, str]:
+    """(user, secret) from a cookie file, for clients."""
+    text = path.read_text().strip()
+    user, _, secret = text.partition(":")
+    if not secret:
+        raise ValueError(f"{path} does not hold a user:secret cookie")
+    return user, secret
+
+
+def authorised(request: Request, secret: str) -> bool:
+    header = request.headers.get("authorization") or ""
+    scheme, _, blob = header.partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        user, _, given = base64.b64decode(blob.strip()).decode().partition(":")
+    except Exception:
+        return False
+    return user == COOKIE_USER and secrets.compare_digest(given, secret)
+
+
+# --- amounts, Omni style ------------------------------------------------------
+
+
+def omni_amount(units: int, divisible: bool) -> str:
+    """Omni renders every amount as a string: 8 places if divisible, else whole."""
+    if not divisible:
+        return str(units)
+    whole, frac = divmod(units, COIN)
+    return f"{whole}.{frac:08d}"
+
+
+def _int(value: Any, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise RpcError(TYPE_ERROR, f"{what} must be an integer")
+    try:
+        return int(value)
+    except ValueError:
+        raise RpcError(TYPE_ERROR, f"{what} must be an integer") from None
+
+
+def _str(value: Any, what: str) -> str:
+    if not isinstance(value, str):
+        raise RpcError(TYPE_ERROR, f"{what} must be a string")
+    return value
+
+
+# --- the methods --------------------------------------------------------------
+
+
+class OmniRpc:
+    """The method table for one chain.
+
+    Every public `omni_*` method (and `help`) is callable over the wire; the
+    docstring's first line is its usage, which is what `help` prints and what
+    a wrong-arity call is answered with.
+    """
+
+    def __init__(self, state: Any, chain: Any):
+        self.state = state
+        self.chain = chain
+
+    @property
+    def index(self) -> LedgerIndex:
+        return self.state.token_index(self.chain)
+
+    def _rpc(self):
+        return self.chain.rpc()
+
+    # -- dispatch --------------------------------------------------------------
+
+    def methods(self) -> dict[str, Callable]:
+        # `omni_` is Omni Core's vocabulary; `da_` is ours, for the things Omni
+        # has no word for -- one arcade talking to another.
+        return {name: getattr(self, name) for name in dir(self)
+                if name == "help" or name.startswith(("omni_", "da_"))}
+
+    def call(self, method: str, params: Any) -> Any:
+        fn = self.methods().get(method)
+        if fn is None:
+            raise RpcError(METHOD_NOT_FOUND, f"Method not found: {method}")
+        if params is None:
+            params = []
+        if not isinstance(params, (list, dict)):
+            raise RpcError(INVALID_REQUEST, "params must be an array or an object")
+        try:
+            bound = (inspect.signature(fn).bind(*params) if isinstance(params, list)
+                     else inspect.signature(fn).bind(**params))
+        except TypeError as exc:
+            raise RpcError(INVALID_PARAMS, f"{exc}. Usage: {self._usage(fn)}") from None
+        try:
+            return fn(*bound.args, **bound.kwargs)
+        except RpcError:
+            raise
+        except (tokenlib.TokenError, AmountError) as exc:
+            raise RpcError(INVALID_PARAMETER, str(exc)) from exc
+        except Exception as exc:
+            raise RpcError(MISC_ERROR, f"{exc.__class__.__name__}: {exc}") from exc
+
+    @staticmethod
+    def _usage(fn: Callable) -> str:
+        return (fn.__doc__ or "").strip().splitlines()[0]
+
+    def help(self, method: str | None = None) -> str:
+        """help ( "method" ) -- list the methods, or explain one."""
+        table = self.methods()
+        if method is not None:
+            fn = table.get(_str(method, "method"))
+            if fn is None:
+                raise RpcError(METHOD_NOT_FOUND, f"Method not found: {method}")
+            return inspect.cleandoc(fn.__doc__ or "")
+        lines = [self._usage(fn) for _, fn in sorted(table.items())]
+        lines.append("")
+        lines.append("Sending is two calls: an omni_send* method returns the prepared "
+                     "transaction unsent; omni_broadcast <txid> sends it.")
+        lines.append("Asking is one call: da_request* files a request the wallet's owner "
+                     "approves or refuses in the interface; da_request <id> says which.")
+        return "\n".join(lines)
+
+    # -- reading ---------------------------------------------------------------
+
+    def omni_getinfo(self) -> dict[str, Any]:
+        """omni_getinfo -- where this index stands on this chain."""
+        index = self.index
+        status = index.status(node_tip=self.state.ledger_tips.get(self.chain.network))
+        stopped = status["stopped"]
+        return {
+            "arcadeversion": __version__,
+            "network": self.chain.network,
+            "mainnet": bool(self.chain.is_mainnet),
+            "activationblock": status["activation_height"],
+            "block": status["indexed_height"],
+            "nodeblock": status["node_tip"],
+            "behind": status["behind"],
+            "current": status["current"],
+            "stopped": None if stopped is None else
+                       {"block": stopped.height, "reason": stopped.reason},
+        }
+
+    def omni_listproperties(self) -> list[dict[str, Any]]:
+        """omni_listproperties -- every token on this chain."""
+        return [self._property_brief(p) for p in self.index.properties()]
+
+    def omni_getproperty(self, propertyid: Any) -> dict[str, Any]:
+        """omni_getproperty propertyid -- one token in full."""
+        prop = self._property(propertyid)
+        out = self._property_brief(prop)
+        out.update({
+            "issuer": prop["issuer"],
+            "creationtxid": prop["creation_txid"],
+            "creationblock": prop["creation_block"],
+            "fixedissuance": not prop["managed"],
+            "managedissuance": bool(prop["managed"]),
+            "totaltokens": omni_amount(prop["total_tokens"], prop["divisible"]),
+            "holders": prop["holder_count"],
+        })
+        return out
+
+    def omni_getbalance(self, address: Any, propertyid: Any) -> dict[str, str]:
+        """omni_getbalance "address" propertyid -- what one address holds of one token."""
+        prop = self._property(propertyid)
+        units = self.index.balance(_str(address, "address"), prop["property_id"])
+        return self._balance(units, prop["divisible"])
+
+    def omni_getallbalancesforid(self, propertyid: Any) -> list[dict[str, str]]:
+        """omni_getallbalancesforid propertyid -- every holder of one token, largest first."""
+        prop = self._property(propertyid)
+        return [{"address": h["address"], **self._balance(h["balance"], prop["divisible"]),
+                 # What that person's own orders are holding. The row belongs
+                 # here even when the free half is empty -- the lot is in the
+                 # Supply -- and a client told "0.00000000, reserved 0" about it
+                 # reads a holder who holds nothing.
+                 "reserved": omni_amount(h["reserved"], prop["divisible"])}
+                for h in self.index.holders(prop["property_id"])]
+
+    def omni_getallbalancesforaddress(self, address: Any) -> list[dict[str, Any]]:
+        """omni_getallbalancesforaddress "address" -- every token one address holds."""
+        rows = self.index.balances([_str(address, "address")])
+        return [{"propertyid": r["property_id"], "name": r["name"],
+                 **self._balance(r["balance"], r["divisible"])} for r in rows]
+
+    def omni_getwalletaddressbalances(self) -> list[dict[str, Any]]:
+        """omni_getwalletaddressbalances -- tokens held by each address in this node's wallet."""
+        with self._rpc() as rpc:
+            owned = _wallet_addresses(rpc)
+        by_address: dict[str, list] = {}
+        for r in self.index.balances(owned):
+            by_address.setdefault(r["address"], []).append(
+                {"propertyid": r["property_id"], "name": r["name"],
+                 **self._balance(r["balance"], r["divisible"])})
+        return [{"address": a, "balances": b} for a, b in by_address.items()]
+
+    def omni_getwalletbalances(self) -> list[dict[str, Any]]:
+        """omni_getwalletbalances -- tokens held by this node's wallet, summed per token."""
+        with self._rpc() as rpc:
+            owned = _wallet_addresses(rpc)
+        totals: dict[int, dict[str, Any]] = {}
+        for r in self.index.balances(owned):
+            entry = totals.setdefault(r["property_id"], {
+                "propertyid": r["property_id"], "name": r["name"],
+                "divisible": r["divisible"], "units": 0})
+            entry["units"] += r["balance"]
+        return [{"propertyid": e["propertyid"], "name": e["name"],
+                 **self._balance(e["units"], e["divisible"])} for e in totals.values()]
+
+    def omni_gettransaction(self, txid: Any) -> dict[str, Any]:
+        """omni_gettransaction "txid" -- one token transaction the index recorded."""
+        entry = self.index.transaction(_str(txid, "txid"))
+        if entry is None:
+            raise RpcError(INVALID_ADDRESS, "the index holds no token transaction with that txid")
+        return self._transaction(entry)
+
+    def omni_listtransactions(self, addressfilter: Any = "*", count: Any = 10, skip: Any = 0,
+                              startblock: Any = 0, endblock: Any = 999_999_999,
+                              ) -> list[dict[str, Any]]:
+        """omni_listtransactions ( "addressfilter" count skip startblock endblock ) -- recent token transactions, oldest first; "*" for every address."""
+        address = _str(addressfilter, "addressfilter")
+        count, skip = _int(count, "count"), _int(skip, "skip")
+        start, end = _int(startblock, "startblock"), _int(endblock, "endblock")
+        if count < 0 or skip < 0:
+            raise RpcError(INVALID_PARAMETER, "count and skip must not be negative")
+        rows = self.index.history(address=None if address == "*" else address,
+                                  limit=count + skip + 1_000_000)
+        rows = [r for r in rows if start <= r["block_height"] <= end]
+        chosen = rows[skip:skip + count]                     # newest first
+        return [self._transaction(r) for r in reversed(chosen)]
+
+    def omni_listblocktransactions(self, height: Any) -> list[str]:
+        """omni_listblocktransactions height -- txids of the token transactions in one block."""
+        height = _int(height, "height")
+        with self.index.open() as db:
+            rows = db.conn.execute(
+                "SELECT txid FROM arcade_tx WHERE block_height = ? ORDER BY position",
+                (height,)).fetchall()
+        return [r["txid"] for r in rows]
+
+    # -- sending: prepare, then broadcast ----------------------------------------
+
+    def omni_send(self, fromaddress: Any, toaddress: Any, propertyid: Any, amount: Any,
+                  ) -> dict[str, Any]:
+        """omni_send "fromaddress" "toaddress" propertyid "amount" -- prepare a send (unsent until omni_broadcast)."""
+        sender = self._own_address(fromaddress)
+        to = self._address(toaddress, "toaddress")
+        prop, units = self._amount(propertyid, amount)
+        held = self.index.balance(sender, prop["property_id"])
+        if units > held:
+            raise RpcError(INVALID_PARAMETER,
+                           f"{sender} holds {omni_amount(held, prop['divisible'])} of "
+                           f"token {prop['property_id']}, not "
+                           f"{omni_amount(units, prop['divisible'])}")
+        return self._prepare("send", sender, tokenlib.send_payload(prop["property_id"], units), to)
+
+    def omni_sendissuancefixed(self, fromaddress: Any, ecosystem: Any, type: Any,
+                               previousid: Any, category: Any, subcategory: Any,
+                               name: Any, url: Any, data: Any, amount: Any) -> dict[str, Any]:
+        """omni_sendissuancefixed "fromaddress" ecosystem type previousid "category" "subcategory" "name" "url" "data" "amount" -- prepare a fixed-supply token (type 1 whole units, 2 divisible; ecosystem 1)."""
+        sender = self._own_address(fromaddress)
+        divisible = self._divisible(type)
+        self._ecosystem(ecosystem)
+        _int(previousid, "previousid")
+        payload = tokenlib.issuance_payload(
+            name=_str(name, "name"), divisible=divisible, managed=False,
+            amount=parse_amount(str(amount), divisible),
+            test_ecosystem=_int(ecosystem, "ecosystem") == ECOSYSTEM_TEST,
+            category=_str(category, "category"), subcategory=_str(subcategory, "subcategory"),
+            url=_str(url, "url"), data=_str(data, "data"))
+        return self._prepare("create", sender, payload, None)
+
+    def omni_sendissuancemanaged(self, fromaddress: Any, ecosystem: Any, type: Any,
+                                 previousid: Any, category: Any, subcategory: Any,
+                                 name: Any, url: Any, data: Any) -> dict[str, Any]:
+        """omni_sendissuancemanaged "fromaddress" ecosystem type previousid "category" "subcategory" "name" "url" "data" -- prepare a managed-supply token (granted later)."""
+        sender = self._own_address(fromaddress)
+        divisible = self._divisible(type)
+        self._ecosystem(ecosystem)
+        _int(previousid, "previousid")
+        payload = tokenlib.issuance_payload(
+            name=_str(name, "name"), divisible=divisible, managed=True, amount=None,
+            test_ecosystem=_int(ecosystem, "ecosystem") == ECOSYSTEM_TEST,
+            category=_str(category, "category"), subcategory=_str(subcategory, "subcategory"),
+            url=_str(url, "url"), data=_str(data, "data"))
+        return self._prepare("create", sender, payload, None)
+
+    def omni_sendgrant(self, fromaddress: Any, toaddress: Any, propertyid: Any, amount: Any,
+                       memo: Any = "") -> dict[str, Any]:
+        """omni_sendgrant "fromaddress" "toaddress" propertyid "amount" ( "memo" ) -- prepare a grant of new tokens; "" as toaddress grants to the issuer."""
+        prop, units = self._amount(propertyid, amount)
+        sender = self._issuer(fromaddress, prop)
+        to = self._address(toaddress, "toaddress") if _str(toaddress, "toaddress") else None
+        if to == sender:
+            to = None
+        payload = tokenlib.grant_payload(prop["property_id"], units, _str(memo, "memo"))
+        return self._prepare("grant", sender, payload, to)
+
+    def omni_sendrevoke(self, fromaddress: Any, propertyid: Any, amount: Any, memo: Any = "",
+                        ) -> dict[str, Any]:
+        """omni_sendrevoke "fromaddress" propertyid "amount" ( "memo" ) -- prepare a revoke of tokens the issuer holds."""
+        prop, units = self._amount(propertyid, amount)
+        sender = self._issuer(fromaddress, prop)
+        held = self.index.balance(sender, prop["property_id"])
+        if units > held:
+            raise RpcError(INVALID_PARAMETER,
+                           f"the issuer holds {omni_amount(held, prop['divisible'])}, "
+                           f"which is all that can be revoked")
+        payload = tokenlib.revoke_payload(prop["property_id"], units, _str(memo, "memo"))
+        return self._prepare("revoke", sender, payload, None)
+
+    def omni_sendchangeissuer(self, fromaddress: Any, toaddress: Any, propertyid: Any,
+                              ) -> dict[str, Any]:
+        """omni_sendchangeissuer "fromaddress" "toaddress" propertyid -- prepare handing a token to a new issuer."""
+        prop = self._property(propertyid)
+        sender = self._issuer(fromaddress, prop)
+        to = self._address(toaddress, "toaddress")
+        if to == sender:
+            raise RpcError(INVALID_PARAMETER, "that address is already the issuer")
+        return self._prepare("change issuer", sender,
+                             tokenlib.change_issuer_payload(prop["property_id"]), to)
+
+    # -- node to node ----------------------------------------------------------
+    # One arcade talking to another, for marketplaces and anything else built on
+    # top. The same sealed envelope as a private message, so the same guarantees
+    # -- addressed to one key, authenticated as from ours -- with its own type so
+    # it never lands in a human's conversation, and its own cursor so a program
+    # can resume a queue exactly where it stopped. Testnet only, like every
+    # encrypted message here (D-010).
+
+    def da_identity(self) -> dict[str, Any]:
+        """da_identity -- this node's public key and contact code: what others address."""
+        identity = self._identity()
+        from ..messaging import contact as contactlib
+        from ..messaging.keys import fingerprint_of
+        return {
+            "pubkey": identity.public_bytes.hex(),
+            "fingerprint": fingerprint_of(identity.public_bytes),
+            "contactcode": contactlib.encode(self.chain.network,
+                                             identity.public_bytes),
+            "address": self.state.derived_address or "",
+            "network": self.chain.network,
+            "maxbytes": apilib.MAX_API_PAYLOAD,
+            # What another node has to match to be speaking the same API.
+            "protocol": apilib.PROTOCOL,
+            "apihash": apilib.api_fingerprint().hex(),
+            "arcadeversion": __version__,
+        }
+
+    def da_send(self, to: Any, body: Any, fromaddress: Any = "") -> dict[str, Any]:
+        """da_send "topubkey" "body" ( "fromaddress" ) -- prepare a node-to-node message; NOT sent until da_broadcast."""
+        identity = self._identity()
+        to_key = self._pubkey(to)
+        payload = apilib.seal(identity, to_key, self._body(body))
+        sender = (self._own_address(fromaddress) if fromaddress
+                  else self._sending_address())
+        return self._prepare_message("api message", sender, payload)
+
+    def da_broadcast(self, txid: Any) -> str:
+        """da_broadcast "txid" -- send a message da_send prepared; returns the txid."""
+        return self.omni_broadcast(txid)
+
+    def da_publish(self, topic: Any, body: Any, fromaddress: Any = "") -> dict[str, Any]:
+        """da_publish "topic" body ( "fromaddress" ) -- prepare a public machine-talk broadcast every node reads; NOT sent until da_broadcast."""
+        from ..messaging import broadcast as broadcastlib
+        if self.chain.is_mainnet:
+            raise RpcError(MISC_ERROR, "broadcasts are on the messaging chain: use /rpc/test")
+        if not isinstance(body, (dict, list, str, int, float, bool)) and body is not None:
+            raise RpcError(TYPE_ERROR, "body must be JSON")
+        try:
+            payload = broadcastlib.build(_str(topic, "topic"), body)
+        except broadcastlib.BroadcastError as exc:
+            raise RpcError(INVALID_PARAMETER, str(exc))
+        sender = (self._own_address(fromaddress) if fromaddress
+                  else self._sending_address())
+        return self._prepare_message("broadcast", sender, payload, public_only=True)
+
+    def da_broadcasts(self, topic: Any = "", after: Any = 0, count: Any = 20,
+                      senders: Any = None) -> list[dict[str, Any]]:
+        """da_broadcasts ( "topic" after count [sender,...] ) -- confirmed public broadcasts from any node, oldest first; pass the last id as after."""
+        if senders is not None and not (isinstance(senders, list)
+                                        and all(isinstance(x, str) for x in senders)):
+            raise RpcError(TYPE_ERROR, "senders must be a list of addresses")
+        with self.state.store() as store:
+            rows = store.node_broadcasts(self.state.messaging.network, str(topic or ""),
+                                         after=_int(after, "after"),
+                                         limit=_int(count, "count"), senders=senders)
+        return [{"id": r["id"], "txid": r["txid"], "sender": r["sender"],
+                 "topic": r["topic"], "body": json.loads(r["body"]),
+                 "height": r["height"], "blocktime": r["block_time"]}
+                for r in rows if int(r["height"] or 0) > 0]
+
+    def da_inbox(self, after: Any = 0, count: Any = 20,
+                 unreadonly: Any = False) -> list[dict[str, Any]]:
+        """da_inbox ( after count unreadonly ) -- messages addressed to this node, oldest first."""
+        identity = self._identity()
+        from ..messaging.keys import fingerprint_of
+        with self.state.store() as store:
+            rows = store.api_messages(
+                fingerprint_of(identity.public_bytes), self.chain.network,
+                after_id=_int(after, "after"), limit=_int(count, "count"),
+                unread_only=bool(unreadonly))
+            return [self._api_message(row) for row in rows]
+
+    def da_markread(self, ids: Any) -> int:
+        """da_markread [id,...] -- mark messages read; returns how many changed."""
+        if not isinstance(ids, list):
+            raise RpcError(TYPE_ERROR, "ids must be a list of message ids")
+        with self.state.store() as store:
+            return store.mark_api_read([_int(i, "id") for i in ids])
+
+    # -- asking the wallet's owner ---------------------------------------------
+    #
+    # A program on this RPC can build and broadcast with the omni_send* calls,
+    # because holding the cookie is holding the wallet. These are for the other
+    # arrangement: a program that is NOT trusted to spend on its own -- a
+    # marketplace bot, a game -- files a request and the person is asked.
+    # Nothing is built, let alone sent, until they say yes on the Approvals
+    # page (arcade/approvals.py).
+
+    def da_requestsend(self, fromaddress: Any, toaddress: Any, amount: Any,
+                       note: Any = "") -> dict[str, Any]:
+        """da_requestsend "fromaddress" "toaddress" "amount" ( "note" ) -- ask the owner to send coins; "" as fromaddress lets the wallet choose. Returns the request; poll da_request."""
+        return self._ask("coins", {"from": fromaddress, "to": toaddress,
+                                   "amount": amount}, note)
+
+    def da_requesttoken(self, fromaddress: Any, toaddress: Any, propertyid: Any,
+                        amount: Any, note: Any = "") -> dict[str, Any]:
+        """da_requesttoken "fromaddress" "toaddress" propertyid "amount" ( "note" ) -- ask the owner to send tokens; "" as fromaddress lets the wallet choose."""
+        return self._ask("token", {"from": fromaddress, "to": toaddress,
+                                   "propertyid": _int(propertyid, "propertyid"),
+                                   "amount": amount}, note)
+
+    def da_requestinscription(self, toaddress: Any, inscription: Any,
+                              note: Any = "") -> dict[str, Any]:
+        """da_requestinscription "toaddress" "inscription" ( "note" ) -- ask the owner to hand over an inscription, by number or txid."""
+        # "by number or txid": 7 and "7" both mean number 7, the way the shell
+        # and every JSON library will send a bare number.
+        if isinstance(inscription, bool) or not isinstance(inscription, (int, str)):
+            raise RpcError(TYPE_ERROR, "inscription must be a number or a txid")
+        return self._ask("inscription", {"to": toaddress,
+                                         "inscription": str(inscription)}, note)
+
+    def da_request(self, id: Any) -> dict[str, Any]:
+        """da_request "id" -- one request: status pending, sent (with txid), denied, failed or expired."""
+        from .. import approvals as approvalslib
+        row = self.state.approvals.get(_str(id, "id"))
+        if row is None:
+            raise RpcError(INVALID_PARAMETER, "no such request")
+        return approvalslib.describe(row)
+
+    def da_requests(self, count: Any = 20) -> list[dict[str, Any]]:
+        """da_requests ( count ) -- requests on this chain: the ones waiting, then the newest decided."""
+        from .. import approvals as approvalslib
+        queue = self.state.approvals
+        rows = queue.pending(self.chain.network) + queue.recent(
+            _int(count, "count"), self.chain.network)
+        return [approvalslib.describe(r) for r in rows[:max(1, _int(count, "count"))]]
+
+    def _ask(self, kind: str, body: dict[str, Any], note: Any) -> dict[str, Any]:
+        from .. import approvals as approvalslib
+        with self._rpc() as rpc:
+            own = _wallet_addresses(rpc)
+        try:
+            fields = approvalslib.validate(
+                kind, self.index, own, mainnet=self.chain.is_mainnet,
+                to=_str(body.get("to"), "toaddress"),
+                amount=str(body.get("amount", "")),
+                propertyid=body.get("propertyid"),
+                inscription=str(body.get("inscription", "")),
+                fromaddress=str(body.get("from") or ""))
+            request_id = self.state.approvals.file(
+                self.chain.network, kind, "rpc", fields.pop("toaddress"),
+                note=_str(note, "note") if note else "", **fields)
+        except approvalslib.RequestError as exc:
+            raise RpcError(INVALID_PARAMETER, str(exc)) from None
+        return approvalslib.describe(self.state.approvals.get(request_id))
+
+    @staticmethod
+    def _api_message(row: Any) -> dict[str, Any]:
+        # One shape for a bot here and for a page reading its replies.
+        from ..nodetalk import describe
+        return describe(row)
+
+    def _identity(self) -> Any:
+        if self.chain.is_mainnet:
+            raise RpcError(MISC_ERROR,
+                           "node-to-node messages are Pepecoin test only: use /rpc/test")
+        try:
+            return self.state.ensure_identity()
+        except Exception as exc:
+            raise RpcError(MISC_ERROR, f"no identity on this node yet: {exc}")
+
+    def _pubkey(self, value: Any) -> bytes:
+        """A 32-byte X25519 key, given as hex or as a contact code."""
+        text = _str(value, "to").strip()
+        from ..messaging import contact as contactlib
+        if not text:
+            raise RpcError(INVALID_PARAMETER, "name who it is for")
+        try:
+            return contactlib.decode(text)[1]
+        except Exception:
+            pass
+        try:
+            raw = bytes.fromhex(text)
+        except ValueError:
+            raise RpcError(INVALID_PARAMETER,
+                           "a recipient is a contact code or 64 hex characters")
+        if len(raw) != 32:
+            raise RpcError(INVALID_PARAMETER, "a public key is 32 bytes")
+        return raw
+
+    @staticmethod
+    def _body(value: Any) -> bytes:
+        """Text, or anything JSON-shaped, which is sent as compact JSON."""
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, separators=(",", ":")).encode()
+        if isinstance(value, str):
+            return value.encode()
+        raise RpcError(TYPE_ERROR, "body must be a string or a JSON object")
+
+    def _sending_address(self) -> str:
+        with self._rpc() as rpc:
+            from ..web.app import funded_address
+            return funded_address(rpc, prefer=self.state.derived_address)
+
+    def _prepare_message(self, what: str, sender: str, payload: bytes,
+                         public_only: bool = False) -> dict[str, Any]:
+        """Build the transaction and hold it, exactly as a token send is held."""
+        from ..messaging.sender import MessageSender
+        with self._rpc() as rpc:
+            prepared = MessageSender(rpc, self.chain.params,
+                                     public_only=public_only).prepare(sender, payload)
+        prepared.what = what
+        cache = self.state.prepared_tokens
+        cache[(self.chain.network, prepared.txid)] = prepared
+        while len(cache) > KEEP_PREPARED:
+            del cache[next(iter(cache))]
+        return {
+            "txid": prepared.txid,
+            "hex": prepared.hex,
+            "sendingaddress": sender,
+            "class": "B",
+            "size": prepared.size,
+            "fee": omni_amount(prepared.fee_sats, True),
+            "outputscost": omni_amount(prepared.dust_sats, True),
+            "total": omni_amount(prepared.total_sats, True),
+            "broadcast": False,
+        }
+
+    def omni_broadcast(self, txid: Any) -> str:
+        """omni_broadcast "txid" -- send a transaction an omni_send* call prepared; returns the txid."""
+        txid = _str(txid, "txid")
+        key = (self.chain.network, txid)
+        prepared = self.state.prepared_tokens.get(key)
+        if prepared is None:
+            raise RpcError(INVALID_PARAMETER,
+                           "no prepared transaction with that txid: prepare it with an "
+                           "omni_send* call first (a restart forgets prepared ones)")
+        with self._rpc() as rpc:
+            sent = tokenlib.TokenSender(rpc, self.chain.params).broadcast(prepared)
+        self.state.prepared_tokens.pop(key, None)
+        # The Tokens page says "broadcast, waiting for its block" for these too.
+        self.state.pending_tokens.append(
+            {"txid": sent, "what": prepared.what, "at": time.time(),
+             "network": self.chain.network})
+        return sent
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _property(self, propertyid: Any) -> dict[str, Any]:
+        pid = _int(propertyid, "propertyid")
+        prop = self.index.property(pid)
+        if prop is None:
+            raise RpcError(INVALID_PARAMETER, f"there is no token {pid}")
+        return prop
+
+    def _amount(self, propertyid: Any, amount: Any) -> tuple[dict[str, Any], int]:
+        prop = self._property(propertyid)
+        if isinstance(amount, bool) or not isinstance(amount, (str, int, float)):
+            raise RpcError(TYPE_ERROR, "amount must be a string such as \"12.5\"")
+        try:
+            units = parse_amount(str(amount), prop["divisible"])
+        except AmountError as exc:
+            raise RpcError(INVALID_PARAMETER, str(exc)) from None
+        return prop, units
+
+    def _address(self, value: Any, what: str) -> str:
+        from .app import _check_address
+        address = _str(value, what).strip()
+        complaint = _check_address(address, mainnet=self.chain)
+        if complaint:
+            raise RpcError(INVALID_ADDRESS, f"{what}: {complaint}")
+        return address
+
+    def _own_address(self, value: Any) -> str:
+        """An address this wallet can sign for; a send from any other is refused early."""
+        address = self._address(value, "fromaddress")
+        with self._rpc() as rpc:
+            info = rpc.call("validateaddress", address)
+        if not info.get("ismine"):
+            raise RpcError(WALLET_ERROR, f"fromaddress {address} is not in this node's wallet")
+        return address
+
+    def _issuer(self, value: Any, prop: dict[str, Any]) -> str:
+        sender = self._own_address(value)
+        if sender != prop["issuer"]:
+            raise RpcError(INVALID_PARAMETER,
+                           f"only the issuer ({prop['issuer']}) can do that to token "
+                           f"{prop['property_id']}")
+        return sender
+
+    @staticmethod
+    def _divisible(value: Any) -> bool:
+        kind = _int(value, "type")
+        if kind not in (1, 2):
+            raise RpcError(INVALID_PARAMETER, "type must be 1 (whole units) or 2 (divisible)")
+        return kind == 2
+
+    @staticmethod
+    def _ecosystem(value: Any) -> None:
+        if _int(value, "ecosystem") not in (ECOSYSTEM_MAIN, ECOSYSTEM_TEST):
+            raise RpcError(INVALID_PARAMETER, "ecosystem must be 1 (main) or 2 (test)")
+
+    def _prepare(self, what: str, sender: str, payload: bytes, reference: str | None,
+                 ) -> dict[str, Any]:
+        index = self.index
+        if not index.enabled:
+            raise RpcError(MISC_ERROR, f"{self.chain.label} has no start block for tokens yet")
+        with self._rpc() as rpc:
+            prepared = tokenlib.TokenSender(rpc, self.chain.params).prepare(
+                sender, payload, reference)
+        prepared.what = what
+        cache = self.state.prepared_tokens
+        cache[(self.chain.network, prepared.txid)] = prepared
+        while len(cache) > KEEP_PREPARED:
+            del cache[next(iter(cache))]
+        return {
+            "txid": prepared.txid,
+            "hex": prepared.hex,
+            "sendingaddress": prepared.sender,
+            "referenceaddress": prepared.reference,
+            "class": prepared.encoding_class,
+            "size": prepared.size,
+            "fee": omni_amount(prepared.fee_sats, True),
+            "outputscost": omni_amount(prepared.dust_sats, True),
+            "total": omni_amount(prepared.total_sats, True),
+            "outputs": [{"value": omni_amount(int(round(o["value"] * COIN)), True),
+                         "to": o["where"], "change": o["is_change"],
+                         "recipient": o["is_recipient"]} for o in prepared.outputs],
+            "broadcast": False,
+        }
+
+    @staticmethod
+    def _balance(units: int, divisible: bool) -> dict[str, str]:
+        # `frozen` is Omni's freeze bucket and the arcade has no such thing.
+        # `reserved` is its exchange bucket: the arcade's own shape of that is
+        # what an order is holding, which a caller with one to report fills in
+        # over this zero (`omni_getallbalancesforid`).
+        zero = omni_amount(0, divisible)
+        return {"balance": omni_amount(units, divisible), "reserved": zero, "frozen": zero}
+
+    @staticmethod
+    def _property_brief(prop: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "propertyid": prop["property_id"],
+            "name": prop["name"],
+            "category": prop["category"],
+            "subcategory": prop["subcategory"],
+            "data": prop["data"],
+            "url": prop["url"],
+            "divisible": bool(prop["divisible"]),
+        }
+
+    def _transaction(self, entry: dict[str, Any]) -> dict[str, Any]:
+        tip = self.state.ledger_tips.get(self.chain.network)
+        out: dict[str, Any] = {
+            "txid": entry["txid"],
+            "sendingaddress": entry["sender"],
+            "referenceaddress": entry["reference"],
+            "block": entry["block_height"],
+            "blockhash": entry.get("block_hash"),
+            "blocktime": entry.get("block_time"),
+            "positioninblock": entry["position"],
+            "confirmations": (tip - entry["block_height"] + 1) if tip is not None else None,
+            "version": entry["message_version"],
+            "type_int": entry["message_type"],
+            "type": entry["type_name"],
+            "valid": bool(entry["valid"]),
+        }
+        if not entry["valid"]:
+            out["invalidreason"] = entry["invalid_reason"]
+        prop = None
+        if entry.get("property_id") is not None:
+            prop = self.index.property(entry["property_id"])
+        elif entry["message_type"] in (50, 54) and entry["valid"]:
+            # A creation names no property id; the engine assigned one.
+            with self.index.open() as db:
+                row = db.conn.execute("SELECT property_id FROM property WHERE creation_txid = ?",
+                                      (entry["txid"],)).fetchone()
+            prop = self.index.property(row["property_id"]) if row else None
+        if prop is not None:
+            out["propertyid"] = prop["property_id"]
+            out["propertyname"] = prop["name"]
+            out["divisible"] = bool(prop["divisible"])
+        elif entry.get("name"):
+            out["propertyname"] = entry["name"]
+        if entry.get("amount") is not None:
+            divisible = bool(prop["divisible"]) if prop else False
+            out["amount"] = omni_amount(entry["amount"], divisible)
+        return out
+
+
+def _wallet_addresses(rpc) -> list[str]:
+    from .app import _ledger_addresses
+    return _ledger_addresses(rpc)
+
+
+# --- the HTTP side ------------------------------------------------------------
+
+
+def _error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
+    return {"result": None, "error": {"code": code, "message": message}, "id": request_id}
+
+
+def _answer(rpc: OmniRpc, item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return _error(INVALID_REQUEST, "each request must be an object")
+    request_id = item.get("id")
+    method = item.get("method")
+    if not isinstance(method, str):
+        return _error(INVALID_REQUEST, "method must be a string", request_id)
+    try:
+        result = rpc.call(method, item.get("params"))
+    except RpcError as exc:
+        return _error(exc.code, exc.message, request_id)
+    return {"result": result, "error": None, "id": request_id}
+
+
+def parse_error() -> dict[str, Any]:
+    return _error(PARSE_ERROR, "the body is not JSON")
+
+
+def handle(state: Any, request: Request, parsed: Any, chain: Any) -> JSONResponse:
+    """Answer one HTTP request: a single call or a batch, already parsed as JSON."""
+    if not authorised(request, state.rpc_secret):
+        return JSONResponse(_error(MISC_ERROR, f"unauthorised: send the contents of "
+                                   f"{state.rpc_cookie_path} as HTTP basic auth"),
+                            status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="dogecoinarcade"'})
+    rpc = OmniRpc(state, chain)
+    if isinstance(parsed, list):
+        return JSONResponse([_answer(rpc, item) for item in parsed])
+    return JSONResponse(_answer(rpc, parsed))

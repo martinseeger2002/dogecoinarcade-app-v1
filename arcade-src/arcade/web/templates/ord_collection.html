@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_exui.html" as ex %}
+{% block title %}{{ coll.name }} · Exchange · {{ brand.name }}{% endblock %}
+{% block body %}
+{# A Doginals / Pepinals collection that described itself in an inscription (arcade/collection_registry.py; the operator
+   2026-10-17, "first to publish", "same publisher updates"). For sale first, the Doginals tab's own Buy; then every piece
+   by number, each opening its offer page, where it is priced in any coin or token. #}
+<div id="live" data-generation="{{ state.generation }}" class="live"></div>
+<a class="back-link" href="/exchange?tab=market">&#8592; All collections</a>
+{{ ex.style() }}
+<style>
+.oc-head{display:flex;gap:14px;align-items:center;margin:6px 0 14px}
+.oc-cover{width:72px;height:72px;border-radius:14px;object-fit:cover;background:var(--code);flex:none;image-rendering:pixelated}
+.oc-stats{display:flex;gap:18px;flex-wrap:wrap;font-size:.86rem}
+.oc-stats b{display:block;font-size:1.05rem}
+.oc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.oc-card{background:var(--panel);border-radius:12px;padding:8px;box-shadow:var(--shadow);min-width:0;color:inherit;text-decoration:none;display:block}
+.oc-card iframe{border:0;pointer-events:none;display:block;width:100%;aspect-ratio:1;object-fit:contain;background:var(--code);border-radius:8px;image-rendering:pixelated}
+.oc-card .n{font-weight:700;margin-top:6px}
+.oc-card .t{font-size:.7rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oc-pages{display:flex;gap:8px;align-items:center;justify-content:center;margin:14px 0}
+</style>
+<div class="oc-head">
+  {% if coll.cover %}<iframe class="oc-cover" data-src="{{ doginal_frame(coll.cover) }}" title="" sandbox="allow-scripts" scrolling="no" style="border:0;pointer-events:none"></iframe>{% endif %}
+  <div style="min-width:0">
+    <h1 style="margin:0">{{ coll.name }}</h1>
+    <div class="muted" style="font-size:.84rem">{{ net_badge(net) }} {{ word }}s on {{ ord_chain_name }}
+      &middot; published by {{ coll.publisher|who }}</div>
+  </div>
+</div>
+{% if coll.description %}<p class="sub">{{ coll.description }}</p>{% endif %}
+<div class="panel oc-stats">
+  <div><b>{{ "{:,}".format(total) }}</b><span class="muted">pieces</span></div>
+  <div><b>{{ listed|length }}</b><span class="muted">for sale</span></div>
+  <div><b>{% if floor %}{{ ex.px(floor / 100000000) }} {{ coin }}{% else %}&mdash;{% endif %}</b><span class="muted">floor</span></div>
+  {% if coll.missing %}<div><b>{{ coll.missing }}</b><span class="muted">numbers unclaimed</span></div>{% endif %}
+</div>
+
+{% if listed %}{% include "_doginals_tab.html" %}{% endif %}
+
+<div class="ex-h" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+  <span>Every piece</span>
+  <form method="get" style="display:flex;gap:6px">
+    <input autocomplete="off" name="number" type="number" min="1" max="{{ coll.supply }}" placeholder="#" value="{{ number or '' }}"
+           style="width:90px" aria-label="Find a number">
+    <button class="small ghost" type="submit">Find</button>
+  </form>
+</div>
+{% if swaps %}<p class="muted" style="font-size:.82rem;margin-top:-4px">Tap a piece to make an offer in any coin or token you hold.</p>{% endif %}
+<div class="oc-grid">
+  {% for p in pieces %}
+  <a class="oc-card" href="{{ p.offer }}" title="{{ p.id }}">
+    {#- A sandboxed frame: ord inscriptions are often pages that draw themselves. -#}
+    <iframe data-src="{{ p.frame }}" title="{{ coll.name }} #{{ p.number }}" sandbox="allow-scripts" scrolling="no" tabindex="-1"></iframe>
+    <div class="n">#{{ p.number }}{% if p.listing %} <span style="float:right;font-weight:700">{{ ex.px(p.listing.price / 100000000) }} {{ coin }}</span>{% endif %}</div>
+    <div class="t">{{ p.traits.values()|join(' · ') }}</div>
+  </a>
+  {% else %}
+  <div class="panel empty"><p>No piece {% if number %}#{{ number }}{% endif %} in this collection.</p></div>
+  {% endfor %}
+</div>
+{% if not number and pages > 1 %}
+<div class="oc-pages">
+  {% if page > 1 %}<a class="btn small ghost" href="?page={{ page - 1 }}">&#8592; Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn small ghost" href="?page={{ page + 1 }}">Next &#8594;</a>{% endif %}
+</div>
+{% elif number %}<p style="text-align:center"><a href="?">Show all</a></p>{% endif %}
+<script nonce="{{ csp_nonce }}">
+/* One piece at a time (2026-10-17): each frame starts when the one before it has drawn -- in page order, cover
+   first -- so a page never asks the node for two dozen Doginals at once (each one it has not read yet is read off the
+   chain), and the grid fills in from the top. A piece that stalls is passed after 15 s. */
+(() => {
+  const frames = [...document.querySelectorAll("iframe[data-src]")];
+  let at = 0;
+  const next = () => {
+    if (at >= frames.length) return;
+    const f = frames[at++];
+    let done = false;
+    const go = () => { if (!done) { done = true; next(); } };
+    f.addEventListener("load", go, {once: true});
+    f.addEventListener("error", go, {once: true});
+    setTimeout(go, 15000);
+    f.src = f.dataset.src;
+  };
+  next();
+})();
+</script>
+{% endblock %}

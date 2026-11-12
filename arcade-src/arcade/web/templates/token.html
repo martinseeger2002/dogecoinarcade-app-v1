@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+{% import "_token_confirm.html" as tk %}
+{% block title %}{{ wall_text(prop.name, 'A token') }} · Tokens · {{ brand.name }}{% endblock %}
+{% block body %}
+{% set tag = 'mainnet' if chain.is_mainnet else 'testnet' %}
+<p class="muted" style="margin:0 0 6px;font-size:.86rem"><a href="/tokens">&larr; Tokens</a></p>
+<h1>{{ wall(prop.name, 'token name') }} {{ net_badge(chain) }}{{ supply_badge(prop) }} {{ tk.chain_switch(chain, [], csrf, public=public) }}
+  {% if prop.test_ecosystem %}<span class="tag testnet">test ecosystem</span>{% endif %}</h1>
+<p class="sub">Token #{{ prop.property_id }} &middot;
+  {{ 'managed supply' if prop.managed else 'fixed supply' }} &middot;
+  {{ 'divisible' if prop.divisible else 'whole units' }}
+  <span id="live" data-generation="{{ state.generation }}"></span></p>
+
+{% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+{% if prepared %}
+  {{ tk.confirm(prepared, confirm_action, confirm_fields, confirm_what, back, chain, csrf) }}
+{% endif %}
+
+{{ tk.index_status(index, chain) }}
+
+{% if face.icon or face.about or face.url %}
+<div class="row" style="gap:12px;align-items:center;margin:0 0 16px">
+  {% if face.icon %}
+  <img src="/content/{{ face.icon }}" alt="{{ wall_text(prop.name) }}" loading="lazy"
+       style="width:56px;height:56px;object-fit:cover;border-radius:50%">
+  {% endif %}
+  <div style="min-width:0;flex:1 1 0;overflow-wrap:anywhere">
+    {% if face.about %}<div>{{ wall(face.about, 'description') }}</div>{% endif %}
+    {% if face.url %}<a href="{{ face.url }}" rel="noopener noreferrer nofollow"
+       target="_blank" style="font-size:.86rem">{{ face.url }}</a>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+<p style="margin:0 0 16px"><a class="btn small" href="/exchange/pair/{{ prop.property_id }}">Trade {{ wall_text(prop.name, 'this token') }}</a>
+  <span class="muted" style="font-size:.86rem">its price chart, the order book, buy and sell</span></p>
+
+<h2>Launchpad</h2>
+<div class="panel" style="margin-bottom:16px">
+  {# Accounts' token mintpads for this token (a tester, 2026-09-28: once the
+     wizard's screen was left, nothing linked to one). #}
+  {% for tp in token_pads or [] %}
+    <div class="row" style="gap:8px;align-items:center;margin:0 0 10px;flex-wrap:wrap">
+      <span class="pill ok">mintpad</span>
+      <span>{{ tp.lot }} {{ wall_text(prop.name, 'this token') }} per mint, from {{ tp.seller|who }}</span>
+      <a class="btn small" href="/inscriptions/{{ tp.txid }}/view">Open the mintpad</a>
+      <button type="button" class="ghost small" data-share-nft="{{ tp.txid }}"
+              data-piece="the {{ wall_text(prop.name, 'token') }} mintpad" data-kind="text/html">Share to feed</button>
+    </div>
+  {% endfor %}
+  {% if pad %}
+    <p style="margin:0 0 6px"><span class="pill ok">open</span> {{ pad.text }}</p>
+    {% if pad.available %}<p class="muted" style="margin:0 0 8px">{{ pad.available }}</p>{% endif %}
+    <div class="row">
+      <a class="btn small" href="/inscriptions/{{ pad.txid }}/view">Open the launchpad</a>
+      <a class="btn ghost small" href="/exchange?tab=mintpads">All launchpads</a>
+    </div>
+    <p class="muted" style="font-size:.84rem;margin:10px 0 0">A launchpad closes
+      by being sent away, and runs out when the address behind it no longer holds
+      a lot to sell. Inscribing another replaces nothing &mdash; both would be
+      open.</p>
+  {% elif is_issuer and not public %}
+    {# The issuer's own launchpad form, and only on the side of the door that
+       can use it: this branch posts a route the door does not admit from
+       outside, and frames a preview page that is in NEVER_PUBLIC -- so a
+       stranger was handed a button that answers "Not here" and a 404 page
+       inside a frame. The open-launchpad branch above stays public: an open
+       launchpad is a fact about the token, not about who is looking. #}
+    <p class="muted" style="margin:0 0 10px">A page that sells this token at a
+      fixed price, for as long as you hold lots to sell &mdash; the mintpad's
+      idea, without the wall. It is an inscription: anybody's node can read it,
+      and buying is one swap carrying both sides.</p>
+    <form method="post" action="/tokens/{{ prop.property_id }}/launchpad">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="row" style="gap:8px;align-items:flex-end">
+        <div class="field" style="flex:0 0 150px;margin:0">
+          <label for="lot">{{ wall_text(prop.name, 'this token') }} per sale</label>
+          <input autocomplete="off" name="lot" id="lot" inputmode="decimal"
+                 placeholder="100" value="{{ pad_lot or '' }}"></div>
+        <div class="field" style="flex:0 0 130px;margin:0">
+          <label for="pad-amount">Price</label>
+          <input autocomplete="off" name="amount" id="pad-amount" inputmode="decimal"
+                 placeholder="2" value="{{ pad_amount or '' }}"></div>
+        <div class="field" style="flex:0 0 160px;margin:0">
+          <label for="pad-kind">Paid in</label>
+          <select autocomplete="off" name="kind" id="pad-kind">
+            <option value="coins" {{ 'selected' if pad_kind != 'token' }}>{{ chain.label }} coins</option>
+          </select></div>
+        <button type="submit" style="flex:0 0 auto">
+          {{ 'Inscribe it' if pad_plan else 'What will it cost?' }}</button>
+      </div>
+      {% if pad_plan %}
+      <div class="note" style="margin-top:12px">
+        Selling <strong>{{ pad_lot }} {{ wall_text(prop.name, 'this token') }}</strong> for
+        <strong>{{ pad_price }}</strong> a sale &mdash;
+        {{ "{:,}".format(pad_plan.content_len) }} bytes in {{ pad_plan.chunks }}
+        transaction{{ '' if pad_plan.chunks == 1 else 's' }},
+        {{ "%.4f"|format(pad_plan.estimate.fee) }} in fees and
+        {{ "%.2f"|format(pad_plan.estimate.dust) }} in outputs you can sweep back.
+        Press again to inscribe it.
+        <input type="hidden" name="confirmed" value="yes">
+      </div>
+      {% endif %}
+    </form>
+    <div class="row" style="margin-top:12px">
+      <a class="btn ghost small" target="_blank"
+         href="/tokens/launchpad/preview?name={{ prop.name|urlencode }}&amp;lot={{ (pad_lot or '100')|urlencode }}&amp;price={{ (pad_price or '2 coins')|urlencode }}&amp;icon={{ face.icon }}&amp;about={{ face.about|urlencode }}">Open the preview full size</a>
+    </div>
+    <iframe src="/tokens/launchpad/preview?name={{ prop.name|urlencode }}&amp;lot={{ (pad_lot or '100')|urlencode }}&amp;price={{ (pad_price or '2 coins')|urlencode }}&amp;icon={{ face.icon }}&amp;about={{ face.about|urlencode }}"
+            sandbox="allow-scripts" loading="lazy" title="launchpad preview"
+            style="width:100%;height:420px;border:1px solid var(--line);border-radius:10px;background:#07060c;margin-top:10px"></iframe>
+  {% elif not token_pads %}
+    <p class="muted" style="margin:0">Nothing is selling {{ wall_text(prop.name, 'this token') }} from a
+      launchpad &mdash; its issuer can open one. What is for sale is on the
+      <a href="/exchange/pair/{{ prop.property_id }}">order book</a>, at whatever
+      prices their owners picked.</p>
+  {% endif %}
+</div>
+
+<div class="grid" style="margin-bottom:16px">
+  <div class="stat"><div class="k">Supply</div><div class="v">{{ prop.total_display }}</div>
+    {% if prop.managed %}<div class="n">granted so far</div>{% endif %}</div>
+  <div class="stat"><div class="k">Holders</div><div class="v">{{ prop.holder_count }}</div></div>
+  <div class="stat"><div class="k">Created</div><div class="v" style="font-size:1.1rem">block {{ "{:,}".format(prop.creation_block) }}</div></div>
+</div>
+
+<div class="panel">
+  <table>
+    <tr><td class="muted" style="width:130px">Issuer</td>
+        <td>{{ prop.issuer|who }}
+          {# "you" is a fact about who is looking, and `is_issuer` alone only
+             says the issuer is one of this machine's addresses -- which is true
+             of a stranger, too, and told them they were the operator. #}
+          {% if is_issuer and not public %}<span class="pill ok">you</span>{% endif %}</td></tr>
+    {% if prop.category or prop.subcategory %}
+    <tr><td class="muted">Category</td><td>{{ prop.category }}{% if prop.subcategory %} / {{ prop.subcategory }}{% endif %}</td></tr>
+    {% endif %}
+    {% if prop.url %}<tr><td class="muted">Link</td><td class="mono" style="word-break:break-all">{{ prop.url }}</td></tr>{% endif %}
+    {% if about %}<tr><td class="muted">Description</td><td>{{ wall(about, 'description') }}</td></tr>{% endif %}
+    <tr><td class="muted">Created by</td>
+        <td class="mono" style="font-size:.78rem;word-break:break-all">{{ prop.creation_txid }}</td></tr>
+  </table>
+</div>
+
+{% if is_issuer and node.wallet and not public %}
+{# Grant, revoke and hand-over spend from this machine's wallet, so the door
+   answers "Not here" to all three from outside -- and `node.wallet` cannot
+   save the branch either, because a token issued by this node's own address
+   passes that test for every visitor. The account issuer below is a different
+   guard and a true one: it is only set when this tab holds the key. #}
+<h2>Issuer controls</h2>
+<div class="panel">
+  <p class="muted" style="font-size:.86rem;margin-top:0">These act from the issuer address
+    <code class="mono" style="font-size:.78rem">{{ prop.issuer }}</code>, which pays the fee.
+    Each shows you the transaction before anything is broadcast.</p>
+  {% if prop.managed %}
+  <form method="post" action="/tokens/{{ prop.property_id }}/grant" style="margin-bottom:18px">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <strong>Grant</strong> <span class="muted" style="font-size:.84rem">— create new tokens for someone (or for the issuer address, left blank)</span>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:0 0 130px"><input autocomplete="off" name="amount" placeholder="amount" inputmode="decimal"></div>
+      <div style="flex:1 1 220px"><input autocomplete="off" name="recipient" class="mono" spellcheck="false" placeholder="recipient (blank: the issuer)"></div>
+      <div style="flex:1 1 140px"><input autocomplete="off" name="note" placeholder="note (optional)"></div>
+      <button type="submit" class="small {{ 'danger' if chain.is_mainnet }}">Review grant</button>
+    </div>
+  </form>
+  <form method="post" action="/tokens/{{ prop.property_id }}/revoke" style="margin-bottom:18px">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <strong>Revoke</strong> <span class="muted" style="font-size:.84rem">— destroy tokens the issuer address holds</span>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:0 0 130px"><input autocomplete="off" name="amount" placeholder="amount" inputmode="decimal"></div>
+      <div style="flex:1 1 140px"><input autocomplete="off" name="note" placeholder="note (optional)"></div>
+      <button type="submit" class="small {{ 'danger' if chain.is_mainnet }}">Review revoke</button>
+    </div>
+  </form>
+  {% endif %}
+  <form method="post" action="/tokens/{{ prop.property_id }}/issuer">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <strong>Hand over</strong> <span class="muted" style="font-size:.84rem">— make another address the issuer. You cannot take this back.</span>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:1 1 260px"><input autocomplete="off" name="recipient" class="mono" spellcheck="false" placeholder="new issuer address"></div>
+      <button type="submit" class="small danger">Review hand-over</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{% if account_issuer %}
+{# An account's own issuer controls (a tester, 2026-09-26: a managed token made
+   from an account was stuck at zero -- no Grant, Revoke or hand-over). Signed in
+   this tab with the account's key; the node only builds the transaction. #}
+<h2>You issue {{ wall(prop.name, 'token name') }}</h2>
+<div class="panel" id="issuer-panel">
+  <p class="msg info" id="iss-locked" hidden>Open your wallet on
+    <a href="/me">Your arcade</a> first: these are signed with your key, in this tab.</p>
+  {% if prop.managed %}
+  <div class="issrow">
+    <strong>Grant</strong> <span class="muted small">&mdash; make new {{ wall_text(prop.name, 'this token') }} for somebody (blank: for you)</span>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <input id="grant-amount" autocomplete="off" inputmode="{{ 'decimal' if prop.divisible else 'numeric' }}" placeholder="how many" style="flex:0 0 120px">
+      <input id="grant-to" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="@name (blank: you)" style="flex:1 1 180px">
+      <button type="button" id="grant-go" class="small">Grant</button>
+    </div>
+  </div>
+  <div class="issrow">
+    <strong>Revoke</strong> <span class="muted small">&mdash; destroy {{ wall_text(prop.name, 'this token') }} you hold yourself</span>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <input id="revoke-amount" autocomplete="off" inputmode="{{ 'decimal' if prop.divisible else 'numeric' }}" placeholder="how many" style="flex:0 0 120px">
+      <button type="button" id="revoke-go" class="small ghost">Revoke</button>
+    </div>
+  </div>
+  {% endif %}
+  <div class="issrow">
+    <strong>Hand over the issuer role</strong> <span class="muted small">&mdash; somebody else issues it from then on</span>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <input id="issuer-to" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="@name" style="flex:1 1 180px">
+      <button type="button" id="issuer-go" class="small danger">Hand over</button>
+    </div>
+  </div>
+  <p class="msg err" id="iss-trouble" hidden></p>
+  <p class="msg ok" id="iss-news" hidden></p>
+</div>
+<style>.issrow{margin-bottom:16px}.issrow input{min-width:0}</style>
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+const $ = (id) => document.getElementById(id);
+const CHAIN = {network: "{{ chain.network }}", version: {{ chain.params.pubkeyhash_version }}};
+const NAME = {{ prop.name|tojson }};
+let keys = await wallet.opened(CHAIN);
+const say = (t) => { $("iss-trouble").textContent = t; $("iss-trouble").hidden = !t; };
+const news = (t) => { $("iss-news").textContent = t; $("iss-news").hidden = !t; };
+
+// Who, as a person reads it: the @name the node resolved, else what was typed
+// with its @ (a tester, 2026-09-27: "go to arcade_buyer" had lost the @).
+const who = (offer, typed) => offer.to_tag ? "@" + offer.to_tag
+  : (typed ? (/^[1-9A-HJ-NP-Za-km-z]{26,35}$/.test(typed) ? typed : "@" + typed.replace(/^@/, "")) : "you");
+
+async function act(button, body, card, yes, after) {
+  say(""); news("");
+  button.disabled = true;
+  try {
+    const asked = await fetch("/account/token/manage", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({property_id: {{ prop.property_id }}, chain: CHAIN.network, ...body}),
+    });
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that cannot be done");
+    keys = keys || await arcadeKeys(CHAIN);
+    const shown = await wallet.checked(offer, keys);
+    const [title, words] = card(offer);
+    // Said in words, not as raw outputs (a tester, as for the Buy card): the
+    // fee, and what comes back. The small output to a recipient is the carrier
+    // the token rides on.
+    const fee = `The network fee is ${shown.coinsOf(shown.fee)}`
+      + (shown.change ? `, and ${shown.coinsOf(shown.change)} comes back to you.` : ".");
+    const ok = await arcadeAsk(title, `${words} ${fee}`, yes);
+    if (!ok) return;
+    const done = await wallet.confirm(keys, offer);
+    news(`Done: ${done.txid.slice(0, 16)}… It takes effect when its block does.`);
+    for (const id of ["grant-amount", "grant-to", "revoke-amount", "issuer-to"]) if ($(id)) $(id).value = "";
+    if (after) after(offer);
+  } catch (e) {
+    say(String(e.message || e));
+  } finally { if (!button.dataset.locked) button.disabled = false; }
+}
+
+if ($("grant-go")) $("grant-go").onclick = () => {
+  const n = $("grant-amount").value.trim(), to = $("grant-to").value.trim();
+  act($("grant-go"), {action: "grant", amount: n, to},
+      (offer) => [`Grant ${n} ${NAME}?`,
+                  `${n} new ${NAME} go to ${who(offer, to)}` + (offer.to ? ", carried by a tiny coin output to them." : ".")],
+      "Grant");
+};
+if ($("revoke-go")) $("revoke-go").onclick = () => {
+  const n = $("revoke-amount").value.trim();
+  act($("revoke-go"), {action: "revoke", amount: n},
+      () => [`Revoke ${n} ${NAME}?`, `${n} of your own ${NAME} are destroyed.`], "Revoke");
+};
+$("issuer-go").onclick = () => {
+  const to = $("issuer-to").value.trim();
+  act($("issuer-go"), {action: "issuer", to},
+      (offer) => [`Hand ${NAME} to ${who(offer, to)}?`,
+                  `This cannot be undone. From its block on, ${who(offer, to)} issues ${NAME}: `
+                  + "only they can grant, revoke or hand it on, and you cannot take it back."],
+      "Hand it over for good",
+      (offer) => {
+        // Until its block lands the controls must not invite a second, doomed
+        // transaction (a tester, 2026-09-27).
+        // Locked, so act()'s cleanup does not re-enable the button just pressed.
+        for (const b of document.querySelectorAll("#issuer-panel button")) { b.disabled = true; b.dataset.locked = "1"; }
+        for (const i of document.querySelectorAll("#issuer-panel input")) i.disabled = true;
+        news(`Handing ${NAME} over to ${who(offer, to)}… final when the next block lands.`);
+      });
+};
+</script>
+{% endif %}
+
+{% set hc_kind, hc_id, hc_name, hc_label, hc_creator = 'token', prop.property_id, '', prop.name, prop.issuer %}
+{% include "_holders_chat.html" %}
+<h2>Holders</h2>
+<div class="panel">
+{% if holders %}
+  <table class="wallets">
+  {% for h in holders %}
+    <tr><td>{{ h.address|who }}
+          {# `owned` is this machine's addresses, so on the public side of the
+             door the pill named the node's holding row "you" -- the same
+             confusion as the issuer row above, in a table nobody had checked.
+             The account whose key is in this tab is the other half of "who is
+             looking", and it is asked first: a reader holding a key is one
+             person, so the node's row must not light beside their own. #}
+          {% if (mine_address and h.address == mine_address) or
+                (not mine_address and h.address in owned and not public)
+          %}<span class="pill ok">you</span>{% endif %}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums">
+          {{ h.display }}
+          {# What an order of theirs is holding, said where the number is. It is
+             in the row above and in the Supply, so a lot that stands behind a
+             standing order was never missing -- only invisible here, to the one
+             person who could tell why. #}
+          {%- if h.reserved_display %}
+          <div class="muted" style="font-size:.76rem">{{ h.reserved_display }} held by a standing order</div>
+          {%- endif %}</td></tr>
+  {% endfor %}
+  </table>
+{% else %}
+  <p class="muted" style="margin:0">Nobody holds any yet.</p>
+{% endif %}
+</div>
+
+<h2>History</h2>
+<div class="panel">
+{% if history %}
+  <table class="wallets">
+  {% for h in history %}
+    <tr>
+      <td style="white-space:nowrap">{{ h.type_name }}
+        {% if not h.valid %}<span class="pill bad">did nothing</span>{% endif %}</td>
+      <td style="font-variant-numeric:tabular-nums;text-align:right">{{ h.amount_display }}</td>
+      <td style="font-size:.8rem">
+        <div>{{ h.gave|who }}
+          {%- if h.got and h.got != h.gave %} &rarr; {{ h.got|who }}{% endif %}</div>
+        {% if not h.valid %}<div class="muted">{{ h.invalid_reason }}</div>{% endif %}
+        <div class="muted">block {{ "{:,}".format(h.block_height) }} &middot;
+          <span class="mono">{{ h.txid[:16] }}&hellip;</span></div></td>
+    </tr>
+  {% endfor %}
+  </table>
+{% else %}
+  <p class="muted" style="margin:0">Nothing yet.</p>
+{% endif %}
+</div>
+{% endblock %}

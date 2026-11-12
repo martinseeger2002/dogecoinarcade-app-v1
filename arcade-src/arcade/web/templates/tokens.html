@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% import "_chain_line.html" as cl with context %}
+{% import "_chains.html" as chains %}
+{% import "_token_confirm.html" as tk %}
+{% block title %}Tokens · {{ brand.name }}{% endblock %}
+{% import "_not_ordinals.html" as notord %}
+{% block body %}
+{% set tag = 'mainnet' if chain.is_mainnet else 'testnet' %}
+<h1>Tokens {{ tk.chain_switch(chain, other_chains, csrf, "/tokens", public) }}</h1>
+{{ cl.line(chain, "/tokens") }}
+<p class="sub">Every fungible token on {{ chain.label|lower }}: what exists, and how to make one.
+  What <em>you</em> hold, and the form that sends it, is on the
+  <a href="{{ '/me/wallet/tokens' if public else '/wallet/tokens' }}">wallet's Tokens tab</a>.
+  {% if other_chains and not public %}<span class="muted">Click the {{ 'main' if chain.is_mainnet else 'test' }} tag to switch
+  to {{ other_chains[0].label|lower }}.</span>{% endif %}
+  <span id="live" data-generation="{{ state.generation }}"></span></p>
+
+{% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+{% if prepared %}
+  {{ tk.confirm(prepared, confirm_action, confirm_fields, confirm_what, back, chain, csrf) }}
+{% endif %}
+
+{{ notord.pieces() }}
+<div class="chainbar">
+  {# hide_wallet for visitors and accounts: the Balance here is the NODE's wallet, and a
+     newcomer read 191,692 as their own (walk-through, 2026-09-25). #}
+  {{ chains.card(chain, node, "Tokens live here.",
+                 "Wallet disabled on this node." if not node.wallet and not public else None,
+                 hide_wallet=public) }}
+</div>
+{{ tk.index_status(index, chain) }}
+
+{% if pending %}
+<div class="note">
+  {% for p in pending %}
+  <div>Your {{ p.what }} <code class="mono" style="font-size:.78rem">{{ p.txid }}</code>
+    is broadcast and waiting for its block.</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2 id="create">Create a token</h2>
+<div class="panel">
+{# The fields live in _token_create_form.html, in one copy, because there are
+   two ways to submit them and a token's name cannot be taken back. On a
+   public instance this node has no key to post to and no business naming an
+   issuer, so the browser reads the same fields, asks for an offer, and signs
+   it there; the operator's path is the second POST it always was. #}
+{% set f = form_create or {} %}
+{% if public %}
+  {% if account_address %}
+    <p class="muted">Issued by <code class="addr">{{ account_address }}</code>
+      &mdash; this account's address on {{ chain.label|lower }}. It becomes the
+      issuer and, for a fixed supply, receives every token. It pays the fee,
+      and it is the only address this form can issue from.</p>
+    {% include "_token_create_form.html" %}
+  {% elif account_signed %}
+    {# The chain on this page is the node's switch and the account's address is
+       per chain, so the two can disagree. Saying "sign in first" to somebody
+       who did sign in is worse than saying nothing. #}
+    <p class="muted">This page is showing {{ chain.label|lower }} tokens, and
+      this account has not told this node an address there, so there is nothing
+      here for it to sign. Click the other chain's tag above, or open
+      <a href="/me">your wallet</a> &mdash; that is the page that tells this
+      node your address on every chain it runs.</p>
+  {% else %}
+    <p class="muted">A token is created by one transaction out of your own
+      wallet, which this node cannot sign on your behalf.
+      <a href="/me">Sign in and open your wallet</a>, and the form appears
+      here.</p>
+  {% endif %}
+{% elif not node.online %}
+  <p class="muted">The {{ chain.label|lower }} node is not reachable.</p>
+{% elif not node.wallet %}
+  <p>This node runs with <code>disablewallet=1</code>, so it can read tokens but
+     cannot create or send them.</p>
+{% elif not funded %}
+  <p>No address in this wallet holds coins. Creating a token costs a transaction
+     fee, so fund a {{ chain.label|lower }} address first (Wallets page).</p>
+{% else %}
+  {% include "_token_create_form.html" %}
+{% endif %}
+</div>
+{% from "_pager.html" import pager %}
+<h2>All tokens{% if total > 0 %} <span class="muted" style="font-size:.9rem;font-weight:400">
+  {{ "{:,}".format(total) }}, newest first</span>{% endif %}</h2>
+<div class="panel">
+{% if tokens or pending_tokens %}
+  <table class="wallets">
+    <tr class="muted" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em">
+      <td colspan="2">Token</td><td>Supply</td><td>Holders</td><td>Issuer</td></tr>
+  {# Created a minute ago and not in a block yet: read from the pool, shown
+     as what it is, and gone if the transaction is dropped (D-146). #}
+  {% for t in (pending_tokens if page == 1 else []) %}
+    <tr>
+      <td style="width:40px"><span class="coinface"></span></td>
+      <td><strong>{{ wall(t.name, 'token name') }}</strong>
+        <span class="pill warn"
+              title="In the mempool: everybody can see it, and it is a token when its block lands"
+          >waiting for its block</span></td>
+      <td class="muted">&mdash;</td><td class="muted">&mdash;</td>
+      <td> {{ t.issuer|who }}
+        {% if t.issuer in owned %}<span class="pill ok">you</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  {% for t in tokens %}
+    <tr>
+      <td style="width:40px"><a href="/tokens/{{ t.property_id }}">
+        {%- set face = faces.get(t.property_id, {}) -%}
+        {%- if face.icon %}<img src="/content/{{ face.icon }}" alt="{{ wall_text(t.name) }}"
+          loading="lazy" style="width:32px;height:32px;object-fit:cover;border-radius:50%;display:block">
+        {%- else %}<span class="coinface"></span>{% endif %}</a></td>
+      <td><a href="/tokens/{{ t.property_id }}"><strong>{{ wall(t.name, 'token name') }}</strong></a>
+        <span class="muted" style="font-size:.78rem">#{{ t.property_id }}</span>
+        {% if t.test_ecosystem %}<span class="tag testnet">test ecosystem</span>{% endif %}
+        {% if t.managed %}<span class="muted" style="font-size:.78rem">managed</span>{% endif %}</td>
+      <td style="font-variant-numeric:tabular-nums">{{ t.total_display }}</td>
+      <td>{{ t.holder_count }}</td>
+      <td> {{ t.issuer|who }}
+        {% if t.issuer in owned %}<span class="pill ok">you</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </table>
+  {{ pager(page, pages, "/tokens") }}
+{% else %}
+  <p class="muted" style="margin:0">No tokens exist on {{ chain.label|lower }} yet
+    {%- if index.activation_height %} (read from block {{ "{:,}".format(index.activation_height) }} on){% endif %}.</p>
+{% endif %}
+</div>
+
+{% endblock %}

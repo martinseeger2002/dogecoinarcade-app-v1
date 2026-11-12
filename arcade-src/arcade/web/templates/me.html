@@ -1,0 +1,1076 @@
+{% extends "base.html" %}
+{% import "_chains.html" as chains %}
+{% block title %}Your arcade · {{ brand.name }}{% endblock %}
+{% block body %}
+<style>
+.facepick{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0}
+.faceopt{padding:0;width:56px;height:56px;border-radius:50%;overflow:hidden;border:2px solid var(--line);
+  background:var(--panel);box-shadow:none;cursor:pointer}
+.faceopt img{width:100%;height:100%;object-fit:cover;display:block}
+.faceopt.on{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}
+</style>
+<h1 id="hello">Your arcade</h1>
+{% if node_side %}
+{# The operator's Overview is this page, about the node's own identity (2026-10-19: "Everything should look
+   the same as it looks on the client side on the operator side"). The node's controls are in Admin. #}
+<p class="sub" id="whoami">This node's own identity. Its keys are in its wallet on this machine; the node's settings
+  are in <a href="/admin">Admin</a>.</p>
+<script nonce="{{ csp_nonce }}">window.ARCADE_CSRF = {{ csrf|tojson }};</script>
+{% else %}
+<p class="sub" id="whoami">Your keys are in this browser. This node holds
+  none of them &mdash; it builds what you ask for, you sign it, and it
+  broadcasts.</p>
+{% endif %}
+
+{# 2026-09-25: "instead of displaying your wallet address it should just
+   display your @name ... Simplify that page." You first -- your face, your @name,
+   what you said about yourself -- then your coins, then what still needs doing.
+   Everything else is folded away below. The ids are the ones the script has always
+   drawn into. #}
+<div class="panel mecard">
+  <div class="mecard-top">
+    <img id="me-face" alt="" hidden>
+    <span id="me-letter" class="me-letter me-add" role="button" tabindex="0"
+          title="Add a picture">@</span>
+    <div style="min-width:0">
+      <div class="me-name" id="tag">&mdash;</div>
+      <div class="muted" style="font-size:.84rem" id="tag-note"></div>
+    </div>
+  </div>
+  <p id="me-bio" class="me-bio" hidden></p>
+  <p id="me-url" class="muted mono" style="font-size:.84rem;margin:0;overflow-wrap:anywhere" hidden></p>
+  <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+    <a class="btn small" href="#profile-edit">Edit profile</a>
+    <button type="button" class="small ghost" id="copy-name">Copy my @name</button>
+    <a class="btn ghost small" id="share-page" href="#">See my page</a>
+  </div>
+  {# Drawn into by the script, not shown: 2026-09-25 -- "it doesn't need to
+     show messages or anything like that". #}
+  <span hidden><span id="mail"></span><span id="mail-note"></span><span id="contacts"></span></span>
+</div>
+
+{# No wallet here (2026-09-25): coins are on the Wallet page. Kept, hidden, for
+   the script that draws into it. #}
+<div hidden><div class="grid" id="wallets"></div></div>
+<div class="msg err" id="trouble" hidden></div>
+<div class="msg ok" id="news" hidden></div>
+<div class="panel" id="unlock">
+  <h2 style="margin-top:0">Welcome back</h2>
+  <p class="muted" style="margin:0 0 10px">You are signed in, but this is a
+    new tab and your wallet is encrypted &mdash; so it needs your password
+    once more to open here. Signing in opens it; closing the tab shuts it
+    again. It never leaves this browser.</p>
+  {# A username beside the password (2026-09-26): without one, the browser's
+     saved login put the @name into the nearest text box on the page -- the picture's
+     inscription id. It is the account's own name, read-only, and only for autofill. #}
+  {# The unlock pop-up asks for the password (2026-09-27): no second
+     password box on the page. #}
+  <button class="btn primary" id="open" type="button">Open my wallet</button>
+</div>
+
+<div id="doing" hidden>
+  <div class="panel" id="claim-panel" hidden>
+    <h2 style="margin-top:0">Claim your name</h2>
+    <p class="muted" style="margin:0 0 10px">Your name is yours once it is
+      on the chain. Until then it is only this node's note of it.</p>
+    {% if node_side %}<div class="row" style="gap:8px;margin:0 0 10px"><input id="claim-name" autocomplete="off"
+      spellcheck="false" class="mono" placeholder="the name people will see" maxlength="32"></div>{% endif %}
+    <button class="btn primary" id="claim">Claim it</button>
+  </div>
+  <div class="panel" id="announce-panel" hidden>
+    <h2 style="margin-top:0">Let people write to you</h2>
+    <p class="muted" style="margin:0 0 10px">Publishing your messaging key
+      is what makes you reachable. Nobody can write to somebody who has
+      not published one.</p>
+    <button class="btn" id="announce">Publish my key</button>
+    <p class="muted" id="announce-coming" hidden style="margin:0">It went out
+      with something else you published, and it is waiting on a block. There is
+      nothing to press &mdash; a second announcement would be a second
+      transaction saying the same thing.</p>
+  </div>
+  {% if node_side %}
+  <p class="muted mebackup"><strong>The node's wallet is its identity.</strong> <a href="/backup">Back it up</a>
+    if you have not.</p>
+  {% else %}
+  <p class="muted mebackup"><strong>Your twelve words are your account.</strong> There is no
+    reset &mdash; <a href="/me/backup">back them up</a> if you have not.
+    (Forgot your password? <a href="/restore">Restore with the words</a>.)</p>
+  {% endif %}
+
+  {# The profile editor (2026-09-26: "there's no way to update your
+     profile picture, bio, URL" -- it was there, folded into two <details> whose
+     summaries read as labels). Open, in one panel: the picture to tap, the two
+     boxes, one Publish, and what it costs. The ids are the ones the script has
+     always drawn into. #}
+  {# 2026-09-26: sensitive names, tokens and pictures sit behind a
+     "show me" wall; this turns the wall off for this browser. #}
+  <div class="panel" style="margin-top:14px">
+    <label class="row" style="gap:8px;align-items:center;margin:0">
+      <input type="checkbox" id="show-sensitive">
+      <span><strong>Show sensitive content</strong>
+        <span class="muted small" style="display:block">Names, tokens, collections and
+          pictures marked sensitive show straight away in this browser, instead of
+          behind "tap to show".</span></span>
+    </label>
+  </div>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    var box = document.getElementById('show-sensitive');
+    try { box.checked = localStorage.getItem('arcade.showSensitive') === 'yes'; } catch (e) {}
+    box.onchange = function () {
+      try { localStorage.setItem('arcade.showSensitive', box.checked ? 'yes' : 'no'); } catch (e) {}
+      if (box.checked) document.querySelectorAll('.sens-wall').forEach(arcadeReveal);
+    };
+  })();
+  </script>
+  <div class="panel" id="profile-edit" style="margin-top:14px">
+    <h2 style="margin-top:0">Edit your profile</h2>
+    <div id="profile-panel">
+    <p class="msg info" id="profile-locked" hidden style="margin:0 0 12px">
+      To change these, unlock your wallet with your password (at the top of this page).</p>
+
+    <h3 class="pe-h">Picture<span id="face-set" class="muted"></span></h3>
+    <div id="face-pick" class="facepick" hidden></div>
+    <p class="muted" id="face-none" hidden style="font-size:.84rem;margin:4px 0 8px">
+      You hold no pictures yet. Put one on the chain from <a href="/nfts">NFTs</a>
+      and it shows up here to tap.</p>
+    <div class="row" style="gap:8px;align-items:center;margin-top:6px">
+      <div style="flex:1"><input autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" name="piece-id" id="pfp" class="mono"
+        spellcheck="false" placeholder="or paste the id of a picture you hold"></div>
+      <button type="button" class="ghost small" id="face-clear">Remove picture</button>
+    </div>
+    <div class="row" id="face-preview" hidden
+         style="margin-top:10px;align-items:center;gap:10px">
+      <img id="face-img" alt="" loading="lazy"
+           style="width:56px;height:56px;border-radius:50%;object-fit:cover">
+      <span class="muted" style="font-size:.84rem">Your face while the chain says
+        you hold it.</span>
+    </div>
+
+    <h3 class="pe-h">Bio<span id="about-set" class="muted"></span></h3>
+    <textarea autocomplete="off" id="bio" maxlength="160" rows="2"
+      placeholder="a line about you, shown on your page and your posts"></textarea>
+    <h3 class="pe-h">Link</h3>
+    <input autocomplete="off" id="url" class="mono" spellcheck="false" maxlength="120"
+      placeholder="https://somewhere-of-yours">
+
+    <div class="row" style="gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+      <button type="button" id="publish-about">Publish profile</button>
+      <span class="pill warn" id="profile-status" hidden>waiting for its block</span>
+    </div>
+    {# Said here too: the page's news line is at the top, and whoever pressed
+       Publish is scrolled down at this button (filming, 2026-09-26). #}
+    <p class="msg" id="profile-news" hidden style="margin:10px 0 0"></p>
+    {# Kept for anything that still presses it; the one button above sends all three. #}
+    <button type="button" id="publish-face" hidden>Publish this picture</button>
+    <p class="muted" style="font-size:.84rem;margin:10px 0 0;max-width:64ch">
+      Publishing is one transaction from your own wallet, so it costs a small
+      network fee, and it goes on the chain under your @name for anybody to read.
+      Your name does not change. A link has to start with https:// and is shown
+      as words to copy, never as something to click.</p>
+    </div>
+  </div>
+
+  <div hidden><div id="address-panel">
+    <p class="muted" style="margin:0 0 8px;font-size:.88rem">People reach you by your @name. The address behind it, for a wallet that does not know names:</p>
+    <div class="phrase" style="font-size:.95rem" id="myaddr">—</div>
+    <div class="row" style="margin:10px 0 0">
+      <button type="button" class="ghost" id="copy-addr">Copy my address</button>
+    </div>
+
+    <div class="msg info" id="not-announced" style="margin-top:14px" hidden>
+      Your address is not published on the chain yet, so someone who has
+      only your address has nothing to encrypt to. Either publish it once
+      &mdash; the button above, "Publish my key" &mdash; and your address
+      works on its own, or send the full contact code below instead.
+    </div>
+
+    <details style="margin-top:16px">
+      <summary class="muted" style="cursor:pointer;font-size:.88rem">Full
+        contact code</summary>
+      <p class="muted" style="font-size:.87rem;margin:10px 0 8px">
+        Contains your address <em>and</em> your public key, so someone can
+        write to you before your key has been seen on the chain. Longer,
+        but works immediately.</p>
+      <div class="phrase" style="font-size:.82rem" id="contact">—</div>
+      <button type="button" class="ghost" style="margin-top:9px"
+              id="copy-contact">Copy</button>
+    </details>
+    </div>
+  </div>
+</div>
+
+{# 2026-10-18: any chain's wallet on or off in the Wallet tab. Off hides it only: the address is still yours,
+   still announced with your name, and coins sent there still arrive. 2026-10-21: "the Wallet selection should
+   just be a row of the icons and have them lit up when enabled and grayed out when disabled. Below that should be a
+   copy of the arcades card in the admin overview page" (_arcades_panel.html). #}
+<style>
+#wallet-chains .wchips{display:flex;flex-wrap:wrap;gap:10px}
+#wallet-chains .wchip{display:inline-flex;flex-direction:column;align-items:center;gap:4px;min-width:56px;min-height:44px;
+  padding:6px 4px;border:0;background:none;color:var(--fg);font-size:.74rem;cursor:pointer}
+#wallet-chains .wchip img,#wallet-chains .wchip .wcoin{width:40px;height:40px;border-radius:50%;display:block;
+  transition:filter .15s,opacity .15s}
+#wallet-chains .wchip .wcoin{display:flex;align-items:center;justify-content:center;border:1px solid var(--line)}
+#wallet-chains .wchip[aria-pressed="false"] img,#wallet-chains .wchip[aria-pressed="false"] .wcoin{filter:grayscale(1);opacity:.35}
+#wallet-chains .wchip[aria-pressed="false"] span.wname{color:var(--muted)}
+#wallet-chains .wchip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:10px}
+</style>
+<div class="panel" style="margin-top:14px" id="wallet-chains">
+  <h2 style="margin-top:0">Your wallets</h2>
+  <p class="muted" style="margin:0 0 10px;font-size:.88rem">Tap a coin to show or hide its wallet in your Wallet tab. A
+    hidden wallet keeps its address: it is still published with your name, and coins sent to it still arrive.</p>
+  <div class="wchips" role="group" aria-label="Wallets shown in your Wallet tab">
+  {% for c in chain_menu(account_side=True) %}
+    {% set on = c.network not in (hidden or []) %}
+    <button type="button" class="wchip wallet-chain" data-network="{{ c.network }}" aria-pressed="{{ 'true' if on else 'false' }}"
+            title="{{ c.coin }}{% if not c.ready %} (not open yet){% endif %}">
+      {% if coin_icon(c.network) %}<img src="{{ coin_icon(c.network) }}" alt="">{% else %}<span class="wcoin">{{ c.coin[:1] }}</span>{% endif %}
+      <span class="wname">{{ c.coin }}</span>
+    </button>
+  {% endfor %}
+  </div>
+  <p class="muted small" id="wallet-chains-said" style="margin:6px 0 0" aria-live="polite"></p>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    var said = document.getElementById('wallet-chains-said');
+    document.querySelectorAll('.wallet-chain').forEach(function (chip) {
+      chip.onclick = function () {
+        var shown = chip.getAttribute('aria-pressed') !== 'true';
+        chip.setAttribute('aria-pressed', shown ? 'true' : 'false');
+        fetch('/account/wallets', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'{% if node_side %}, 'X-Arcade-Admin': '1'{% endif %}},
+                                   body: JSON.stringify({network: chip.dataset.network, shown: shown})})
+          .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || r.status); return j; }); })
+          .then(function () { said.textContent = chip.title + (shown ? ' shown' : ' hidden') + ' in your Wallet tab.'; })
+          .catch(function (e) { chip.setAttribute('aria-pressed', shown ? 'false' : 'true'); said.textContent = e.message; });
+      };
+    });
+  })();
+  </script>
+</div>
+
+{% include "_arcades_panel.html" %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+  function load() {
+    fetch('{{ "/admin/api/arcades" if node_side else "/account/arcades" }}', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+      .then(function (a) { window.arcadesPanel.draw(a); });
+  }
+  load(); setInterval(function () { if (!document.hidden) load(); }, 30000);
+})();
+</script>
+
+{#- 2026-10-27: "Under the your arcade page on the PWA, you should be able to choose any inscription as the
+    background to your home screen" (/account/homebg; drawn by home.html): kept for the account, on every device. #}
+<div class="panel" style="margin-top:14px" id="homebg-pref">
+  <h2 style="margin-top:0">Home screen background</h2>
+  <p class="muted" style="margin-top:0">Any inscription: a picture, or a page that moves. Paste its id (the long one ending in
+    <code>i0</code>, from Explore or your Wallet's NFTs).</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <input id="homebg-id" placeholder="inscription id, like 4b43…a9i0" autocomplete="off" spellcheck="false"
+           style="flex:1;min-width:0">
+    <button type="button" class="btn small" id="homebg-save">Use it</button>
+    <button type="button" class="btn small ghost" id="homebg-clear">None</button>
+  </div>
+  <p class="msg err" id="homebg-err" hidden></p>
+  <div id="homebg-preview" style="margin-top:10px;max-width:220px;aspect-ratio:9/16;border-radius:14px;overflow:hidden;
+       border:1px solid var(--line);display:none"></div>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var box = document.getElementById('homebg-id'), err = document.getElementById('homebg-err'),
+      pre = document.getElementById('homebg-preview'), ID = /^[0-9a-f]{64}i\d{1,6}$/;
+  function show(id) {
+    pre.replaceChildren();
+    pre.style.display = id ? 'block' : 'none';
+    if (!id) return;
+    var f = document.createElement('iframe');
+    f.src = '/content/' + id; f.title = 'Background preview'; f.setAttribute('sandbox', 'allow-scripts');
+    f.style.cssText = 'width:100%;height:100%;border:0;pointer-events:none;background:#000';
+    pre.append(f);
+  }
+  function save(id) {
+    err.hidden = true;
+    fetch('/account/homebg', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({id: id})})
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || 'not saved'); return j; }); })
+      .then(function (j) { box.value = j.id; show(j.id); try { localStorage.setItem('arcade.homebg', j.id); } catch (e) {} })
+      .catch(function (e) { err.textContent = String(e.message || e); err.hidden = false; });
+  }
+  document.getElementById('homebg-save').onclick = function () {
+    var id = box.value.trim().toLowerCase();
+    if (!ID.test(id)) { err.textContent = 'That is not an inscription id (64 hex characters, i, a number).'; err.hidden = false; return; }
+    save(id);
+  };
+  document.getElementById('homebg-clear').onclick = function () { save(''); };
+  fetch('/account/homebg', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })
+    .then(function (j) { box.value = j.id || ''; show(j.id || ''); }).catch(function () {});
+})();
+</script>
+
+{#- 2026-10-24: "The light mode dark mode, auto selector should be in the your arcade page" (base.html, LIGHT OR
+    DARK): kept in this browser; every page and every window of the home screen follows at once. #}
+<div class="panel" style="margin-top:14px" id="theme-pref">
+  <h2 style="margin-top:0">Light or dark</h2>
+  <p class="muted" style="margin-top:0">Auto follows this device's setting. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Light or dark">
+    <button type="button" class="btn small ghost" data-theme-set="auto" role="radio">Auto</button>
+    <button type="button" class="btn small ghost" data-theme-set="light" role="radio">Light</button>
+    <button type="button" class="btn small ghost" data-theme-set="dark" role="radio">Dark</button>
+  </div>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var bs = document.querySelectorAll('[data-theme-set]');
+  function paint() {
+    var now = window.arcadeTheme();
+    bs.forEach(function (b) {
+      var on = b.dataset.themeSet === now;
+      b.classList.toggle('on', on); b.classList.toggle('ghost', !on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+  bs.forEach(function (b) { b.addEventListener('click', function () { window.arcadeTheme(b.dataset.themeSet); paint(); }); });
+  window.addEventListener('storage', function (e) { if (e.key === 'arcade.theme') paint(); });
+  paint();
+})();
+</script>
+
+{% if not node_side %}
+{#- 2026-11-09, security review: unlocked words stayed open in a tab until sign-out, also on a computer somebody walked
+    away from. After these minutes with nothing done in any of this site's tabs, every tab locks the wallet (not a
+    sign-out); never during a send. Kept in this browser (wallet.js idleLockMinutes). #}
+<div class="panel" style="margin-top:14px" id="idlelock-pref">
+  <h2 style="margin-top:0">Lock the wallet</h2>
+  <p class="muted" style="margin-top:0">After this long with nothing done in any tab, your wallet locks: you stay signed
+    in, and the next spend asks for your password. Never in the middle of a send. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Lock the wallet after">
+    {% for m in (0, 5, 15, 30, 60) %}<button type="button" class="btn small ghost" data-idle-set="{{ m }}"
+      role="radio">{{ 'Off' if m == 0 else m ~ ' min' }}</button>
+    {% endfor %}
+  </div>
+</div>
+<script type="module" nonce="{{ csp_nonce }}">
+  const w = await import("/wallet.js");
+  const bs = document.querySelectorAll("[data-idle-set]");
+  const paint = () => {
+    const now = w.idleLockMinutes();
+    bs.forEach((b) => {
+      const on = Number(b.dataset.idleSet) === now;
+      b.classList.toggle("on", on); b.classList.toggle("ghost", !on); b.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  };
+  bs.forEach((b) => b.addEventListener("click", () => { w.setIdleLock(Number(b.dataset.idleSet)); paint(); }));
+  window.addEventListener("storage", (e) => { if (e.key === "arcade.idle-lock") paint(); });
+  paint();
+</script>
+{% endif %}
+
+{#- What ArcadeCore's menus open, on the account's own page too (2026-11-08): its Settings -> Theme… and Your tabs…, and
+    Window -> Console and Build -> API keys, drawn from the window's own code (app.py /look, /console, /me/keys). -#}
+<div class="panel" style="margin-top:14px" id="core-tools">
+  <h2 style="margin-top:0">Theme, tabs, console and API keys</h2>
+  <p class="muted" style="margin-top:0">The same in every look: what ArcadeCore's window has in its menus.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <a class="btn small ghost" href="/look">Theme and tabs</a>
+    <a class="btn small ghost" href="/console">Console</a>
+    <a class="btn small ghost" href="/me/keys">API keys</a>
+    <a class="btn small ghost" href="/build">Build a theme</a>
+  </div>
+</div>
+{#- THEMES (2026-10-28: "put the toggle in 'your arcade' section near light or dark - and we can call it themes - lets
+    try an ubuntu style one to add to the category"): the website as it is, or the Desktop View (desktop.html) in one
+    of its looks. Kept in this browser (arcade.deskview), on a computer only: a phone keeps the website (and the
+    installed app its home screen). -#}
+<div class="panel" style="margin-top:14px" id="desk-theme-pref" hidden>
+  <h2 style="margin-top:0">Themes</h2>
+  <p class="muted" style="margin-top:0">The website as it is, or a desktop: every page and app in a window you can move,
+    size and minimize, with your own wallpaper. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Theme">
+    <button type="button" class="btn small ghost" data-desk-set="core" role="radio">ArcadeCore</button>
+    <button type="button" class="btn small ghost" data-desk-set="" role="radio">Website</button>
+    <button type="button" class="btn small ghost" data-desk-set="w98" role="radio">Windows 98 desktop</button>
+    <button type="button" class="btn small ghost" data-desk-set="ubuntu" role="radio">Ubuntu desktop</button>
+    <button type="button" class="btn small ghost" data-desk-set="dogefeedx" role="radio">DogeFeedX (macOS)</button>
+  </div>
+</div>
+{#- On a phone's browser (2026-10-29: "if they are viewing on a mobile the website make it look like the PWA by
+    default"): the installed app's home screen (home.html) or the website, kept in this browser (arcade.phoneview). -#}
+<div class="panel" style="margin-top:14px" id="phone-theme-pref" hidden>
+  <h2 style="margin-top:0">Themes</h2>
+  <p class="muted" style="margin-top:0">The home screen, like the installed app: every tab and app an icon that opens full
+    screen. Or the website as it is. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Theme">
+    <button type="button" class="btn small ghost" data-phone-set="home" role="radio">Home screen</button>
+    <button type="button" class="btn small ghost" data-phone-set="web" role="radio">Website</button>
+  </div>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var box = document.getElementById('phone-theme-pref');
+  var installed = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  var shell = null;
+  try { if (window.top !== window && window.top.location.pathname === '/home') shell = window.top; } catch (e) {}
+  // A phone's browser only: the installed app is always its home screen, and a computer has the desktops above.
+  if (installed || (window.top !== window && !shell) || Math.max(screen.width, window.innerWidth) > 640) return;
+  box.hidden = false;
+  var bs = box.querySelectorAll('[data-phone-set]');
+  function now() {
+    var v = ''; try { v = localStorage.getItem('arcade.phoneview') || ''; } catch (e) {}
+    return (v || '{{ phone_default }}') === 'home' ? 'home' : 'web';
+  }
+  function paint() {
+    bs.forEach(function (b) {
+      var on = b.dataset.phoneSet === now();
+      b.classList.toggle('on', on); b.classList.toggle('ghost', !on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+  bs.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var want = b.dataset.phoneSet;
+      if (want === now()) return;
+      try { localStorage.setItem('arcade.phoneview', want); } catch (e) {}
+      paint();
+      var page = location.pathname + location.search;
+      if (want === 'home') (shell || window).location.href = '/home?tab=1#open=' + encodeURIComponent(page);
+      else if (shell) shell.location.href = page;
+    });
+  });
+  window.addEventListener('storage', function (e) { if (e.key === 'arcade.phoneview') paint(); });
+  paint();
+})();
+</script>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var box = document.getElementById('desk-theme-pref');
+  var installed = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  var shell = null;
+  try { if (window.top !== window && window.top.location.pathname === '/desktop') shell = window.top; } catch (e) {}
+  // A page inside a Desktop View window is a computer even when that window is narrow.
+  var inDesk = document.documentElement.classList.contains('indesk') || !!shell;
+  var wide = Math.max(screen.width, window.innerWidth) > 640;
+  try { if (window.top.innerWidth > 640) wide = true; } catch (e) {}
+  // Not on a phone, nor in the installed app, nor in a window of the phone's home screen.
+  // The old check used the iframe's own width, so Your arcade inside a desktop window
+  // stayed hidden on a computer. Phone check remains: Math.max(screen.width, window.innerWidth) <= 640) return;
+  if (!inDesk && (installed || (window.top !== window && !shell) || !wide)) return;
+  box.hidden = false;
+  var bs = box.querySelectorAll('[data-desk-set]');
+  function now() {
+    var v = ''; try { v = localStorage.getItem('arcade.deskview') || ''; } catch (e) {}
+    if (!v) v = '{{ look if look is defined else desk_default }}';   // nothing chosen yet: the arcade's own look
+    return v === '1' ? 'w98' : v === 'web' ? '' : v;
+  }
+  function paint() {
+    bs.forEach(function (b) {
+      var on = b.dataset.deskSet === now();
+      b.classList.toggle('on', on); b.classList.toggle('ghost', !on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+  bs.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var want = b.dataset.deskSet;
+      if (want === now()) return;
+      try { localStorage.setItem('arcade.deskview', want || 'web'); } catch (e) {}
+      paint();
+      var page = location.pathname + location.search;
+      if (want === 'core') { (shell || window).location.href = '/lite'; return; }   // ArcadeCore: its own window
+      if (shell) {
+        // From one desktop to the other only the #open= part changes, which never loads the page: load it again.
+        shell.location.href = want ? '/desktop#open=' + encodeURIComponent(page) : page;
+        if (want) shell.location.reload();
+        return;
+      }
+      if (want) location.href = '/desktop#open=' + encodeURIComponent(page);
+    });
+  });
+  window.addEventListener('storage', function (e) { if (e.key === 'arcade.deskview') paint(); });
+  paint();
+})();
+</script>
+
+{#- 2026-10-23: "In the users your arcade tab you should be able to disable the robot helper" (_helper.html). #}
+<div class="panel" style="margin-top:14px" id="helper-pref">
+  <h2 style="margin-top:0">Arcade helper</h2>
+  <p class="muted" style="margin-top:0">The robot in the corner of every page answers questions about the arcade. Its conversation is kept
+    in this browser only.</p>
+  <label class="switch"><input type="checkbox" id="helper-on"> Show the arcade helper</label>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var box = document.getElementById('helper-on'), OFF = 'arcade.helper.off';
+  try { box.checked = localStorage.getItem(OFF) !== '1'; } catch (e) { box.checked = true; }
+  box.addEventListener('change', function () {
+    try { if (box.checked) localStorage.removeItem(OFF); else localStorage.setItem(OFF, '1'); } catch (e) {}
+    var bot = document.getElementById('arc-bot'), dlg = document.getElementById('arc-bot-box');
+    if (!box.checked) { if (bot) bot.style.display = 'none'; if (dlg) dlg.style.display = 'none'; }
+    else location.reload();
+  });
+})();
+</script>
+
+<div class="panel" style="margin-top:14px"{% if node_side %} hidden{% endif %}>
+  <h2 style="margin-top:0">Your usage</h2>
+<div id="room" hidden>
+  <p class="muted" style="margin:0 0 12px;font-size:.88rem">What this node lets one account do, and how much of it you have used. It opens again as the hour goes on.</p>
+  <div class="statbar" id="room-grid"></div>
+  <p class="muted" id="room-kinds" style="margin:10px 0 0;font-size:.88rem" hidden></p>
+  </div></div>
+
+<style>
+.mecard-top{display:flex;align-items:center;gap:14px}
+.pe-h{font-size:.95rem;margin:16px 0 6px}
+#profile-edit textarea,#profile-edit #url{width:100%;box-sizing:border-box}
+.me-add{cursor:pointer}
+
+#me-face,.me-letter{width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none}
+.me-letter{display:grid;place-items:center;background:var(--code);color:var(--muted);
+  font-size:1.6rem;font-weight:700}
+.me-name{font-size:1.6rem;font-weight:700;overflow-wrap:anywhere}
+.me-bio{margin:12px 0 4px}
+.mebackup{font-size:.86rem;margin:14px 2px}
+.mefold{margin-top:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  padding:0 16px}
+.mefold>summary{cursor:pointer;padding:14px 0;font-weight:600;list-style:none}
+.mefold>summary::after{content:"+";float:right;color:var(--accent)}
+.mefold[open]>summary::after{content:"\2013"}
+.mefold[open]{padding-bottom:14px}
+</style>
+
+
+
+<style>
+#unlock input,#doing input{width:100%;padding:10px 12px;
+  margin:4px 0;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel);color:var(--fg);font:inherit}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "{{ '/node-wallet.js' if node_side else '/wallet.js' }}";
+import * as mail from "{{ '/node-mail.js' if node_side else '/messaging.js' }}";
+
+const $ = (id) => document.getElementById(id);
+// The "@" on the card leads to the picture field (a listener, not an inline handler: the script policy, 2026-11-09).
+$("me-letter").addEventListener("click", () => $("profile-edit").scrollIntoView({behavior: "smooth"}));
+const say = (text) => { $("trouble").textContent = text;
+                        $("trouble").hidden = !text; };
+const news = (text) => { $("news").textContent = text;
+                         $("news").hidden = !text; };
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+
+let me = null, keys = null;
+
+// Already open in this tab? Then there is nothing to ask for.
+(async () => {
+  const already = await wallet.opened(CHAIN);
+  if (already) {
+    keys = already;
+    me = await mail.identity(keys.phrase);
+    $("unlock").hidden = true;
+    $("doing").hidden = false;
+    // An account made before this node ran a second chain has no address
+    // registered there, and nothing else would ever notice. Told here,
+    // where the wallet is open and the keys exist to derive it.
+    try { await wallet.tellTheNode(keys); } catch (e) {}
+    await draw();
+  }
+})().catch(() => {});
+
+const coinsOf = (n) => (n / 100000000).toLocaleString(undefined,
+  {minimumFractionDigits: 0, maximumFractionDigits: 8});
+
+// Bytes are counted in thousands on this page: 250000 is a number nobody
+// reads, and 250k is.
+const kilos = (n) => (n >= 1000
+  ? `${(n / 1000).toLocaleString(undefined, {maximumFractionDigits: 1})}k`
+  : String(n));
+
+function drawWallets(said) {
+  const chains = said.chains || [];
+  $("wallets").innerHTML = "";
+  for (const chain of chains) {
+    const card = document.createElement("div");
+    card.className = "stat";
+    const what = document.createElement("div");
+    what.className = "k";
+    what.textContent = chain.label + " coins";
+    const much = document.createElement("div");
+    much.className = "v";
+    // What can be spent now (Order item 4): the index's balance, less what a
+    // transaction in the pool has taken, plus change on its way back.
+    much.textContent = chain.address
+      ? coinsOf(chain.spendable ?? chain.balance) : "—";
+    const note = document.createElement("div");
+    note.className = "n mono";
+    note.style.fontSize = ".72rem";
+    note.style.wordBreak = "break-all";
+    note.textContent = chain.address || "no address yet";
+    card.append(what, much, note);
+    if (chain.incoming) {
+      const coming = document.createElement("div");
+      coming.className = "n";
+      coming.textContent = `${coinsOf(chain.incoming)} on its way to you`;
+      card.appendChild(coming);
+    }
+    if (chain.leaving) {
+      const going = document.createElement("div");
+      going.className = "n";
+      going.textContent = `${coinsOf(chain.leaving)} leaving, in a transaction `
+        + "waiting for its block";
+      card.appendChild(going);
+    }
+    if (chain.mainnet) {
+      const real = document.createElement("div");
+      real.className = "n";
+      real.textContent = "real coins — a send cannot be taken back";
+      card.appendChild(real);
+    }
+    $("wallets").appendChild(card);
+  }
+  const open = document.createElement("a");
+  open.className = "stat";
+  open.href = {{ ('/wallet' if node_side else '/me/wallet')|tojson }};
+  open.style.cssText =
+    "display:flex;align-items:center;justify-content:center;" +
+    "text-decoration:none;font-size:1.05rem;font-weight:600";
+  open.textContent = "Open the Wallet →";
+  $("wallets").appendChild(open);
+}
+
+// Extra room, bought from this node's operator (2026-09-28).
+function drawBoost(boost) {
+  let box = document.getElementById("boost-box");
+  if (!boost) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "boost-box";
+    box.className = "row";
+    box.style.cssText = "gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px";
+    $("room-grid").after(box);
+  }
+  box.replaceChildren();
+  const say = document.createElement("span");
+  say.className = "muted";
+  say.textContent = `Need more room? ${kilos(boost.bytes)} more a day for ${boost.days} days, `
+    + `for ${boost.price} ${boost.asset_name}, paid to this node's operator.`;
+  const buy = document.createElement("button");
+  buy.className = "btn small";
+  buy.textContent = "Buy a boost";
+  buy.onclick = async () => {
+    buy.disabled = true;
+    try {
+      const wallet = await import("/wallet.js");
+      const asked = await fetch("/account/boost", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: "{}"});
+      const offer = await asked.json();
+      if (!asked.ok) throw new Error(offer.detail || "no boost for sale here");
+      const CHAIN = {network: offer.chain, version: ARCADE_CHAIN.version};
+      const held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN);
+      const shown = await wallet.checked(offer, held);
+      const ok = await arcadeAsk(`Buy a boost for ${boost.price} ${boost.asset_name}?`,
+        `${kilos(boost.bytes)} more a day for ${boost.days} days, from the moment it is sent. `
+        + `Network fee ${shown.coinsOf(shown.fee)}. It is a payment: it cannot be taken back.`,
+        "Buy the boost");
+      if (!ok) { buy.disabled = false; return; }
+      await wallet.confirm(held, offer);
+      arcadeToast("Boost bought. The extra room is yours now.");
+      location.reload();
+    } catch (e) {
+      buy.disabled = false;
+      say.textContent = String(e.message || e);
+      say.style.color = "var(--bad)";
+    }
+  };
+  box.append(say, buy);
+}
+
+// The node's numbers for one account, and what of them is used. Read from
+// the node rather than copied from a page: an allowance the browser
+// remembered would be a number that a second tab makes wrong.
+function drawRoom(said) {
+  const quota = said.quota;
+  $("room").hidden = !quota;
+  if (!quota) {
+    $("room-grid").replaceChildren();
+    return;
+  }
+  const rows = [];
+  for (const one of quota.actions || []) {
+    rows.push([`${one.used} of ${one.limit}`, `${one.label} an hour`]);
+  }
+  if (quota.bytes) {
+    rows.push([`${kilos(quota.bytes.used)} of ${kilos(quota.bytes.limit)}`,
+               "bytes a day on the chain"
+               + (quota.bytes.boost ? ` (with ${kilos(quota.bytes.boost)} from a boost)` : "")]);
+  }
+  drawBoost(said.boost);
+  // The same bytes, by the thing that carried them. The row above says a
+  // person has run out of room and says nothing about what spent it, which is
+  // the one question they have when they run out (a tester). Counted by
+  // the node off its own rows, not from what any page claims to have written.
+  const spent = (quota.by_kind || []).filter((one) => one.bytes > 0);
+  const kinds = $("room-kinds");
+  kinds.hidden = !spent.length;
+  kinds.textContent = spent.length
+    ? "Of those bytes, from the last day: "
+      + spent.map((one) => `${one.label} ${kilos(one.bytes)}`).join(" · ")
+    : "";
+  const cells = [];
+  for (const [value, what] of rows) {
+    const cell = document.createElement("div");
+    cell.className = "stat";
+    const b = document.createElement("b");
+    b.textContent = value;
+    const span = document.createElement("span");
+    span.textContent = what;
+    cell.append(b, span);
+    cells.push(cell);
+  }
+  // replaceChildren rather than emptying innerHTML: a test
+  // (test_me_page) counts the innerHTML uses on this page to keep the
+  // promise that nothing off the chain is ever handed to it as markup.
+  $("room-grid").replaceChildren(...cells);
+}
+
+// The card at the top: face, @name, bio and link, from what the chain has.
+let publishedFace = "";
+function drawCard(said) {
+  const prof = said.profile || {};
+  publishedFace = prof.pfp || "";
+  $("face-clear").hidden = !($("pfp").value.trim() || publishedFace);
+  const name = said.tag || said.name || "";
+  const face = $("me-face");
+  face.hidden = !prof.pfp;
+  $("me-letter").hidden = !!prof.pfp;
+  if (prof.pfp) face.src = "/content/" + prof.pfp;
+  $("me-letter").textContent = (name || "@").slice(0, 1).toUpperCase();
+  $("me-bio").textContent = prof.bio || "";
+  $("me-bio").hidden = !prof.bio;
+  $("me-url").textContent = prof.url || "";
+  $("me-url").hidden = !prof.url;
+  $("share-page").href = name ? "/u/" + encodeURIComponent(name) : "#";
+  $("copy-name").onclick = () => {
+    if (!name) return;
+    navigator.clipboard.writeText("@" + name).then(
+      () => { $("copy-name").textContent = "Copied"; setTimeout(() => {
+        $("copy-name").textContent = "Copy my @name"; }, 1500); },
+      () => say("@" + name));
+  };
+}
+
+async function draw() {
+  const said = await wallet.state();
+  drawRoom(said);
+  $("tag").textContent = said.tag ? "@" + said.tag
+                       : (said.name ? "@" + said.name : "—");
+  $("tag-note").textContent = said.tag ? "on the chain"
+    : said.claiming ? "on its way" : "not claimed yet";
+  drawWallets(said);
+  $("claim-panel").hidden = !!said.tag || !keys;
+  // This button is not the only way a key gets published. Every profile
+  // publish carries the key with it -- one build in app.py serves both -- so
+  // an account that has set a picture has announced its key without anybody
+  // pressing anything here. A second announcement is a second transaction
+  // saying the same thirty-eight bytes, so out is out: the panel goes when
+  // the chain has the key, the button goes while this node's own broadcast is
+  // still waiting for its block, and the page says which of the two it is.
+  $("announce-panel").hidden = !keys || !!said.announced;
+  $("announce").hidden = !keys || !!said.announced || !!said.announcing;
+  $("announce-coming").hidden = !!said.announced || !said.announcing;
+  drawProfile(said);
+  drawCard(said);
+  // A typed or picked picture keeps showing in the card until it is published.
+  if ($("pfp").dataset.touched) previewFace();
+  document.dispatchEvent(new CustomEvent("arcade:me-drawn"));
+  $("myaddr").textContent = said.address || "—";
+  // "Not published" and "broadcast, waiting on a block" are different
+  // sentences. The box below is advice to hand out a contact code instead,
+  // which is wrong for a key that went out a minute ago and needs only the
+  // block it is sitting in.
+  $("not-announced").hidden = !said.address
+    || !!said.announced || !!said.announcing;
+  if (keys && said.address) {
+    const code = await mail.contactCode(CHAIN.network, me.publicKey);
+    $("contact").textContent = code;
+  } else {
+    $("contact").textContent = "—";
+  }
+  await refreshCounts();
+  finishSetUp(said);
+  return said;
+}
+
+// What signup could not finish, finished here, by itself (found filming the
+// promo, 2026-09-25): an account that signed up while the faucet said no kept
+// its name claim and key publish "waiting" for ever, even after coins came,
+// until somebody found the two buttons. Once coins are here and the wallet is
+// open, the page does what the buttons would -- once per page load, and never
+// while the node already has either on its way.
+const tried = {name: false, key: false};
+function finishSetUp(said) {
+  if (!keys || !me) return;
+  const tagChain = (said.chains || [])[0] || {};
+  const coins = Number(tagChain.spendable ?? (Number(tagChain.balance || 0) + Number(tagChain.incoming || 0)));
+  if (!(coins > 0)) return;
+  if (!said.tag && !said.claiming && (said.name || "") && !tried.name) {
+    tried.name = true;
+    wallet.claim(keys).then((r) => {
+      say(`Your name is on its way to the chain (${r.txid.slice(0, 12)}\u2026).`);
+      draw();
+    }).catch((e) => say(`Your name could not be claimed yet: ${e.message || e}`));
+  }
+  if (!said.announced && !said.announcing && !tried.key) {
+    tried.key = true;
+    mail.announce(keys, me).then(() => draw())
+      .catch((e) => say(`Your key could not be published yet: ${e.message || e}`));
+  }
+}
+
+// What is already published, in the boxes that would change it — but never
+// over something being typed. An announcement replaces a whole profile at
+// once, so a box that started empty would be a quiet way of taking a field
+// down, and this page redraws itself after every publish.
+let lastPublished = null;
+function drawProfile(said) {
+  const profile = said.profile || {};
+  // "Waiting for its block" until what was published is what the chain says.
+  if (lastPublished && profile.pfp === lastPublished.pfp
+      && (profile.bio || "") === lastPublished.bio
+      && (profile.url || "") === lastPublished.url) {
+    $("profile-status").hidden = true;
+    lastPublished = null;
+  }
+  $("profile-locked").hidden = !!keys;
+  $("publish-face").disabled = !keys;
+  $("publish-about").disabled = !keys;
+  const fill = (id, value) => {
+    const box = $(id);
+    if (!box.dataset.touched) box.value = value || "";
+  };
+  fill("pfp", profile.pfp);
+  fill("bio", profile.bio);
+  fill("url", profile.url);
+  $("face-set").textContent = profile.pfp ? " — set" : "";
+  $("about-set").textContent = (profile.bio || profile.url) ? " — set" : "";
+  // Only a piece id, and only ever from our own /content/ path: the value
+  // came off somebody's announcement, and a box it goes into is a box this
+  // page just filled from the same source.
+  const piece = /^[0-9a-f]{64}$/.test(profile.pfp || "");
+  $("face-preview").hidden = !piece;
+  if (piece) $("face-img").src = "/content/" + profile.pfp;
+}
+
+for (const id of ["pfp", "bio", "url"])
+  $(id).oninput = () => { $(id).dataset.touched = "yes"; };
+
+/* The face as it will look, as soon as it is chosen or typed. */
+function previewFace() {
+  const id = $("pfp").value.trim();
+  const piece = /^[0-9a-f]{64}$/.test(id);
+  $("face-preview").hidden = !piece;
+  if (piece) $("face-img").src = "/content/" + id;
+  // And in the card at the top, as others will see it. Anything that is not a
+  // picture id -- a browser's autofill typing the username in here, a half-pasted
+  // id -- leaves the published picture showing rather than hiding it (the operator,
+  // 2026-09-26: "if you have a profile picture assigned, it should show on your
+  // me page"). Remove picture empties the box on purpose, and hides it.
+  const shown = piece ? id : ($("pfp").dataset.cleared ? "" : publishedFace);
+  // Only offered when there is a picture to remove (a tester, 2026-09-27).
+  $("face-clear").hidden = !(id || shown);
+  $("me-face").hidden = !shown;
+  $("me-letter").hidden = !!shown;
+  if (shown) $("me-face").src = "/content/" + shown;
+}
+$("pfp").addEventListener("input", () => { delete $("pfp").dataset.cleared; previewFace(); });
+$("face-clear").hidden = !($("pfp").value.trim() || publishedFace);
+
+/* The pictures this account holds, to tap rather than paste. Asked once, the
+   first time the section is opened. */
+let pickedOnce = false;
+async function loadFacePicker() {
+  if (pickedOnce) return;
+  pickedOnce = true;
+  try {
+    const said = await (await fetch({{ ('/node/me/nfts' if node_side else '/account/nfts')|tojson }})).json();
+    const pieces = [];
+    for (const chain of said.chains || []) {
+      for (const piece of chain.pieces || []) {
+        if (String(piece.content_type || "").startsWith("image/")) pieces.push(piece);
+      }
+    }
+    $("face-none").hidden = pieces.length > 0;
+    $("face-pick").hidden = !pieces.length;
+    $("face-pick").replaceChildren();
+    for (const piece of pieces) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "faceopt";
+      b.title = "#" + piece.number;
+      b.setAttribute("aria-label", "Use picture #" + piece.number);
+      const img = document.createElement("img");
+      img.src = "/content/" + piece.txid; img.alt = ""; img.loading = "lazy";
+      b.appendChild(img);
+      b.onclick = () => {
+        $("pfp").value = piece.txid; $("pfp").dataset.touched = "yes";
+        delete $("pfp").dataset.cleared;
+        document.querySelectorAll(".faceopt").forEach((o) => o.classList.remove("on"));
+        b.classList.add("on");
+        previewFace();
+      };
+      $("face-pick").appendChild(b);
+    }
+  } catch (e) { pickedOnce = false; }
+}
+// Loaded as soon as the wallet is open: the row is the way to pick, not a
+// thing behind a fold (2026-09-26).
+document.addEventListener("arcade:me-drawn", () => { if (keys) loadFacePicker(); });
+$("face-clear").onclick = () => {
+  $("pfp").value = ""; $("pfp").dataset.touched = "yes"; $("pfp").dataset.cleared = "yes";
+  document.querySelectorAll(".faceopt").forEach((o) => o.classList.remove("on"));
+  previewFace();
+};
+
+async function refreshCounts() {
+  try { $("mail").textContent = (await mail.inbox()).length; } catch (e) {}
+  try { $("contacts").textContent = (await mail.book()).length; } catch (e) {}
+}
+
+async function withWallet(what, done) {
+  say(""); news("");
+  try {
+    const out = await what();
+    if (done) news(done(out));
+    await draw();
+  } catch (e) { say(String(e.message || e)); }
+}
+
+$("open").onclick = async () => {
+  say("");
+  try {
+    // The pop-up opens it for every tab of this site (base.html arcadeKeys).
+    keys = await arcadeKeys(CHAIN);
+    me = await mail.identity(keys.phrase);
+    $("unlock").hidden = true;
+    $("doing").hidden = false;
+    try { await wallet.tellTheNode(keys); } catch (e) {}
+    $("whoami").textContent =
+      "Open in this tab. Closing it shuts the wallet again.";
+    await draw();
+  } catch (e) { say(String(e.message || e)); }
+};
+
+$("claim").onclick = () => withWallet(
+  () => wallet.claim(keys), (r) => `Claiming it: ${r.txid.slice(0, 16)}…`);
+
+$("announce").onclick = () => withWallet(
+  () => mail.announce(keys, me), () => "Your key is on its way to the chain.");
+
+// The two boxes the node's own page has, for an account: one announcement
+// built by the node over the address it watches, signed here, broadcast by
+// this node because it is the one holding the coins. The tag is not sent --
+// the node reads it off the chain, which is what makes publishing a new
+// picture leave the name alone.
+const published = (words) => () => {
+  // Now the chain has it, so let the next draw fill the boxes from there.
+  for (const id of ["pfp", "bio", "url"]) delete $(id).dataset.touched;
+  delete $("pfp").dataset.cleared;
+  return words;
+};
+
+$("publish-face").onclick = () => withWallet(
+  () => mail.publishProfile(keys, me, {pfp: $("pfp").value.trim()}),
+  published("Your picture is on its way to the chain."));
+
+// One button, all three: a profile is one announcement, so publishing the
+// picture and the words together is one fee rather than two.
+$("publish-about").onclick = async () => {
+  $("profile-news").hidden = true;
+  $("publish-about").disabled = true;
+  $("publish-about").textContent = "Publishing…";
+  await withWallet(
+    () => {
+      lastPublished = {pfp: $("pfp").value.trim(),
+                       bio: $("bio").value.split(/\s+/).filter(Boolean).join(" "),
+                       url: $("url").value.trim()};
+      return mail.publishProfile(keys, me, {pfp: lastPublished.pfp,
+                                            bio: $("bio").value, url: lastPublished.url});
+    },
+    (out) => {
+      $("profile-status").hidden = false;
+      const words = "Your profile is on its way to the chain. It changes everywhere "
+        + "when its block lands, usually within a few minutes.";
+      $("profile-news").className = "msg ok";
+      $("profile-news").textContent = words;
+      $("profile-news").hidden = false;
+      return words;
+    });
+  if (!$("trouble").hidden && $("profile-news").hidden) {
+    // A refusal, said beside the button as well.
+    $("profile-news").className = "msg err";
+    $("profile-news").textContent = $("trouble").textContent;
+    $("profile-news").hidden = false;
+  }
+  for (const id of ["pfp", "bio", "url"]) delete $(id).dataset.touched;
+  delete $("pfp").dataset.cleared;
+  $("publish-about").disabled = !keys;
+  $("publish-about").textContent = "Publish profile";
+};
+
+$("copy-addr").onclick = () => {
+  navigator.clipboard.writeText($("myaddr").textContent.trim());
+};
+$("copy-contact").onclick = () => {
+  navigator.clipboard.writeText($("contact").textContent.trim());
+};
+
+// Awaited, not fired-and-forgotten: a test (or a person) watching for
+// `meReady` should see a page that has actually finished drawing, not one
+// that merely started to.
+try { await draw(); } catch (e) {}
+
+// The wallet cards, the counts and the profile are drawn here from this tab's
+// keys; they redraw when a block brings something (base.html's `arcade:changed`),
+// and boxes somebody is typing in are left alone (drawProfile's `touched`).
+document.body.dataset.selfRefreshing = "yes";
+document.addEventListener("arcade:changed", () => { draw().catch(() => {}); });
+document.body.dataset.meReady = "yes";
+</script>
+{# At the very bottom, and nowhere else in the app but the sign-in page (the operator,
+   2026-09-28). #}
+<div style="text-align:center;margin:40px 0 10px"{% if node_side %} hidden{% endif %}>
+  <button type="button" class="small ghost" id="sign-out">Sign out</button>
+  {# Every device at once (2026-10-25, issue #13, SadFrog: "14 days, renewed by use, plus 'sign out
+     everywhere'"). #}
+  <button type="button" class="small ghost" id="sign-out-everywhere">Sign out everywhere</button>
+</div>
+  <script type="module" nonce="{{ csp_nonce }}">
+  // Sign out, so somebody can join or sign in as another account here (the operator,
+  // 2026-09-28). What this browser holds of the account is saved first, then
+  // forgotten; the account itself is on the chain and in its sealed copy.
+  document.getElementById("sign-out").onclick = async (e) => {
+    const button = e.currentTarget;
+    if (!(await arcadeAsk("Sign out?", "Your wallet locks and this browser forgets your "
+        + "messages and address book. They are kept safely, sealed, and come back when you "
+        + "sign in again with your name and password.", "Sign out"))) return;
+    button.disabled = true; button.textContent = "Signing out\u2026";
+    const wallet = await import("/wallet.js");
+    await wallet.signOut(typeof ARCADE_CHAIN !== "undefined" ? ARCADE_CHAIN : null);
+    location.href = "/join";
+  };
+  // Every session of this account ends: this browser, and every phone or computer it is signed in on.
+  document.getElementById("sign-out-everywhere").onclick = async (e) => {
+    const button = e.currentTarget;
+    if (!(await arcadeAsk("Sign out everywhere?", "This account is signed out on every device it is "
+        + "signed in on, this one too. Each one asks for your name and password again, and this "
+        + "account's API keys are switched off (switch on again the ones that are yours). Your wallet, "
+        + "messages and address book are kept safely, sealed.", "Sign out everywhere"))) return;
+    button.disabled = true; button.textContent = "Signing out\u2026";
+    const wallet = await import("/wallet.js");
+    await wallet.signOut(typeof ARCADE_CHAIN !== "undefined" ? ARCADE_CHAIN : null, {everywhere: true});
+    location.href = "/join";
+  };
+  </script>
+{% if node_side %}{% include "_edition_ask.html" %}{% include "_setup_wizard.html" %}{% endif %}
+{% endblock %}

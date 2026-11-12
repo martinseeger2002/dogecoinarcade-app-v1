@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "_exui.html" as ex %}
+{% block title %}Trade history · Exchange · {{ brand.name }}{% endblock %}
+{% block body %}
+{# The reader's own trades (2026-10-17): what the chain says they were a side of, newest
+   first, each opening its own page; then their lock-script swaps, kept in this browser. #}
+<div id="live" data-generation="{{ state.generation }}" class="live" data-live-fast></div>
+<a class="back-link" href="{{ back }}">&#8592; {{ 'Back to ' ~ pair_label if pair_label else 'All markets' }}</a>
+{{ ex.style() }}{{ ex.market_css() }}
+<h1 style="margin:6px 0 12px">Trade history{% if pair_label %} <span class="muted" style="font-weight:600">&middot; {{ pair_label }}</span>{% endif %}</h1>
+{% if pair %}<p style="margin:-6px 0 12px;font-size:.84rem"><a href="/exchange/history">All your trades &rarr;</a></p>
+<script nonce="{{ csp_nonce }}">window.HISTORY_PAIR = {{ pair|tojson }};</script>{% endif %}
+{% if viewer == 'nobody' %}
+<div class="panel"><p class="muted" style="margin:0">Sign in to see your trades.</p></div>
+{% else %}
+<div class="panel">
+  <h3 style="margin:0 0 6px">On the book</h3>
+  {% if rows %}
+  <table style="width:100%">
+    <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
+      <td>When</td><td>You</td><td style="text-align:right">For</td></tr>
+    {% for r in rows %}
+    {% set href = r.href or ('/exchange/trade/' ~ r.txid ~ '?chain=' ~ r.net) %}
+    <tr class="tradelink" data-href="{{ href }}">
+      <td class="muted" style="font-size:.8rem;white-space:nowrap"><a class="tl" href="{{ href }}"><span data-when="{{ r.when }}"></span></a><br>{{ net_badge(r.chain) }}</td>
+      <td><a class="tl" href="{{ href }}"><b>{{ r.side }}</b> {{ r.what }}</a>
+        {% if r.who %}<br><small class="muted">with {{ r.who|who }}</small>{% endif %}</td>
+      <td class="mono" style="text-align:right"><a class="tl" href="{{ href }}">{{ r.for }}</a></td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted" style="margin:0">No trades yet.</p>{% endif %}
+</div>
+{% if viewer == 'account' %}
+<div class="panel">
+  <h3 style="margin:0 0 6px">Swaps between chains</h3>
+  {% include "_tab_swaps.html" %}
+  <p class="muted" style="font-size:.8rem;margin:8px 0 0" id="no-swaps">Your lock-script swaps show here; this
+    browser keeps them. A swap you list is filled by your arcade's node, with every page closed; Withdraw sends your
+    side straight back. <a href="/docs/swaps.md">How a swap works</a></p>
+</div>
+{% endif %}
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+document.querySelectorAll("[data-when]").forEach(function (e) {
+  var d = new Date(Number(e.dataset.when) * 1000);
+  e.textContent = d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+});
+</script>
+{% endblock %}

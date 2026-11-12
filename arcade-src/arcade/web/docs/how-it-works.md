@@ -1,0 +1,143 @@
+# How DogecoinArcade works
+
+DogecoinArcade is one face of ARCADE (Adaptive Reciprocating Chain-linked
+Auxiliary Distributed Ecosystem): the same software runs as PepecoinArcade and
+LitecoinArcade too, and every face speaks the same protocol.
+
+DogecoinArcade is a social network, messenger, token exchange and NFT arcade
+that keeps everything that matters on a public blockchain. There is no
+company database behind it: posts, names, tokens, NFTs and trades are
+transactions, and any node that reads the same chain arrives at the same
+arcade. This page is the overview. The other guides go deeper.
+
+## What lives on the chain
+
+| On the chain | Where it is read from |
+|---|---|
+| Coins, tokens, NFTs and inscriptions | Mainnet blocks |
+| @tags (names), posts, likes and profiles | Blocks, and the mempool for speed |
+| Offers, asks and order-book trades | Blocks; takes in flight are watched in the mempool |
+| Swaps between two chains | Lock scripts on both chains, acted on from the mempool |
+| Private messages, sealed to one reader | Testnet, read from the mempool within seconds |
+
+Tokens follow the Omni Layer rules, so anyone who has used Omni Core will
+recognise the transaction types and the method names. Inscriptions (images,
+text and interactive HTML pages) are stored in the transactions themselves.
+
+The home chain is **Pepecoin**, a Dogecoin Core fork. The installer also sets
+up **Dogecoin** mainnet, and the protocol works the same there. An operator
+can add more chains on **Admin → Coins & chains**: Litecoin, Litecoin testnet, Bellscoin,
+Luckycoin, Kotia, Wojakcoin, DigiByte and Flopcoin. Each one runs on the arcade's own machine, or
+is borrowed from another arcade that shares its Core (see
+[Shared Cores](shared-cores.md)).
+
+## What a node does
+
+A node is one machine running:
+
+* **Pepecoin Core, mainnet**: the ledger, run here or borrowed from an arcade
+  that shares it.
+* **Pepecoin Core, testnet**: the messenger's chain. It always runs on the
+  node's own machine.
+* **Dogecoin Core, mainnet**, unless the operator borrows it or turns it off.
+* **DogecoinArcade itself**: an indexer that replays blocks into a local
+  database, and a web interface at `http://127.0.0.1:8420`.
+
+The indexer holds no authority. It computes what the chain says. A node can
+start from a downloaded index to save time, and the manifest beside the
+download lets you re-read the chain yourself and prove the copy correct
+instead of trusting it.
+
+A node can run two ways:
+
+* **As a wallet**, the default. One person's machine, with the node's own
+  wallet, open only on that machine.
+* **As a public arcade**, with `--public`. Other people can sign up for a
+  seat, and strangers can see the public pages.
+
+## What your browser does
+
+When you join someone's public node, **your keys stay in your browser**:
+
+* Your account is twelve words, made in the browser and never sent to the
+  node. The node stores your public key and a copy of your wallet sealed with
+  your password (PBKDF2-SHA512, 600,000 rounds, then AES-GCM). That copy is
+  what lets you sign in by name on any arcade. It is handed to whoever asks
+  for your name, so the password is what protects it: the sign-up page asks
+  for at least 12 characters, and refuses passwords known from leaks.
+* To sign in, the browser signs a one-time challenge from the node.
+* Each action (a post, a send, an order, a message) is built by the node,
+  signed by your browser, and then broadcast. The node never sees a key it
+  could spend with.
+* Your address book and your copies of your sent messages stay in the
+  browser. The node never learns who you talk to.
+
+This makes a node a convenience, not a custodian. Your name, coins and posts
+are on the chain, so you can sign in on another node, or run your own, and
+they are all still there.
+
+## How trading stays trustless
+
+A trade between two people is an **atomic swap**. It is a single
+transaction that either moves both sides or moves nothing. A seller signs
+their half in advance, and the buyer completes it later. Neither side can
+take the other's part without paying.
+
+A trade between two chains (PEP for DOGE, say) cannot be one transaction, so
+it is settled by **lock scripts** on both chains: either both sides get paid
+or both get their own coins back. It normally takes seconds, and your own node
+finishes your side with transactions you signed in advance. See
+[Swaps between chains](swaps.md).
+
+Standing buy orders can be filled while you are away, in one of two ways:
+
+* The node fills them from lots you signed in advance, which can only be
+  spent on the exact trade you agreed to.
+* Or you get a notification and fill the order yourself the next time you
+  open the app.
+
+## Messages
+
+Private messages are encrypted end to end, sealed to the recipient's key,
+and carried as testnet transactions. They appear within seconds, straight
+from the mempool. Nobody else can read them, and neither can the sender once
+they are sent. Messaging runs on testnet only, by design: it uses no real
+coins and puts no load on the main chain.
+
+## Screening
+
+A public node can screen what it shows. Each post and image is checked by a
+language model the operator runs. Material marked sensitive is blurred until
+a viewer chooses to reveal it, and illegal material is never shown. This
+check happens on the node. It changes only what that node displays, and it
+never alters the chain.
+
+## Running your own node
+
+On Linux:
+
+```bash
+curl -O https://dogecoinarcade.com/install.py
+python3 install.py
+```
+
+The installer downloads and verifies Pepecoin Core and Dogecoin Core, sets
+up Pepecoin mainnet, Pepecoin testnet and Dogecoin mainnet as services, installs the latest release of the app and fetches the latest index
+bootstrap. Every node also hands out its own copy of the program and index at
+`/clone`, so the network does not depend on any one website.
+
+## Where to read next
+
+* [What it does](features.md): every feature, what it costs and its limits.
+* [Node setup](00-node-setup.md): the installer, and the same steps by hand.
+* [Remote access](remote-access.md): reaching your node from elsewhere.
+* [Swaps between chains](swaps.md) and
+  [Shared Cores](shared-cores.md): trading across chains, and borrowing the
+  chains you do not run.
+* [AI models and pictures](llm.md): selling and using AI models on the
+  exchange.
+* [LoRa](lora.md): reaching an arcade by radio.
+* [Inscription API](inscription-api.md): building interactive NFT pages.
+* [Bot RPC](bot-rpc.md): scripting against a node.
+* [Messaging node](messaging/01-node.md) and
+  [messaging design](messaging/02-design.md): how messages are carried.

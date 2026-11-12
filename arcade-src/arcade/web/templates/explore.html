@@ -1,0 +1,901 @@
+{% extends "base.html" %}
+{% block title %}Explore · {{ brand.name }}{% endblock %}
+{% block body %}
+{# The Explore tab (2026-10-25, SadFrog): "lets make an explore tab that has tabs for every coin the node has
+   ordinals/omni on and if both seperate drop downs to view which protocol - starting with doginals, drc-20s, then
+   pepinals, then bellinals and then litecoin ordinals, litecoin omni, and then the rest ... a user should be able to
+   look up known collections, inscription id's, inscription numbers, file types." The questions Admin -> Ords ->
+   Explorer asks, read only and open to anybody, answered by the most complete index of each chain (/explore/api/*). #}
+{% include "_pick.html" %}
+<style>
+  .xp h1{margin:0 0 4px}
+  .xp .xpcoins{margin:10px 0 6px}
+  .xp .xpproto{display:flex;gap:8px;align-items:center;margin:8px 0 4px;flex-wrap:wrap}
+  .xp .xpproto select{font-size:16px}
+  .xp .xpcard{border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
+  .xp .xpcard h2{font-size:1.05rem;margin:0 0 8px}
+  .xp .xprow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .xp .xprow input[type=search],.xp .xprow input[type=text]{flex:1 1 220px;min-width:0;font-size:16px}
+  .xp .xpsaid{margin:8px 0 0;font-size:.9rem}
+  .xp .xpnote{font-size:.84rem;margin:6px 0 0}
+  .xp .xpwarn{border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:10px;padding:10px 12px;
+    font-size:.9rem;margin:10px 0}
+  /* The viewer: the inscription big, its facts beside it (under it on a phone). */
+  .xp .xpnav{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .xp .xpjump{display:flex;gap:4px;align-items:center}
+  .xp .xpjump input{width:8.5em;font-size:16px}
+  .xp .xpbody{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:16px;align-items:start}
+  .xp .xpframe{width:100%;aspect-ratio:1;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    background:color-mix(in srgb,var(--fg) 4%,transparent);display:flex;align-items:center;justify-content:center}
+  .xp .xpframe iframe{width:100%;height:100%;border:0;display:block;background:transparent}
+  .xp .xpframe pre{margin:0;padding:10px;width:100%;height:100%;box-sizing:border-box;overflow:auto;white-space:pre-wrap;
+    word-break:break-word;font-size:.8rem;align-self:stretch}
+  .xp .xpnone{padding:14px;text-align:center;font-size:.88rem}
+  .xp .xpfacts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 12px;margin:0;font-size:.92rem}
+  .xp .xpfacts dt{color:var(--muted)}
+  .xp .xpfacts dd{margin:0;overflow-wrap:anywhere;word-break:break-word}
+  .xp .xpfacts dd code{font-size:.82rem}
+  .xp .xplink{background:none;border:0;padding:0;box-shadow:none;min-height:0;color:var(--accent);cursor:pointer;
+    font:inherit;text-decoration:underline;overflow-wrap:anywhere;text-align:left}
+  /* A grid of pieces (a type, a collection): small frames, the number under each. */
+  .xp .xpgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px;margin-top:10px}
+  .xp .xptile{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:none;padding:0;cursor:pointer;
+    text-align:left;color:inherit;font:inherit;display:flex;flex-direction:column;min-height:0;box-shadow:none}
+  .xp .xptile .xpthumb{aspect-ratio:1;width:100%;display:flex;align-items:center;justify-content:center;
+    background:color-mix(in srgb,var(--fg) 4%,transparent);overflow:hidden;position:relative}
+  .xp .xptile iframe{width:100%;height:100%;border:0;pointer-events:none}
+  .xp .xptile .xptype{font-size:.75rem;color:var(--muted);padding:6px;text-align:center;word-break:break-all}
+  .xp .xptile .xpcap{font-size:.8rem;padding:5px 7px;border-top:1px solid var(--line)}
+  .xp .xptile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .xp .xpcolls{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px}
+  .xp .xpcoll .xpcap b{display:block}
+  /* The collection search's controls (2026-10-26): a wrapping row, one control a line on a phone. */
+  .xp .xpfilters{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:.9rem}
+  .xp .xpfilters label{display:flex;gap:6px;align-items:center;white-space:nowrap}
+  .xp .xpfilters select{font-size:16px;max-width:100%}
+  .xp .xpfilters .xpcheck input{width:auto;min-height:0;margin:0}
+  .xp .xpcoll .xpcap .xpline{display:block}
+  .xp .xpmark{display:inline-block;font-size:.72rem;border:1px solid var(--line);border-radius:999px;padding:0 6px;
+    margin-top:3px;color:var(--muted)}
+  .xp .xpend{height:1px}
+  .xp .xptile .xpthumb.xpnocover{aspect-ratio:auto;height:44px}
+  @media (max-width:520px){
+    .xp .xpcolls{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+    .xp .xpfilters label:not(.xpcheck){flex:1 1 100%;display:grid;grid-template-columns:5.5em minmax(0,1fr)}
+    .xp .xpfilters select{min-width:0;width:100%}
+  }
+  .xp .xpmore{margin-top:10px}
+  .xp .xprich{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:8px}
+  .xp .xprich th,.xp .xprich td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .xp .xprich td.n,.xp .xprich th.n{text-align:right;white-space:nowrap}
+  .xp .xprich td.addr{overflow-wrap:anywhere;word-break:break-all}
+  .xp .xppager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+  @media (max-width:700px){
+    .xp .xpbody{grid-template-columns:minmax(0,1fr)}
+    .xp .xprich thead{display:none}
+    .xp .xprich,.xp .xprich tbody{display:block;width:auto}
+    .xp .xprich tr{display:flex;flex-wrap:wrap;gap:2px 12px;border-top:1px solid var(--line);padding:6px 0}
+    .xp .xprich td{display:block;border:0;padding:0}
+    .xp .xprich td.addr{flex:1 1 calc(100% - 4em);min-width:0}
+    .xp .xprich td.n{text-align:left;font-size:.84rem}
+    .xp .xprich td.n[data-l]::before{content:attr(data-l) " ";color:var(--muted)}
+  }
+</style>
+<section class="xp">
+  <h1>Explore</h1>
+  <p class="muted" style="margin:0">Inscriptions, tokens and collections on every chain this arcade reads, from the
+    most complete index of each: this arcade&rsquo;s own, or a linked arcade&rsquo;s.</p>
+  {% if not chains %}
+  <p class="xpwarn">This arcade reads no chain&rsquo;s inscriptions yet.</p>
+  {% else %}
+  <nav class="ex-seg xpcoins" id="xpcoins" aria-label="Coin">
+    {%- for c in chains %}
+    <a href="/explore?net={{ c.net }}" data-net="{{ c.net }}">{{ c.chain }}</a>
+    {%- endfor %}
+  </nav>
+  <div class="xpproto" id="xpprotobox" hidden>
+    <label for="xpproto">Protocol</label>
+    <select id="xpproto"></select>
+  </div>
+  <div id="xpstate"></div>
+
+  {# --- inscriptions --- #}
+  <div id="xpords">
+    <div class="xpcard">
+      <h2>Search</h2>
+      <div class="xprow">
+        <input id="xpq" type="search" autocomplete="off" placeholder="inscription number or id, txid:vout, address"
+               aria-label="Search inscriptions">
+        <button type="button" class="small" id="xpgo">Search</button>
+      </div>
+      <p class="muted xpnote">A number (<code>0</code>, <code>#1234</code>, <code>-5</code> for a cursed one), an inscription id (<code>&lt;txid&gt;i0</code>),
+        a coin as <code>txid:vout</code> (what sits on it), an address (its token balances), or a name like
+        <code>jon.doge</code>.</p>
+      <div id="xpsaid" class="xpsaid" aria-live="polite"></div>
+    </div>
+
+    {# Hidden until an inscription is picked (2026-10-27, SadFrog: the viewer "should be minimized until an inscription is
+       clicked to view"): a tile, a link, the search box, or ?id= / ?n= in the address. #}
+    <div class="xpcard" id="xpview" aria-label="Inscription viewer" hidden>
+      <div class="xpnav">
+        <button type="button" class="small" id="xpprev" aria-label="Previous inscription">&lsaquo; Previous</button>
+        <label class="xpjump"><span>#</span><input autocomplete="off" type="number" id="xpnum" step="1"
+               inputmode="numeric" aria-label="Inscription number"></label>
+        <button type="button" class="small" id="xpjumpgo">Go</button>
+        <button type="button" class="small" id="xpnext" aria-label="Next inscription">Next &rsaquo;</button>
+      </div>
+      <div class="xpbody">
+        <div class="xpframe" id="xpframe"></div>
+        <dl class="xpfacts" id="xpfacts"><dt>&nbsp;</dt><dd class="muted">Loading&hellip;</dd></dl>
+      </div>
+    </div>
+
+    <div class="xpcard">
+      <h2>By file type</h2>
+      <div class="xprow">
+        <select id="xptype" aria-label="File type" style="font-size:16px">
+          <option value="image/">Any image</option>
+          <option value="image/png">PNG</option>
+          <option value="image/webp">WebP</option>
+          <option value="image/jpeg">JPEG</option>
+          <option value="image/gif">GIF</option>
+          <option value="image/svg+xml">SVG</option>
+          <option value="image/avif">AVIF</option>
+          <option value="text/html">HTML</option>
+          <option value="text/plain">Text</option>
+          <option value="application/json">JSON</option>
+          <option value="text/javascript">JavaScript</option>
+          <option value="audio/">Audio</option>
+          <option value="video/">Video</option>
+          <option value="model/">3D model</option>
+          <option value="">Another type&hellip;</option>
+        </select>
+        <input id="xptypeother" type="text" autocomplete="off" placeholder="e.g. application/pdf" aria-label="Content type"
+               hidden>
+        <label class="xpjump">from #<input id="xptypefrom" type="number" autocomplete="off" min="0" step="1" inputmode="numeric"
+               aria-label="Start at inscription number"></label>
+        <button type="button" class="small" id="xptypego">Show</button>
+      </div>
+      <div id="xptypesaid" class="xpsaid" aria-live="polite"></div>
+      <div class="xpgrid" id="xptypegrid"></div>
+      <button type="button" class="small xpmore" id="xptypemore" hidden>More</button>
+    </div>
+
+    {# 2026-10-26, SadFrog: "can you make the collection search more in depth with sorting and filters and lazy loading
+       one at a time on demand." Every known collection is listed, held here or not; 30 come at a time as the list is
+       scrolled, a collection's pieces 48 at a time, and one not fetched yet is fetched when it is opened. #}
+    <div class="xpcard">
+      <h2>Collections</h2>
+      <div class="xprow">
+        <input id="xpcollq" type="search" autocomplete="off" maxlength="80" placeholder="Search collections by name"
+               aria-label="Search collections">
+      </div>
+      <div class="xpfilters" id="xpcollfilters">
+        <label>Sort <select id="xpcollsort">
+          <option value="size">Biggest</option>
+          <option value="holders">Most holders</option>
+          <option value="newest">Newest</option>
+          <option value="agreed">Most agreed</option>
+          <option value="name">Name</option>
+        </select></label>
+        <label>Source <select id="xpcollsrc">
+          <option value="all">All</option>
+          <option value="known">Known (Nintondo, arcades)</option>
+          <option value="registry">Collection registry</option>
+          <option value="builtin">Built in (Sub 1K)</option>
+        </select></label>
+        <label>Size <select id="xpcollsize">
+          <option value="">Any</option>
+          <option value="0-999">Under 1,000</option>
+          <option value="1000-10000">1,000 to 10,000</option>
+          <option value="10001-">Over 10,000</option>
+        </select></label>
+        <label>Agreed by <select id="xpcollagreed">
+          <option value="">Any</option>
+          <option value="1">1 arcade or more</option>
+          <option value="2">2 or more</option>
+          <option value="3">3 or more</option>
+          <option value="5">5 or more</option>
+        </select></label>
+        <label class="xpcheck"><input type="checkbox" id="xpcollcomplete"> Complete only</label>
+      </div>
+      <p class="muted xpnote">Collections published to the arcades&rsquo; collection registry, and the known
+        collections of Doginals, Pepinals and Bellinals, with where the list came from and how many arcades hold the
+        very same list. One marked &ldquo;not fetched yet&rdquo; is fetched when you open it.</p>
+      <div id="xpcollsaid" class="xpsaid" aria-live="polite"></div>
+      <div class="xpcolls" id="xpcolls"></div>
+      <div class="xpend" id="xpcollsend" aria-hidden="true"></div>
+      <button type="button" class="small xpmore" id="xpcollsmore" hidden>More collections</button>
+      <div id="xpcoll" hidden>
+        <div class="xprow" style="margin-top:12px">
+          <button type="button" class="small" id="xpcollback">&lsaquo; All collections</button>
+          <b id="xpcollname"></b>
+        </div>
+        <p class="muted xpnote" id="xpcolldesc"></p>
+        <div id="xpcollwait" class="xpsaid" aria-live="polite"></div>
+        <div class="xpgrid" id="xpcollgrid"></div>
+        <div class="xpend" id="xpcollgridend" aria-hidden="true"></div>
+        <div class="xppager">
+          <button type="button" class="small" id="xpcollmore" hidden>More pieces</button>
+          <span class="muted" id="xpcollpage"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# --- the -20 tokens --- #}
+  <div id="xptokens" hidden>
+    <div class="xpcard">
+      <h2 id="xptokh">Tokens</h2>
+      <div class="xprow">
+        <span class="pick" id="xptickpick"><input type="search" class="pick-q" placeholder="Search a ticker"
+              autocomplete="off" role="combobox" aria-expanded="false" aria-label="Token ticker"
+              style="font-size:16px"><span class="pick-list" role="listbox" hidden></span></span>
+      </div>
+      <div id="xptok" aria-live="polite"></div>
+    </div>
+  </div>
+
+  {# --- the arcade's own tokens and NFTs (Omni-format, its ledger of the chain) --- #}
+  <div id="xpassets" hidden>
+    <div class="xpcard">
+      <h2 id="xpassetsh">Arcade assets</h2>
+      <div class="xprow">
+        <input id="xpassetq" type="search" autocomplete="off" placeholder="Search by name" aria-label="Search assets">
+        <select id="xpassetcat" aria-label="Category" style="font-size:16px"><option value="">Every category</option></select>
+      </div>
+      <p class="muted xpnote">Tokens and NFTs made in arcades on this chain (game items, coins, collectibles), from this
+        arcade&rsquo;s ledger of it.</p>
+      <div id="xpassetsaid" class="xpsaid" aria-live="polite"></div>
+      <div class="xpgrid" id="xpassetgrid"></div>
+    </div>
+    <div class="xpcard" id="xpasset" hidden>
+      <div class="xpbody">
+        <div class="xpframe" id="xpassetframe"></div>
+        <dl class="xpfacts" id="xpassetfacts"></dl>
+      </div>
+      <h2 style="margin-top:14px">Holders</h2>
+      <div id="xpassetholders"></div>
+    </div>
+  </div>
+
+  {# --- Omni --- #}
+  <div id="xpomni" hidden>
+    <div class="xpcard">
+      <h2>Omni on <span id="xpomnichain">Litecoin</span></h2>
+      <p>Omni Layer assets (OmniLite) are being connected: this arcade will read them from an OmniLite node, with the
+        same search and viewer as the inscriptions.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  'use strict';
+  var CHAINS = {{ chains | tojson }};
+  if (!CHAINS.length) return;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function num(n) { return n == null ? '' : Number(n).toLocaleString('en-US'); }
+  function bytes(n) { n = Number(n || 0); return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB'; }
+  function link(label, go) { var b = el('button', 'xplink', label); b.type = 'button'; b.onclick = go; return b; }
+  var X = {chain: null, proto: null, number: 0, last: -1, tick: null, typeNext: null, typeAsked: '', coll: null, collAt: 0, want: null};
+
+  function api(path, args) {
+    var qs = Object.keys(args).map(function (k) { return k + '=' + encodeURIComponent(args[k]); }).join('&');
+    return fetch('/explore/api/' + path + '?' + qs, {headers: {'Accept': 'application/json'}, cache: 'no-store'})
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+        return j;
+      }); });
+  }
+  function from(j) {
+    if (!j || !j.from) return el('span');
+    return el('div', 'muted xpnote', 'Answered by ' + j.from + (j.walked_to ? ', walked to block ' + num(j.walked_to) : ''));
+  }
+  function facts(dl, rows) {
+    dl.textContent = '';
+    rows.forEach(function (f) {
+      if (f[1] == null || f[1] === '') return;
+      dl.appendChild(el('dt', '', f[0]));
+      var dd = el('dd');
+      if (f[1] instanceof Node) dd.appendChild(f[1]); else dd.textContent = String(f[1]);
+      dl.appendChild(dd);
+    });
+  }
+
+  // --- the coin tabs and the protocol menu --------------------------------------------------------------------
+  function pickChain(net, proto, push) {
+    var c = CHAINS.filter(function (x) { return x.net === net; })[0] || CHAINS[0];
+    X.chain = c;
+    document.querySelectorAll('#xpcoins a').forEach(function (a) {
+      var on = a.getAttribute('data-net') === c.net;
+      a.classList.toggle('on', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    var sel = $('xpproto');
+    sel.textContent = '';
+    c.protocols.forEach(function (p) { var o = el('option', '', p.label); o.value = p.key; sel.appendChild(o); });
+    $('xpprotobox').hidden = c.protocols.length < 2;
+    var want = c.protocols.filter(function (p) { return p.key === proto; })[0] || c.protocols[0];
+    sel.value = want.key;
+    pickProto(want.key, push);
+  }
+  function pickProto(key, push) {
+    var c = X.chain, p = c.protocols.filter(function (x) { return x.key === key; })[0] || c.protocols[0];
+    X.proto = p;
+    if (push !== false) {
+      try { history.replaceState(null, '', '/explore?net=' + c.net + (p.key !== 'ords' ? '&p=' + p.key : '')); } catch (e) {}
+    }
+    $('xpords').hidden = p.kind !== 'ord';
+    $('xptokens').hidden = p.kind !== 'token';
+    $('xpomni').hidden = p.kind !== 'omni';
+    $('xpassets').hidden = p.kind !== 'assets';
+    var st = $('xpstate'); st.textContent = '';
+    if ((p.kind === 'ord' || p.kind === 'token') && !c.answers) {
+      st.appendChild(el('p', 'xpwarn', c.chain + ' is not indexed on this arcade yet, and no linked arcade walking it is '
+        + 'heard just now: what is asked below may not be answered.'));
+    }
+    if (p.kind === 'ord') {
+      X.number = 0; X.last = -1; X.want = null; $('xpsaid').textContent = '';
+      $('xptypegrid').textContent = ''; $('xptypesaid').textContent = ''; $('xptypemore').hidden = true;
+      $('xpview').hidden = true;                      // until an inscription on this chain is picked
+      $('xpcollq').value = '';
+      collections();
+      // 2026-11-01, SadFrog: Sub 1K (the chain's first thousand inscriptions, built in) is what a chain opens on;
+      // Back shows the other collections.
+      openCollection({kind: 'builtin', slug: 'sub1k', name: 'Sub 1K', count: 1000, supply: 1000, imported: true});
+    } else if (p.kind === 'token') {
+      X.tick = null; $('xptok').textContent = ''; PICK.q.value = '';
+      $('xptokh').textContent = p.label + ' tokens on ' + c.chain;
+    } else if (p.kind === 'assets') {
+      $('xpassetsh').textContent = 'Arcade assets on ' + c.chain;
+      $('xpasset').hidden = true; $('xpassetq').value = '';
+      assets(true);
+    } else {
+      $('xpomnichain').textContent = c.chain;
+    }
+  }
+  document.querySelectorAll('#xpcoins a').forEach(function (a) {
+    a.addEventListener('click', function (e) { e.preventDefault(); pickChain(a.getAttribute('data-net')); });
+  });
+  $('xpproto').onchange = function () { pickProto($('xpproto').value); };
+
+  // --- the viewer ---------------------------------------------------------------------------------------------
+  function contentInto(box, x, big) {
+    box.textContent = '';
+    var ct = String((x.delegate ? x.delegate_content_type : x.content_type) || '').toLowerCase(),
+      src = '/content/' + encodeURIComponent(x.id);
+    if (/^image\//.test(ct) || /^text\/html/.test(ct) || /svg/.test(ct)) {
+      // Sandboxed, scripts only, never this page's origin (as the Wallet and Admin -> Ords show one).
+      var frame = document.createElement('iframe');
+      frame.src = src + '/fit';    // a picture drawn whole, a page sent on; a note, not an error's JSON, when missing
+      frame.title = 'Inscription ' + x.id; frame.loading = 'lazy';
+      frame.setAttribute('sandbox', 'allow-scripts'); frame.setAttribute('scrolling', 'no');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      box.appendChild(frame);
+    } else if (big && (/^text\//.test(ct) || /json|javascript/.test(ct)) && (x.size || 0) <= 65536) {
+      var pre = el('pre', '', 'Reading…'); box.appendChild(pre);
+      fetch(src, {cache: 'force-cache'}).then(function (r) { if (!r.ok) throw new Error(); return r.text(); })
+        .then(function (t) {
+          if (/json/.test(ct) || /^\s*[{\[]/.test(t)) { try { t = JSON.stringify(JSON.parse(t), null, 2); } catch (e) { /* as it is */ } }
+          pre.textContent = t.length > 8000 ? t.slice(0, 8000) + '\n…' : t;
+        }).catch(function () { pre.textContent = 'The content could not be read here.'; });
+    } else {
+      var none = el('div', big ? 'xpnone muted' : 'xptype', (ct || 'unknown type') + (x.size ? ' · ' + bytes(x.size) : ''));
+      if (big) {
+        none.appendChild(el('br'));
+        var a = el('a', '', 'Open the content'); a.href = src; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        none.appendChild(a);
+      }
+      box.appendChild(none);
+    }
+  }
+  function drawOne(j) {
+    var x = j.number && j.number.inscription, last = j.number ? j.number.last : X.last;
+    X.last = last == null ? -1 : last;
+    var dl = $('xpfacts'), frame = $('xpframe'), want = X.want;
+    $('xpview').hidden = false;
+    if (!x && want) {
+      // Asked by id and this arcade's index has not walked that far yet (2026-10-27: a collection's piece clicked on
+      // node 2, whose Bells index was at block 44,205 while the ducks sit near 888,000, drew "No inscription #0 yet").
+      // The content comes from the chain itself, as the tile's did, with what the collection said about it.
+      contentInto(frame, {id: want.id, content_type: want.content_type || 'image/'}, true);
+      var wid = el('a', '', want.id); wid.href = '/content/' + encodeURIComponent(want.id); wid.target = '_blank'; wid.rel = 'noopener noreferrer';
+      facts(dl, [
+        ['Name', want.name || null],
+        ['In collection', want.collection || null],
+        ['Number', want.number != null ? '#' + num(want.number) + ' (as the collection lists it)' : null],
+        ['Chain', X.chain.chain],
+        ['Inscription id', wid]]);
+      dl.appendChild(el('dt'));
+      dl.appendChild(el('dd', 'muted xpnote', 'This arcade has indexed ' + X.chain.chain + ' up to block '
+        + num(j.walked_to || 0) + ', not as far as this one yet: its holder and where it sits show once it has.'));
+      $('xpnum').value = '';
+      $('xpprev').disabled = X.last < 0; $('xpnext').disabled = X.last < 0;
+      return;
+    }
+    if (!x) {
+      frame.textContent = '';
+      frame.appendChild(el('div', 'xpnone muted', X.last < 0 ? 'No inscriptions indexed on this chain yet.'
+        : 'No inscription #' + num(X.number) + ' yet: the last one known is #' + num(X.last) + '.'));
+      facts(dl, [['Number', '#' + num(X.number)], ['Last known', X.last < 0 ? 'none yet' : '#' + num(X.last)]]);
+    } else {
+      X.number = x.number;
+      contentInto(frame, x, true);
+      var id = el('a', '', x.id); id.href = '/content/' + encodeURIComponent(x.id); id.target = '_blank'; id.rel = 'noopener noreferrer';
+      var walked = j.walked_to || 0, moved = x.moved_at || x.height;
+      var current = !walked || moved <= walked;
+      facts(dl, [
+        ['Number', '#' + num(x.number) + (X.last >= 0 ? ' of ' + num(X.last) : '')],
+        ['Chain', X.chain.chain],
+        ['Inscription id', id],
+        ['Content type', x.content_type],
+        ['Size', x.size == null ? null : bytes(x.size) + (x.pieces > 1 ? ' in ' + x.pieces + ' pieces' : '')],
+        ['Inscribed at block', num(x.height)],
+        ['Protocol', x.protocol || null],
+        ['Delegate', x.delegate ? link(x.delegate, function () { showId(x.delegate); }) : null],
+        ['Parent', x.parent ? link(x.parent, function () { showId(x.parent); }) : null],
+        // 2026-10-26: the known collection it is a piece of, opened below with a click.
+        ['In collection', j.collection ? link(j.collection.name, function () {
+          openCollection(j.collection.kind === 'registry'
+            ? {kind: 'registry', txid: j.collection.txid, name: j.collection.collection}
+            : {kind: 'known', slug: j.collection.slug, name: j.collection.collection, source: j.collection.source}, 0);
+          $('xpcollgrid').scrollIntoView({block: 'start', behavior: 'smooth'}); }) : null],
+        ['Reinscription', x.reinscription ? 'yes' : null],
+        // ord's charms on a chain read as ord itself (Litecoin): cursed, vindicated, unbound, lost ...
+        ['Charms', x.charms && x.charms.length ? x.charms.join(', ') : null],
+        ['Burned', x.burned ? 'yes' : null],
+        ['Holder', x.burned ? null : (x.owner || 'not known here')],
+        ['Sits on', x.burned ? null : (x.output ? el('code', '', x.output + (x.offset ? ' (offset ' + num(x.offset) + ')' : '')) : 'fees (no output)')],
+        ['Last moved at block', x.moved_at && x.moved_at !== x.height ? num(x.moved_at) : null],
+        ['Note', x.note || null]]);
+      if (walked && !current) dl.appendChild(el('dd', 'muted xpnote', 'Where it sits now may be newer than the walk.'));
+      var dd = el('dd'); dd.appendChild(from(j)); dl.appendChild(el('dt')); dl.appendChild(dd);
+    }
+    $('xpnum').value = X.number;
+    $('xpprev').disabled = X.number <= 0;
+    $('xpnext').disabled = X.last < 0 || X.number >= X.last;
+  }
+  function viewerError(e) {
+    $('xpview').hidden = false;
+    $('xpframe').textContent = '';
+    $('xpframe').appendChild(el('div', 'xpnone muted', e.message));
+    facts($('xpfacts'), [['Number', '#' + num(X.number)]]);
+    $('xpprev').disabled = X.number <= 0; $('xpnext').disabled = false;
+  }
+  function showNumber(n) {
+    var net = X.chain.net;
+    X.number = Math.trunc(Number(n)) || 0;          // below zero: a cursed one (Litecoin)
+    X.want = null;
+    $('xpprev').disabled = $('xpnext').disabled = true;
+    api('inscription', {net: net, number: X.number})
+      .then(function (j) { if (net === X.chain.net) drawOne(j); })
+      .catch(function (e) { if (net === X.chain.net) viewerError(e); });
+  }
+  /** `hint`: what the page already knows about it (a collection's tile: its name, collection and number), drawn when
+   * this arcade's index has not reached it. */
+  function showId(id, scroll, hint) {
+    var net = X.chain.net;
+    X.want = Object.assign({id: id}, hint || {});
+    $('xpview').hidden = false;
+    api('inscription', {net: net, id: id})
+      .then(function (j) { if (net === X.chain.net) drawOne(j); })
+      .catch(function (e) { if (net === X.chain.net) viewerError(e); });
+    if (scroll !== false) $('xpview').scrollIntoView({block: 'start', behavior: 'smooth'});
+  }
+  $('xpprev').onclick = function () { if (X.number > 0) showNumber(X.number - 1); };
+  $('xpnext').onclick = function () { showNumber(X.number + 1); };
+  $('xpjumpgo').onclick = function () { showNumber($('xpnum').value); };
+  $('xpnum').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); showNumber($('xpnum').value); } };
+
+  // --- search -------------------------------------------------------------------------------------------------
+  function said(j) {
+    var out = $('xpsaid'); out.textContent = '';
+    var card = el('div');
+    if ('number' in j || 'where' in j) {
+      var x = j.number ? j.number.inscription : j.where;
+      if (!x) card.appendChild(el('div', 'muted', 'Not found on ' + X.chain.chain + '.'));
+      else {
+        card.appendChild(el('div', '', 'Inscription #' + num(x.number) + ': shown below.'));
+        if (j.number) { X.want = null; drawOne(j); $('xpview').scrollIntoView({block: 'start', behavior: 'smooth'}); }
+        else showId(x.id);
+      }
+    } else if ('on' in j) {
+      var on = j.on || [];
+      card.appendChild(el('div', '', on.length ? on.length + ' inscription' + (on.length > 1 ? 's' : '') + ' on this coin:'
+        : 'No inscription sits on this coin.'));
+      on.forEach(function (x) { var row = el('div'); row.appendChild(link(x.id, function () { showId(x.id); })); card.appendChild(row); });
+      if (on.length) showId(on[0].id, false);
+    } else if ('token' in j) {
+      if (!j.token) card.appendChild(el('div', 'muted', 'No such tick on ' + X.chain.chain + '.'));
+      else {
+        card.appendChild(el('div', '', j.token.tick + ' is a token: '));
+        card.lastChild.appendChild(link('open it', function () { openTokens(j.token.tick); }));
+      }
+    } else if ('name' in j) {
+      var n = j.name || {};
+      card.appendChild(el('div', '', 'The name ' + (n.name || '') + ', under each reading:'));
+      Object.keys(n.readings || {}).forEach(function (rule) {
+        var w = n.readings[rule].winner, row = el('div', '', rule + ': ');
+        if (!w) row.appendChild(el('span', 'muted', 'unclaimed'));
+        else row.appendChild(link('#' + num(w.number), function () { showNumber(w.number); $('xpview').scrollIntoView({block: 'start'}); }));
+        card.appendChild(row);
+      });
+    } else if ('balances' in j) {
+      var bs = j.balances || [];
+      card.appendChild(el('div', '', bs.length ? 'Token balances of this address:' : 'This address holds no tokens here.'));
+      bs.forEach(function (b) {
+        var row = el('div'); row.appendChild(link(b.tick, function () { openTokens(b.tick); }));
+        row.appendChild(el('span', '', ': ' + units(b.units, b.decimals)));
+        card.appendChild(row);
+      });
+    }
+    card.appendChild(from(j));
+    out.appendChild(card);
+  }
+  function search() {
+    var q = $('xpq').value.trim(); if (!q) return;
+    $('xpsaid').textContent = 'Asking…';
+    api('lookup', {net: X.chain.net, q: q}).then(said).catch(function (e) { $('xpsaid').textContent = e.message; });
+  }
+  $('xpgo').onclick = search;
+  $('xpq').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); search(); } };
+
+  // --- a grid of pieces ---------------------------------------------------------------------------------------
+  function tile(x, caption, hint) {
+    var b = el('button', 'xptile'); b.type = 'button';
+    var thumb = el('div', 'xpthumb'); contentInto(thumb, x, false);
+    b.appendChild(thumb);
+    b.appendChild(el('div', 'xpcap', caption));
+    b.onclick = function () { showId(x.id, true, hint); };
+    b.title = x.id;
+    return b;
+  }
+
+  // --- by file type -------------------------------------------------------------------------------------------
+  $('xptype').onchange = function () { $('xptypeother').hidden = $('xptype').value !== ''; };
+  function typed(more) {
+    var t = $('xptype').value || $('xptypeother').value.trim().toLowerCase();
+    if (!t) { $('xptypesaid').textContent = 'Name a content type, like application/pdf.'; return; }
+    var net = X.chain.net;
+    if (!more) {
+      X.typeAsked = t; $('xptypegrid').textContent = '';
+      var start = $('xptypefrom').value;
+      X.typeNext = start === '' ? null : Number(start) - 1;
+    }
+    $('xptypesaid').textContent = 'Reading…'; $('xptypemore').hidden = true;
+    var args = {net: net, type: X.typeAsked};
+    if (X.typeNext != null) args.after = X.typeNext;
+    api('typed', args).then(function (j) {
+      if (net !== X.chain.net) return;
+      var t = j.typed || {rows: [], next: null};
+      t.rows.forEach(function (x) { $('xptypegrid').appendChild(tile(x, '#' + num(x.number))); });
+      X.typeNext = t.next;
+      var shown = $('xptypegrid').children.length;
+      $('xptypesaid').textContent = shown ? shown + ' shown' + (t.next != null && !t.rows.length ? ' (none in this stretch: More reads on from #' + num(t.next) + ')' : '')
+        : (t.next != null ? 'None in this stretch: More reads on from #' + num(t.next) + '.' : 'None of this type.');
+      $('xptypesaid').appendChild(from(j));
+      $('xptypemore').hidden = t.next == null;
+    }).catch(function (e) { if (net === X.chain.net) $('xptypesaid').textContent = e.message; });
+  }
+  $('xptypego').onclick = function () { typed(false); };
+  $('xptypemore').onclick = function () { typed(true); };
+
+  // --- collections --------------------------------------------------------------------------------------------
+  // 2026-10-26, SadFrog: "can you make the collection search more in depth with sorting and filters and lazy loading
+  // one at a time on demand." The list comes 30 at a time as it is scrolled (a sentinel at its end, the More button
+  // where that is not seen), a collection's pieces 48 at a time the same way; one not fetched yet is asked for and
+  // looked at again every 3 seconds until its pieces are here.
+  var COLL_WAIT = null, LIST = {gen: 0, next: 0, total: 0, busy: false, done: false},
+    OPEN = {gen: 0, next: 0, total: 0, busy: false, done: false, waiting: false, poll: null};
+  function collArgs() {
+    var a = {net: X.chain.net, q: $('xpcollq').value.trim(), sort: $('xpcollsort').value, source: $('xpcollsrc').value};
+    var size = $('xpcollsize').value.split('-');
+    if (size[0]) a.min = size[0];
+    if (size[1]) a.max = size[1];
+    if ($('xpcollagreed').value) a.agreed = $('xpcollagreed').value;
+    if ($('xpcollcomplete').checked) a.complete = 1;
+    return a;
+  }
+  function collections() {
+    LIST = {gen: LIST.gen + 1, next: 0, total: 0, busy: false, done: false, args: collArgs()};
+    closeCollection();
+    $('xpcolls').textContent = ''; $('xpcollsmore').hidden = true;
+    moreCollections();
+  }
+  function moreCollections() {
+    if (!LIST.args || LIST.busy || LIST.done) return;
+    var mine = LIST.gen, net = LIST.args.net, args = Object.assign({}, LIST.args);
+    LIST.busy = true; args.offset = LIST.next; args.limit = 30;
+    $('xpcollsaid').textContent = 'Reading…';
+    api('collections', args).then(function (j) {
+      if (mine !== LIST.gen || net !== X.chain.net) return;
+      var list = j.collections || [], box = $('xpcolls');
+      LIST.total = j.total || 0; LIST.next += list.length; LIST.busy = false;
+      LIST.done = !list.length || LIST.next >= LIST.total;
+      list.forEach(function (c) { box.appendChild(collCard(c)); });
+      var filtered = args.q || args.min || args.max || args.agreed || args.complete || args.source !== 'all';
+      $('xpcollsaid').textContent = LIST.total ? num(Math.min(LIST.next, LIST.total)) + ' of ' + num(LIST.total) + ' shown'
+        : (filtered ? 'No collection like that on ' + X.chain.chain + '.' : 'No known collections on ' + X.chain.chain + ' yet.');
+      $('xpcollsmore').hidden = LIST.done;
+      if (list.length) nearEnd($('xpcollsend'), $('xpcolls'), moreCollections);
+    }).catch(function (e) {
+      if (mine !== LIST.gen) return;
+      LIST.busy = false; $('xpcollsaid').textContent = e.message; $('xpcollsmore').hidden = false;
+    });
+  }
+  function collCard(c) {
+    var b = el('button', 'xptile xpcoll'); b.type = 'button';
+    var thumb = el('div', 'xpthumb' + (c.cover ? '' : ' xpnocover'));   // no cover until its pieces are here
+    if (c.cover) contentInto(thumb, {id: c.cover, content_type: 'image/'}, false);
+    b.appendChild(thumb);
+    var cap = el('div', 'xpcap'); cap.appendChild(el('b', '', c.name));
+    var pieces = c.supply != null ? num(c.supply) + ' pieces' : num(c.count) + ' pieces';
+    if (c.imported && c.supply && c.count !== c.supply) pieces = num(c.count) + ' of ' + num(c.supply) + ' pieces';
+    cap.appendChild(el('span', 'muted xpline', pieces));
+    if (c.owners != null) cap.appendChild(el('span', 'muted xpline', num(c.owners) + ' holder' + (c.owners === 1 ? '' : 's')));
+    if (c.kind === 'known' && c.agreed) cap.appendChild(el('span', 'muted xpline', 'agreed by ' + num(c.agreed)));
+    if (c.kind === 'known' && !c.imported) cap.appendChild(el('span', 'xpmark', 'not fetched yet'));
+    b.appendChild(cap);
+    b.onclick = function () { openCollection(c); };
+    return b;
+  }
+  // Another page wanted when the end of a grid is in sight: the sentinel watched, and looked at again after each page
+  // (a page that did not fill the screen moves nothing, so the watcher would not say so).
+  var SEEN = typeof IntersectionObserver === 'function' ? new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      if (e.target.id === 'xpcollsend' && !$('xpcolls').hidden) moreCollections();
+      if (e.target.id === 'xpcollgridend' && !$('xpcoll').hidden) morePieces();
+    });
+  }, {rootMargin: '300px 0px'}) : null;
+  if (SEEN) { SEEN.observe($('xpcollsend')); SEEN.observe($('xpcollgridend')); }
+  function nearEnd(end, box, more) {
+    if (!SEEN || box.hidden) return;
+    setTimeout(function () {
+      var r = end.getBoundingClientRect();
+      if (!box.hidden && r.top < (window.innerHeight || 800) + 300) more();
+    }, 50);
+  }
+  ['xpcollsort', 'xpcollsrc', 'xpcollsize', 'xpcollagreed', 'xpcollcomplete'].forEach(function (id) {
+    $(id).onchange = function () { collections(); };
+  });
+  $('xpcollsmore').onclick = function () { moreCollections(); };
+  $('xpcollq').oninput = function () {
+    clearTimeout(COLL_WAIT);
+    COLL_WAIT = setTimeout(collections, 250);
+  };
+  // A known collection (2026-10-26): where its list came from, and how many arcades hold the very same list.
+  function knownSaid(c) {
+    var src = c.imported === false ? 'not fetched yet' : c.source === 'nintondo' ? 'from Nintondo'
+      : String(c.source || '').indexOf('mesh:') === 0 ? 'from arcade ' + c.source.slice(5) : (c.source || '');
+    var bits = [src];
+    if (c.agreed) bits.push('agreed by ' + num(c.agreed) + ' arcade' + (c.agreed === 1 ? '' : 's'));
+    if (c.owners != null) bits.push(num(c.owners) + ' holders');
+    if (c.first != null && c.last != null) bits.push('inscriptions #' + num(c.first) + ' to #' + num(c.last));
+    return bits.filter(Boolean).join(' · ');
+  }
+  function closeCollection() {
+    clearTimeout(OPEN.poll);
+    OPEN = {gen: OPEN.gen + 1, next: 0, total: 0, busy: false, done: false, waiting: false, poll: null};
+    $('xpcoll').hidden = true; $('xpcolls').hidden = false; $('xpcollfilters').hidden = false; $('xpcollsaid').hidden = false;
+  }
+  function openCollection(c) {
+    closeCollection();
+    X.coll = c;
+    $('xpcolls').hidden = true; $('xpcollsmore').hidden = true; $('xpcollfilters').hidden = true; $('xpcollsaid').hidden = true;
+    $('xpcoll').hidden = false;
+    $('xpcollname').textContent = c.name;
+    $('xpcolldesc').textContent = c.kind === 'known' ? knownSaid(c) : (c.description || '');
+    $('xpcollgrid').textContent = ''; $('xpcollwait').textContent = 'Reading…'; $('xpcollpage').textContent = '';
+    $('xpcollmore').hidden = true;
+    morePieces();
+  }
+  function morePieces(again) {
+    var c = X.coll, mine = OPEN.gen;
+    if (!c || OPEN.busy || OPEN.done || (OPEN.waiting && again !== true)) return;
+    OPEN.busy = true;
+    var args = c.kind === 'known' || c.kind === 'builtin' ? {net: X.chain.net, slug: c.slug, offset: OPEN.next}
+      : {root: c.txid, offset: OPEN.next};
+    api('collection', args).then(function (j) {
+      if (mine !== OPEN.gen) return;
+      OPEN.busy = false;
+      if (c.kind === 'known' && j.collection) { c = X.coll = j.collection; $('xpcolldesc').textContent = knownSaid(c); }
+      if (c.kind === 'builtin' && j.collection) { c = X.coll = j.collection; $('xpcolldesc').textContent = c.description || ''; }
+      if (j.loading) {                                   // not held yet: being fetched, looked at again in 3 s
+        $('xpcollwait').textContent = (j.importing === false ? 'Asking linked arcades for it' : 'Fetching from Nintondo')
+          + ': ' + num(j.have || 0) + (j.of ? ' of ' + num(j.of) : '') + ' pieces';
+        OPEN.waiting = true;
+        OPEN.poll = setTimeout(function () { if (mine === OPEN.gen) morePieces(true); }, 3000);
+        return;
+      }
+      OPEN.waiting = false;
+      if (j.skipped) { OPEN.done = true; $('xpcollwait').textContent = 'Not fetched: ' + j.skipped; return; }
+      $('xpcollwait').textContent = j.unanswered || '';
+      var items = j.items || [], grid = $('xpcollgrid');
+      items.forEach(function (it) {
+        grid.appendChild(tile({id: it.id, content_type: it.content_type || 'image/'},
+          it.name || (c.name + (it.number != null ? ' #' + num(it.number) : '')),
+          {name: it.name || '', collection: c.name, number: it.inscription_number}));
+      });
+      // Sub 1K goes by number (gaps and all); a page nobody could answer stays where it is, More asks again.
+      if (!(j.unanswered && !items.length)) OPEN.next = j.next != null ? j.next : OPEN.next + items.length;
+      OPEN.total = c.count || 0;
+      if (!items.length && j.next == null) OPEN.total = OPEN.next;   // nothing more where more was said: the end
+      OPEN.done = OPEN.next >= OPEN.total;
+      $('xpcollpage').textContent = OPEN.total ? num(Math.min(OPEN.next, OPEN.total)) + ' of ' + num(OPEN.total) + ' shown' : '';
+      $('xpcollmore').hidden = OPEN.done;
+      if (items.length) nearEnd($('xpcollgridend'), $('xpcoll'), morePieces);
+    }).catch(function (e) {
+      if (mine !== OPEN.gen) return;
+      OPEN.busy = false; $('xpcollwait').textContent = e.message;
+      if (OPEN.waiting) OPEN.poll = setTimeout(function () { if (mine === OPEN.gen) morePieces(true); }, 3000);
+      else $('xpcollmore').hidden = false;
+    });
+  }
+  $('xpcollmore').onclick = function () { morePieces(); };
+  $('xpcollback').onclick = function () {
+    closeCollection();
+    $('xpcollsmore').hidden = LIST.done;
+  };
+
+  // --- tokens -------------------------------------------------------------------------------------------------
+  function units(v, dec) {
+    try {
+      var b = BigInt(String(v)), u = BigInt(10) ** BigInt(dec || 0), w = (b / u).toString(), f = b % u;
+      w = w.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return f ? w + '.' + f.toString().padStart(Number(dec), '0').replace(/0+$/, '') : w;
+    } catch (e) { return String(v); }
+  }
+  function amount(t) { var p = String(t == null ? '' : t).split('.'); return p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (p[1] ? '.' + p[1] : ''); }
+  function pct(p) { return p == null ? '—' : (p >= 1 ? p.toFixed(2) : p >= 0.01 ? p.toFixed(3) : p > 0 ? '<0.01' : '0') + '%'; }
+  var TICK_WAIT = null;
+  var PICK = window.arcadeSearchBox($('xptickpick'), {
+    placeholder: 'Search a ticker',
+    shown: function () { return X.tick || ''; },
+    choose: function (row) { tick(row.value, 0); },
+    items: function (text, words, done) {
+      clearTimeout(TICK_WAIT);
+      TICK_WAIT = setTimeout(function () {
+        api('ticks', {net: X.chain.net, q: text}).then(function (j) {
+          var t = j.ticks || {first: [], count: 0};
+          done(t.first.map(function (x) { return {value: x.tick, label: x.tick, note: '#' + num(x.number) + ' · ' + pct(x.minted_pct) + ' minted'}; }),
+               t.count - t.first.length, text ? 'No tick starts with “' + text + '”.' : 'No tokens indexed yet.');
+        }).catch(function (e) { done([], 0, e.message); });
+      }, text ? 160 : 0);
+    }
+  });
+  function openTokens(t) {
+    var p = X.chain.protocols.filter(function (x) { return x.kind === 'token'; })[0];
+    if (!p) return;
+    $('xpproto').value = p.key; pickProto(p.key); tick(t, 0);
+  }
+  function tick(t, page) {
+    var net = X.chain.net, box = $('xptok');
+    X.tick = t; PICK.sync();
+    box.textContent = 'Reading…';
+    api('holders', {net: net, tick: t, page: page}).then(function (j) {
+      if (net !== X.chain.net || t !== X.tick) return;
+      box.textContent = '';
+      var tk = j.holders;
+      if (!tk) { box.appendChild(el('p', 'muted', 'No such tick on ' + X.chain.chain + '.')); return; }
+      var info = el('div'); info.appendChild(el('h2', '', tk.tick));
+      var dl = el('dl', 'xpfacts'); info.appendChild(dl);
+      facts(dl, [
+        ['Deploy', link(tk.deploy, function () { pickProto('ords'); $('xpproto').value = 'ords'; showId(tk.deploy); })],
+        ['Number', '#' + num(tk.number)],
+        ['Deployed at block', num(tk.height)],
+        ['Deployer', tk.deployer],
+        ['Max supply', amount(tk.supply)],
+        ['Mint limit', amount(tk.limit)],
+        ['Decimals', tk.decimals],
+        ['Minted', amount(tk.minted) + (tk.minted_pct == null ? '' : ' (' + pct(tk.minted_pct) + ' of supply)')],
+        ['Holders', num(tk.holders)]]);
+      box.appendChild(info);
+      box.appendChild(el('h2', '', 'Holders')).style.marginTop = '14px';
+      if (j.older) box.appendChild(el('p', 'xpwarn', j.older));
+      if (!tk.rows.length) box.appendChild(el('p', 'muted', 'Nobody holds any yet.'));
+      else {
+        var table = el('table', 'xprich'), head = el('thead'), hr = el('tr');
+        [['n', 'Rank'], ['', 'Address'], ['n', 'Balance'], ['n', 'Transferable'], ['n', '% of supply']].forEach(function (h) { hr.appendChild(el('th', h[0], h[1])); });
+        head.appendChild(hr); table.appendChild(head);
+        var body = el('tbody');
+        tk.rows.forEach(function (h) {
+          var tr = el('tr');
+          [['n', '', '#' + h.rank], ['addr', '', h.owner], ['n', 'Balance', amount(h.balance)],
+           ['n', 'Transferable', amount(h.transferable)], ['n', '% of supply', pct(h.pct)]].forEach(function (c) {
+            var td = el('td', c[0], c[2]); if (c[1]) td.setAttribute('data-l', c[1]); tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        table.appendChild(body); box.appendChild(table);
+      }
+      var pager = el('div', 'xppager');
+      var prev = el('button', 'small', '‹ Previous'); prev.type = 'button'; prev.disabled = tk.page <= 0;
+      prev.onclick = function () { tick(t, tk.page - 1); };
+      var next = el('button', 'small', 'Next ›'); next.type = 'button'; next.disabled = tk.page + 1 >= tk.pages || !!j.older;
+      next.onclick = function () { tick(t, tk.page + 1); };
+      pager.appendChild(prev); pager.appendChild(el('span', 'muted', 'Page ' + (tk.page + 1) + ' of ' + num(tk.pages))); pager.appendChild(next);
+      box.appendChild(pager);
+      box.appendChild(from(j));
+    }).catch(function (e) { if (net === X.chain.net) box.textContent = e.message; });
+  }
+
+  // --- the arcade's own tokens and NFTs ------------------------------------------------------------------------
+  var ASSET_WAIT = null;
+  function iconInto(box, icon, big) {
+    box.textContent = '';
+    if (icon) contentInto(box, {id: icon, content_type: 'image/'}, big);
+    else box.appendChild(el('div', big ? 'xpnone muted' : 'xptype', 'no picture'));
+  }
+  function assets(fresh) {
+    var net = X.chain.net, cat = $('xpassetcat');
+    api('assets', {net: net, q: $('xpassetq').value.trim(), category: fresh ? '' : cat.value}).then(function (j) {
+      if (net !== X.chain.net) return;
+      if (fresh) {
+        cat.textContent = ''; var all = el('option', '', 'Every category'); all.value = ''; cat.appendChild(all);
+        (j.categories || []).forEach(function (k) {
+          var o = el('option', '', (k[0] || 'uncategorised') + ' (' + num(k[1]) + ')'); o.value = k[0]; cat.appendChild(o);
+        });
+      }
+      var grid = $('xpassetgrid'); grid.textContent = '';
+      var list = j.assets || [];
+      $('xpassetsaid').textContent = list.length ? list.length + ' of ' + num(j.count) + ' shown'
+        : (j.count ? 'None match.' : 'No arcade assets on ' + X.chain.chain + ' yet.');
+      list.forEach(function (a) {
+        var b = el('button', 'xptile'); b.type = 'button';
+        var thumb = el('div', 'xpthumb'); iconInto(thumb, a.icon, false); b.appendChild(thumb);
+        var cap = el('div', 'xpcap'); cap.appendChild(el('b', '', a.name || ('#' + a.id)));
+        cap.appendChild(el('div', 'muted', '#' + a.id + (a.category ? ' · ' + a.category : '')));
+        b.appendChild(cap); b.title = a.about || a.name;
+        b.onclick = function () { asset(a.id); };
+        grid.appendChild(b);
+      });
+    }).catch(function (e) { if (net === X.chain.net) $('xpassetsaid').textContent = e.message; });
+  }
+  $('xpassetq').oninput = function () { clearTimeout(ASSET_WAIT); ASSET_WAIT = setTimeout(function () { assets(false); }, 200); };
+  $('xpassetcat').onchange = function () { assets(false); };
+  function asset(id) {
+    var net = X.chain.net, box = $('xpasset');
+    box.hidden = false;
+    api('asset', {net: net, id: id}).then(function (j) {
+      if (net !== X.chain.net) return;
+      var a = j.asset;
+      iconInto($('xpassetframe'), a.icon, true);
+      var page = el('a', '', 'Open its token page'); page.href = a.page;
+      facts($('xpassetfacts'), [
+        ['Name', a.name], ['Token', '#' + a.id], ['Chain', X.chain.chain],
+        ['Category', [a.category, a.subcategory].filter(Boolean).join(' · ') || null],
+        ['About', a.about || null], ['Supply', a.supply], ['Holders', num(a.holders)],
+        ['Kind', (a.divisible ? 'divisible' : 'whole units') + (a.managed ? ', managed (its issuer can grant more)' : ', fixed supply')],
+        ['Issuer', a.issuer], ['Created at block', num(a.created_at)],
+        ['Created in', a.created_in ? el('code', '', a.created_in) : null],
+        ['Link', a.url ? (function () { var l = el('a', '', a.url); l.href = a.url; l.target = '_blank'; l.rel = 'noopener noreferrer'; return l; })() : null],
+        ['', page]]);
+      var hb = $('xpassetholders'); hb.textContent = '';
+      if (!j.holders.length) { hb.appendChild(el('p', 'muted', 'Nobody holds any.')); return; }
+      var table = el('table', 'xprich'), head = el('thead'), hr = el('tr');
+      [['n', 'Rank'], ['', 'Address'], ['n', 'Holds']].forEach(function (h) { hr.appendChild(el('th', h[0], h[1])); });
+      head.appendChild(hr); table.appendChild(head);
+      var body = el('tbody');
+      j.holders.forEach(function (h, i) {
+        var tr = el('tr');
+        [['n', '', '#' + (i + 1)], ['addr', '', h.address], ['n', 'Holds', h.held]].forEach(function (c) {
+          var td = el('td', c[0], c[2]); if (c[1]) td.setAttribute('data-l', c[1]); tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.appendChild(body); hb.appendChild(table);
+      box.scrollIntoView({block: 'start', behavior: 'smooth'});
+    }).catch(function (e) { if (net === X.chain.net) { $('xpassetfacts').textContent = e.message; } });
+  }
+
+  var qs = new URLSearchParams(location.search);
+  pickChain(qs.get('net') || CHAINS[0].net, qs.get('p') || 'ords', false);
+  if (qs.get('id')) showId(qs.get('id'), false);
+  else if (qs.get('n')) showNumber(qs.get('n'));
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+{% import "_chains.html" as chains %}
+{% block title %}Inscribe a collection · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Inscribe a collection</h1>
+<p class="sub">A whole HashLips build, one inscription per item, with each
+  item's own metadata in its JSON field.</p>
+
+<div class="chainbar">
+  {{ chains.card(chain, node, "The collection goes here.",
+                 "Wallet disabled on this node." if not node.wallet else None) }}
+</div>
+
+{% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+{% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
+
+{% if build %}
+  <h2>Step 2 of 3 &mdash; what it costs</h2>
+  <div class="panel" {% if chain.is_mainnet %}style="border-color:var(--bad);border-width:2px"{% endif %}>
+    {% if chain.is_mainnet %}
+      <p style="color:var(--bad);font-weight:600;margin-top:0">
+        This is mainnet. Every item is permanent, cannot be taken back, and is
+        paid for as it goes.</p>
+    {% endif %}
+    {# The name first and biggest, with the first item's own name under it.
+       Two folders one letter apart in the collection name are indistinguishable
+       when the name is a table row and the path is what catches the eye -- which
+       is how a raw HashLips build went on the chain in place of a prepared one,
+       reviewed by two of us and noticed by neither (a test machine, D-114). #}
+    <p style="margin:0 0 2px;font-size:1.35rem;font-weight:600">
+      {{ build.collection or 'no name in the metadata' }}</p>
+    {# Said here, where the fee is quoted, and refused again at the press:
+       inscribing a set twice is a bill for a second copy of every piece that
+       no node will file into the set (D-120). #}
+    {% if clash %}<div class="msg err">{{ clash }}</div>{% endif %}
+    {% if partly %}<div class="msg">{{ partly }}</div>{% endif %}
+    <p class="muted" style="margin:0 0 14px">
+      first piece: <strong>{{ build.items[0].name if build.items else '—' }}</strong>
+      &middot; {{ "{:,}".format(cost['items']) }} items
+      &middot; {{ "{:,}".format(build.items[0].size) if build.items else 0 }} bytes each, about
+      &middot; <span class="mono" style="font-size:.82rem">{{ build.folder }}</span></p>
+    <table>
+      <tr><td class="muted" style="width:150px">Folder</td>
+          <td class="mono" style="word-break:break-all">{{ build.folder }}</td></tr>
+      <tr><td class="muted">Collection</td>
+          <td>{{ build.collection or '(no name in the metadata)' }}</td></tr>
+      <tr><td class="muted">First piece is called</td>
+          <td>{{ build.items[0].name if build.items else '—' }}
+            <span class="muted">&mdash; every other piece follows it</span></td></tr>
+      <tr><td class="muted">Items</td>
+          <td>{{ "{:,}".format(cost['items']) }}
+            <span class="muted">&mdash; editions
+              {% if build.items %}{{ build.items[0].edition }} to
+              {{ build.items[-1].edition }}{% else %}none left to send{% endif %}</span></td></tr>
+      <tr><td class="muted">Bytes</td>
+          <td>{{ "{:,}".format(cost['bytes']) }}, uncompressed</td></tr>
+      <tr><td class="muted">Transactions</td>
+          <td>{{ "{:,}".format(cost['chunks']) }}</td></tr>
+      <tr><td class="muted">Fee</td><td>{{ "%.2f"|format(cost['fee']) }}</td></tr>
+      <tr><td class="muted">Dust</td>
+          <td>{{ "%.2f"|format(cost['dust']) }}
+            <span class="muted">&mdash; in outputs you can sweep back later</span></td></tr>
+      <tr><td class="muted">Total</td>
+          <td><strong>{{ "%.2f"|format(cost['total']) }}</strong>
+            <span class="muted">&mdash; spent item by item as the run goes,
+              from {{ sender }}</span></td></tr>
+    </table>
+    {# What the set will say about ITSELF, from the #1's own JSON. It is on
+       the chain for ever and it is what a marketplace shows for the whole
+       collection, and until now this screen showed the cost of it and not
+       the text of it (a test machine). #}
+    <div class="panel" style="margin-top:12px;padding:10px 12px">
+      <p class="muted" style="margin:0 0 6px;font-size:.85rem">
+        What piece #1 will say about the collection &mdash; inscribed once, on
+        the chain for ever, and shown wherever this set appears:</p>
+      {% if says %}
+      <table>
+        {% for key, value in says.items() %}
+        <tr><td class="muted" style="width:150px">{{ key }}</td>
+            <td style="word-break:break-word">{{ value }}</td></tr>
+        {% endfor %}
+      </table>
+      <p class="muted" style="margin:6px 0 0;font-size:.85rem">
+        Anything here that names a person names them permanently. Edit the
+        build's metadata if that is not what you meant.</p>
+      {% else %}
+      <p class="muted" style="margin:0;font-size:.85rem">
+        Nothing yet &mdash; whatever you fill in below becomes it.</p>
+      {% endif %}
+    </div>
+
+    {% if build.problems %}
+      <div class="msg err" style="margin-top:12px">
+        <strong>Check these before you start:</strong>
+        <ul style="margin:6px 0 0 18px">
+          {% for p in build.problems %}<li>{{ p }}</li>{% endfor %}
+        </ul>
+        Items listed here are left out; the rest go up as shown.
+      </div>
+    {% endif %}
+    <h3 style="margin:16px 0 6px">The first items, as they will be inscribed</h3>
+    <div style="overflow-x:auto">
+    <table>
+      <tr><th>Edition</th><th>Name</th><th>File</th><th>JSON</th></tr>
+      {% for item in preview %}
+      <tr><td>{{ item.edition }}</td><td>{{ item.name }}</td>
+          <td class="mono">{{ item.image }}
+            <span class="muted">{{ "{:,}".format(item.size) }} B</span></td>
+          <td><code style="word-break:break-all;font-size:.78rem">{{ item.json[:220] }}{% if item.json|length > 220 %}…{% endif %}</code></td></tr>
+      {% endfor %}
+    </table>
+    </div>
+    <form method="post" action="/inscriptions/collection/start" style="margin-top:14px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="folder" value="{{ build.folder }}">
+      <input type="hidden" name="fromaddress" value="{{ sender }}">
+      <input type="hidden" name="name" value="{{ build.collection }}">
+
+      <div class="panel" style="margin:0 0 14px">
+        <strong>What the set says about itself</strong>
+        <div class="muted" style="font-size:.86rem;margin:4px 0 10px">Written onto
+          #{{ build.items[0].edition if build.items else 1 }}, the piece the
+          collection is known by, so every marketplace reads the same words from
+          the same chain. All of it is optional.</div>
+        <div class="field"><label for="about">Description</label>
+          <input autocomplete="off" name="about" id="about" value="{{ about or '' }}"
+                 placeholder="what this collection is"></div>
+        <div class="row">
+          <div class="field" style="flex:1"><label for="site">Website</label>
+            <input autocomplete="off" name="site" id="site" placeholder="https://"
+                   value="{{ site or '' }}"></div>
+        </div>
+        <div class="field"><label for="thumb">Thumbnail</label>
+          <input autocomplete="off" name="thumb" id="thumb" placeholder="inscription id"
+                 value="{{ thumb or '' }}">
+          <div class="muted" style="font-size:.8rem;margin-top:4px">Left empty, the
+            set's face is its <strong>#1</strong>, which is what a marketplace shows
+            by default. To use something else &mdash; a logo, a banner frame &mdash;
+            give an inscription's id here. Inscribe the picture from the
+            <a href="/nfts">NFTs</a> page first if it is not on the chain
+            yet.</div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin:0 0 14px">
+        <label class="row" style="gap:8px;align-items:flex-start">
+          <input type="checkbox" name="launchpad" value="yes" id="launchpad"
+                 {{ 'checked' if pad_on }}>
+          <span><strong>Also sell it from a mintpad</strong>
+            <span class="muted">&mdash; optional, and off unless you ask.
+            A page, inscribed for you when the last item is on its way, that
+            shows the collection and hands over a random one for the price
+            below. Anyone can open it; the wallet that holds the collection
+            answers. Leave it alone and nothing but your items goes on the
+            chain.</span></span>
+        </label>
+
+        <div id="pad-fields" {{ '' if pad_on else 'hidden' }}>
+          <div class="row" style="gap:8px;margin-top:12px">
+            <div style="flex:0 0 120px">
+              {# `required` only while the pad is on, set by padFields with the
+                 panel's visibility -- a required field inside a hidden div
+                 cannot be filled in and the browser refuses to submit while
+                 pointing at something nobody can see. #}
+              <input autocomplete="off" name="pad_amount" inputmode="decimal"
+                     id="pad-amount" placeholder="price"
+                     value="{{ pad_amount or '' }}"
+                     {{ 'required' if pad_on }}></div>
+            <div style="flex:0 0 150px">
+              <select autocomplete="off" name="pad_kind" id="pad-kind">
+                <option value="coins" {{ 'selected' if pad_kind != 'token' }}>{{ chain.label }} coins</option>
+                <option value="token" {{ 'selected' if pad_kind == 'token' }}>a token</option>
+              </select></div>
+            <div style="flex:1 1 200px" id="pad-token-wrap"
+                 {{ '' if pad_kind == 'token' else 'hidden' }}>
+              <select autocomplete="off" name="pad_token" id="pad-token">
+                {% for t in tokens %}
+                <option value="{{ t.property_id }}" {{ 'selected' if pad_token|string == t.property_id|string }}>
+                  {{ t.name }} &mdash; #{{ t.property_id }}</option>
+                {% else %}
+                <option value="">no tokens on this chain yet</option>
+                {% endfor %}
+              </select></div>
+          </div>
+
+          <div class="row" style="align-items:baseline;margin-top:14px">
+            <strong>The page, before it exists</strong>
+            <a class="btn ghost small" style="margin-left:auto" target="_blank"
+               href="/inscriptions/collection/preview?folder={{ build.folder|urlencode }}&amp;name={{ build.collection|urlencode }}&amp;creator={{ sender|urlencode }}">Open it full size</a>
+          </div>
+          <div class="muted" style="font-size:.86rem;margin:4px 0 10px">Drawn
+            from the pictures in your build folder. Nothing here is on the
+            chain and nothing has been spent; minting is switched off because
+            there is nothing to mint yet.</div>
+          <iframe id="pad-preview" sandbox="allow-scripts" title="mintpad preview"
+                  style="width:100%;height:460px;border:1px solid var(--line);border-radius:10px;background:#07060c"></iframe>
+
+          <div class="row" style="align-items:baseline;margin-top:14px">
+            <strong>Its HTML</strong>
+            <span class="muted" style="font-size:.86rem;margin-left:auto"
+                  id="pad-size"></span>
+          </div>
+          <div class="muted" style="font-size:.86rem;margin:4px 0 8px">Edit it
+            and the preview above follows as you type. What is in this box is
+            what goes on the chain, exactly as written &mdash; so it is also
+            what you pay for. Leave it as it came and it stays the standard
+            page, which picks up whatever a later release improves in it.</div>
+          <textarea name="pad_html" id="pad-html" spellcheck="false" rows="16"
+                    autocomplete="off"
+                    style="width:100%;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+                           border:1px solid var(--line);border-radius:10px;
+                           background:var(--code);color:var(--fg);padding:10px"
+                    >{{ pad_html }}</textarea>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <button type="button" class="btn ghost small" id="pad-reset">Put the standard page back</button>
+            <span class="muted" style="font-size:.8rem" id="pad-warn"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button type="submit" class="{{ 'danger' if chain.is_mainnet }}"
+                {{ 'disabled' if clash }}>
+          Inscribe {{ "{:,}".format(cost['items']) }} items</button>
+        <a class="btn ghost" href="/inscriptions/collection">Back</a>
+      </div>
+    </form>
+    <script nonce="{{ csp_nonce }}">
+    function padFields(box){
+      document.getElementById('pad-fields').hidden = !box.checked;
+      // The price is required exactly while it is being asked for. Without
+      // this, pressing Inscribe with the pad ticked and no price threw on
+      // the server and bounced the whole review away -- the build, the
+      // costing and the fields, gone, to say one word about one box (D-129).
+      var amount = document.getElementById('pad-amount');
+      if (amount) { amount.required = box.checked; }
+      if (box.checked) { padDraw(); }
+    }
+    function padToken(sel){
+      document.getElementById('pad-token-wrap').hidden = sel.value !== 'token';
+    }
+    // Attached here, not written into the markup (the script policy, 2026-11-09).
+    document.addEventListener('change', function(e){
+      if (e.target.id === 'launchpad') { padFields(e.target); }
+      else if (e.target.id === 'pad-kind') { padToken(e.target); }
+    });
+
+    // The two substitutions that point the page at the build folder instead
+    // of at the chain, handed over by the server (app.py `_preview_swaps`)
+    // rather than written again here. A second copy would be a preview that
+    // stops matching what is inscribed the first time either is touched.
+    var PAD_SWAPS = {{ pad_swaps|safe }};
+    var PAD_NOTE = {{ pad_note|safe }};
+    var PAD_STANDARD = document.getElementById('pad-html').defaultValue;
+
+    function padDraw(){
+      var box = document.getElementById('pad-html');
+      var frame = document.getElementById('pad-preview');
+      if (!box || !frame) { return; }
+      var html = box.value;
+      for (var i = 0; i < PAD_SWAPS.length; i++) {
+        html = html.split(PAD_SWAPS[i][0]).join(PAD_SWAPS[i][1]);
+      }
+      // Handed to the preview frame rather than a URL: there is nothing on
+      // the chain and nothing on the server to point at, and a round trip
+      // per keystroke would make "live" mean "a second late". Not srcdoc,
+      // which would take this page's script policy (base.html arcadePreview).
+      arcadePreview(frame, html + PAD_NOTE);
+
+      var bytes = new TextEncoder().encode(box.value).length;
+      document.getElementById('pad-size').textContent =
+        bytes.toLocaleString() + ' bytes';
+      // The page is a shop front for a collection: it has to know which
+      // collection, and it reads that from these two constants. Said as a
+      // warning rather than enforced -- it is their page.
+      var warn = document.getElementById('pad-warn');
+      var missing = [];
+      if (box.value.indexOf('CREATOR') < 0) { missing.push('CREATOR'); }
+      if (box.value.indexOf('COLLECTION') < 0) { missing.push('COLLECTION'); }
+      warn.textContent = missing.length
+        ? 'Nothing in this page names ' + missing.join(' or ') +
+          ' any more, so it will not know which collection it is selling.'
+        : '';
+    }
+
+    (function(){
+      var box = document.getElementById('pad-html');
+      if (!box) { return; }
+      var soon = null;
+      box.addEventListener('input', function(){
+        // Debounced: re-rendering a whole page on every keystroke makes a
+        // textarea feel broken on a phone.
+        clearTimeout(soon);
+        soon = setTimeout(padDraw, 250);
+      });
+      document.getElementById('pad-reset').onclick = function(){
+        box.value = PAD_STANDARD;
+        padDraw();
+      };
+      if (document.getElementById('launchpad').checked) { padDraw(); }
+    })();
+    </script>
+    <p class="muted" style="margin:10px 0 0">
+      The run can be paused and resumed at any time, and carries on by itself
+      after a restart or a crash from the piece after the last one it wrote down.</p>
+  </div>
+{% else %}
+  <h2>Step 1 of 3 &mdash; the build</h2>
+  <div class="panel">
+    <form method="post" action="/inscriptions/collection/review" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="field">
+        <label for="folder">The HashLips <code>build</code> folder on this machine</label>
+        <input autocomplete="off" type="text" name="folder" id="folder"
+               placeholder="/home/you/hashlips-art-engine/build"
+               value="{{ folder or '' }}" style="width:100%">
+        <p class="muted" style="margin:6px 0 0">
+          It holds <code>json/_metadata.json</code> and <code>images/1.png …</code>.
+          Pointing at the project folder or at <code>_metadata.json</code> itself works too.</p>
+      </div>
+      <div class="field">
+        <label for="files">&hellip; or choose the folder from this browser</label>
+        <input autocomplete="off" type="file" name="files" id="files" multiple
+               webkitdirectory directory>
+        <p class="muted" style="margin:6px 0 0">
+          Copies the build to this machine first. For a large collection the
+          folder path above is quicker.</p>
+      </div>
+      {% if funded|length > 1 %}
+      <div class="field">
+        <label for="fromaddress">Pay from</label>
+        <select autocomplete="off" name="fromaddress" id="fromaddress">
+          {% for f in funded %}
+          <option value="{{ f.address }}">{{ f.address }} &mdash; {{ "%.2f"|format(f.coins) }}</option>
+          {% endfor %}
+        </select>
+        <p class="muted" style="margin:6px 0 0">
+          A collection takes hours. An address of its own means messages can
+          still be sent from the other while it runs.</p>
+      </div>
+      {% endif %}
+      <button type="submit">Read it and price it</button>
+      <p class="muted" style="margin-bottom:0">
+        Nothing is spent until you see the cost and press again.</p>
+    </form>
+  </div>
+{% endif %}
+
+{% if jobs %}
+<h2>Runs on {{ chain.label }}</h2>
+<div class="panel">
+  <table>
+    <tr><th>Collection</th><th>Items</th><th>Status</th><th>From</th><th></th></tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.name or '(unnamed)' }}</td>
+      <td>{{ "{:,}".format(job.sent) }} of {{ "{:,}".format(job["items"]) }}</td>
+      <td><span class="pill {{ 'ok' if job.status == 'done' else ('bad' if job.status == 'failed' else ('warn' if job.status == 'running' else '')) }}">{{ job.status }}</span>
+        {% if job.error %}<span class="muted"> {{ job.error[:80] }}</span>{% endif %}</td>
+      <td class="mono" style="word-break:break-all">{{ job.sender[:12] }}…</td>
+      <td><a class="btn ghost small" href="/inscriptions/collection/{{ job.id }}">Open</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

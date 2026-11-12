@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}Backup · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Backup</h1>
+<p class="sub">Your twelve words are the only thing you need to keep. This
+  is how you keep them safe.</p>
+
+<div class="note" style="margin-bottom:20px">
+  <strong>The words are the wallet.</strong> No password reset, no key file,
+  no <code>wallet.dat</code>. This node keeps only your wallet sealed with
+  your password, which it cannot open. Your password opens it here, in this
+  browser, so <strong>while you still have your password you can see your
+  words below</strong>. Lose the password without the words written down and
+  nobody, not this node and not anybody else, can get them back for you.
+</div>
+
+{# Your twelve words, shown again from the sealed copy with the password asked
+   for a second time, and backed up whenever the owner gets round to it (the operator,
+   2026-10-08). Real coins no longer wait for this: "If they don't back them up,
+   that's on them give them a notice." #}
+<div class="panel" style="margin-bottom:18px;border-color:var(--warn)" id="my-words">
+  <h2 style="margin-top:0">Your twelve words</h2>
+  {% if real_on %}
+  <p id="backed-up">Backed up: you typed your words back here and they made
+    this account's own address.</p>
+  {% else %}
+  <div class="msg err" id="not-backed-up" style="margin:0 0 12px">
+    <strong>You have not backed up your twelve words.</strong> Your coins,
+    the real ones included, can be spent anyway. But if you lose your password
+    and never wrote the words down, the account and everything in it is gone
+    for good, and that is on you: nobody here can bring it back.</div>
+  {% endif %}
+  <p>Type your password again to see them. Write them down on paper, in
+    order, and keep that somewhere safe. Anyone who sees them owns everything
+    in this account.</p>
+  {% if my_name %}
+  <input type="password" id="words-pw" autocomplete="current-password"
+         placeholder="your password, again" aria-label="Your password"
+         style="width:100%;box-sizing:border-box">
+  {% else %}
+  <p class="muted" style="font-size:.86rem">This node did not make your wallet,
+    so it has no sealed copy of it. Pick the backup file you opened it from,
+    then type its password.</p>
+  <input type="file" id="words-file" accept=".json,application/json"
+         style="margin-bottom:8px">
+  <input type="password" id="words-pw" autocomplete="current-password"
+         placeholder="the password for that file" aria-label="Your password"
+         style="width:100%;box-sizing:border-box">
+  {% endif %}
+  <p style="margin:10px 0 0">
+    <button type="button" class="btn" id="show-words">Show my twelve words</button></p>
+  <div class="msg err" id="words-trouble" hidden style="margin-top:10px"></div>
+  <div id="words-shown" hidden style="margin-top:12px">
+    <ol class="words phrase" id="words-list" style="margin:0;padding:12px 12px 12px 2.6em;columns:2;column-gap:2.6em;font-size:1rem"></ol>
+    {# 2026-11-09 (security review): a standard wallet restoring these words looks on the coin's registered number and
+       finds nothing; arcade/restore_kit.py and the recovery page say the same. #}
+    <p class="muted" id="coin-type-note" style="margin:8px 0 0;font-size:.86rem">These words use <b>coin type 3</b> for
+      every coin (<code>m/44'/3'/&hellip;</code>, and <code>m/49'/3'</code> and <code>m/84'/3'</code> for SegWit
+      addresses; test chains use coin type 1). A wallet that expects a coin's registered number (DigiByte 20,
+      Litecoin 2) shows an empty wallet until it is pointed at coin type 3. Your coins are not lost: the
+      <a href="/recover" download="recover-coins.html">recovery page</a> lists each chain's path and keys.</p>
+    {# 2026-10-17 (SadFrog's side): the Litecoin key on its own, for other Litecoin wallets. #}
+    <div id="ltc-key-box" style="margin-top:12px">
+      <p style="margin:0 0 4px"><b>Your Litecoin key, for other Litecoin wallets</b></p>
+      <code id="ltc-key" style="word-break:break-all;display:block;padding:8px 10px"></code>
+      <p class="muted" style="margin:6px 0 0;font-size:.86rem">Your twelve words make <b>one key</b> for
+        Pepecoin, Dogecoin and Litecoin alike, on the derivation path <code>m/44'/3'/0'/0/0</code>. Here, the
+        words recover all three. Most Litecoin wallets look on a different path (<code>m/44'/2'/&hellip;</code>),
+        so typing these words into one of them shows an empty wallet. That is normal: your LTC is not lost.
+        To use it elsewhere, import this key instead (Litecoin Core: <code>importprivkey</code>; Electrum-LTC:
+        <i>Import Litecoin addresses or private keys</i>), or choose the custom path <code>m/44'/3'/0'</code>
+        where a wallet allows it. Anyone with this key can spend your Litecoin: never paste it into a website.</p>
+    </div>
+    {# 2026-10-18 (SadFrog's side): every chain's key, to open the same coins in that chain's own Core. #}
+    <div id="chain-keys-box" style="margin-top:12px">
+      <p style="margin:0 0 4px"><b>Your keys for each chain's own wallet</b></p>
+      <dl id="chain-keys" style="margin:0"></dl>
+      <p class="muted" style="margin:6px 0 0;font-size:.86rem">The same twelve words, as each chain's Core
+        wallet reads a key. Mainnet (Pepecoin and Dogecoin share one key and one text) is coin type 3; the test
+        chains are coin type 1. In that chain's Core: <code>importprivkey "KEY" "arcade" true</code> (Litecoin Core
+        0.21 needs a legacy wallet: <code>createwallet arcade false false "" false false</code>; add
+        <code>-testnet</code> for a test chain). Anyone with a mainnet key can spend those coins: never paste one
+        into a website. Bells 3 and DigiByte 9 make descriptor wallets, which take the commands below instead.</p>
+    </div>
+    {# 2026-11-07 (SadFrog's side): "easy for someone to be able to spin back up their wallets from any core if arcade
+       goes down". Each chain's path and its Core's exact commands, built here from the words (coins.js restoreKit,
+       drawn by /restore-kit.js; the table from arcade/restore_kit.py). #}
+    <div id="restore-box" style="margin-top:14px">
+      <p style="margin:0 0 4px"><b>Restore without an arcade</b></p>
+      <p class="muted" style="margin:0 0 6px;font-size:.86rem">Each chain below: the derivation path that any BIP39
+        wallet finds these coins on if it lets you set one, and the exact commands that open them in that chain's own
+        Core. Open one to see it.</p>
+      <label style="font-size:.86rem"><input type="checkbox" id="restore-whole">
+        Rescan each chain from its first block (finds coins of any age; slower)</label>
+      <div id="restore-kits"></div>
+    </div>
+    <p style="margin:10px 0 0">
+      <button type="button" class="btn ghost small" id="hide-words">Hide them</button></p>
+  </div>
+
+  {% if real_chains %}
+  <h3 style="margin:22px 0 6px;font-size:1rem">Mark them as backed up</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">
+    {% if real_on %}Done already; typing them again changes nothing.{% else %}
+    Whenever you like: type the words back from your paper. They are checked
+    <em>here</em>, in this browser, against the address this account already
+    has, which only the right words can make. This node is told the answer and
+    nothing else, because a node that could check your words is a node that
+    knows them. It takes the notice above away; it does not change what you
+    can spend.{% endif %}</p>
+  <textarea id="words" rows="3" style="width:100%;box-sizing:border-box"
+            spellcheck="false" autocapitalize="off" autocorrect="off"
+            autocomplete="off"
+            placeholder="your twelve words, in order, separated by spaces"
+            aria-label="Your twelve words"></textarea>
+  <p style="margin:10px 0 0">
+    <button type="button" class="btn" id="turn-on">Check them</button></p>
+  <div class="msg err" id="not-them" hidden style="margin-top:10px"></div>
+  <p class="muted" style="font-size:.84rem;margin:10px 0 0">Nothing is sent
+     anywhere until they match, and nothing is spent by doing this.</p>
+  {% endif %}
+</div>
+
+<div class="panel" style="margin-bottom:18px">
+  <h2 style="margin-top:0">What the words bring back</h2>
+  <p>Signing in with your twelve words, on any device, on any node running
+     this application, gets back:</p>
+  <ul style="margin:8px 0;padding-left:22px;line-height:1.7">
+    <li>Your name, once it is on the chain</li>
+    <li>Every coin on every chain this application holds one on</li>
+    <li>Every NFT and token any of those addresses holds</li>
+    <li>The ability to publish your key again and be written to</li>
+  </ul>
+  <p class="muted" style="font-size:.88rem;margin:10px 0 0">
+    All of it, because all of it is derived from the same twelve words. There
+    is nothing else to keep for any of this.</p>
+</div>
+
+{# 2026-11-07 (SadFrog's side): the coins without any arcade at all. The page is one file with everything it runs
+   inside it (arcade/restore_kit.py), so it works from a USB stick on a computer that is not online. #}
+<div class="panel" style="margin-bottom:18px">
+  <h2 style="margin-top:0">If every arcade is gone</h2>
+  <p>The coins are on their chains, not in any arcade. Each chain's own Core wallet opens them from your twelve
+     words: show your words above and every chain lists its path and the exact commands to paste.</p>
+  <p>Keep a copy of the recovery page as well. It is one file that turns the twelve words into each chain's
+     addresses, private keys and Core commands with no arcade and no internet.</p>
+  <p style="margin:10px 0 0"><a class="btn" id="recover-save" href="/recover"
+     download="recover-coins.html">Save this page and open it offline</a></p>
+  <p class="muted" style="font-size:.84rem;margin:8px 0 0">Open the saved file, not a link: never type your words
+     into a website you reached by a link, whoever sent it.</p>
+</div>
+
+<div class="panel" style="margin-bottom:18px;border-color:var(--warn)">
+  <h2 style="margin-top:0">What stays in this browser</h2>
+  <p>Two things do <strong>not</strong> come back with the words, because they
+     were never derived from them &mdash; they are notes this browser kept:</p>
+  <ul style="margin:8px 0;padding-left:22px;line-height:1.7">
+    <li><strong>Your message history.</strong> Every message you have opened
+      or sent is decrypted and stored here, in this browser, and nowhere
+      else &mdash; that is what keeps this node from reading them. Signing
+      in on a different device opens the same account, but its inbox starts
+      empty; it has to scan the chain again to find what is addressed to it,
+      and it can only open messages sent <em>after</em> that device knew the
+      account existed.</li>
+    <li><strong>Your address book.</strong> Also this browser's alone, for
+      the same reason: a node holding everybody's address book would know
+      who talks to whom without opening a single message. A new device
+      starts with an empty book and re-adds people by searching their
+      @tag.</li>
+  </ul>
+  <p class="muted" style="font-size:.88rem;margin:10px 0 0">
+    Neither is a security problem &mdash; nothing of value lives only there
+    &mdash; but it is worth knowing before you need it: a new browser is a
+    fresh start for messages and contacts, not just a fresh tab.</p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">An extra copy of your encrypted wallet</h2>
+  <p>This node already hands your encrypted wallet to anyone who asks for it
+     by your name &mdash; that is what makes signing in from a new device
+     possible at all.
+     Downloading a copy of your own does not create a new way in; it means
+     you are not depending on this particular node keeping it forever.</p>
+  <p class="muted" style="font-size:.86rem;margin:8px 0 14px">
+    It is useless without your password &mdash; but if you ever forget which
+    node you signed up on, or that node is gone, this file and your password
+    open the wallet at <a href="/join">any node&rsquo;s join page</a>, which
+    asks for the file and the password and never for your words. (Lost the
+    password? <a href="/restore">Restore</a>, reached from Sign in, is the one
+    page that takes the words, and it never sends them.) A node you
+    hand it to keeps no copy, so the copy on your disk is the copy.</p>
+  <button type="button" class="btn" id="download" {{ 'disabled' if not my_name }}>
+    Download my encrypted wallet</button>
+  {% if not my_name %}
+  <p class="muted" style="font-size:.84rem;margin:8px 0 0">
+    This node never made your wallet &mdash; you opened it here from the file
+    it made elsewhere, so it has no copy to send back. There is nothing to
+    download from here. The file on your disk is the copy.</p>
+  {% endif %}
+  <div class="msg err" id="trouble" hidden style="margin-top:10px"></div>
+</div>
+
+<script type="module" nonce="{{ csp_nonce }}">
+const $ = (id) => document.getElementById(id);
+const name = {{ my_name|tojson }};
+const REAL = {{ real_chains|tojson }};
+
+/* The words are asked for here and checked here, against the address this
+ * account already has on each chain where coins are money. Only the right
+ * words make that address, which is the whole check -- and the only thing
+ * that ever leaves this page is the answer, because a node able to verify
+ * the words is a node holding them (docs/multi-user.md §1b).
+ */
+const turn = $("turn-on");
+if (turn) turn.onclick = async () => {
+  const box = $("not-them");
+  box.hidden = true;
+  const say = (text) => { box.textContent = text; box.hidden = false; };
+  try {
+    const signin = await import("/signin.js");
+    if (!signin.usable) throw new Error(
+      "this page cannot do arithmetic here. It needs https or localhost.");
+    const coins = await import("/coins.js");
+    const seed = await signin.toSeed($("words").value);
+    for (const chain of REAL) {
+      if (!chain.address) throw new Error(
+        `this account has no ${chain.label.toLowerCase()} address yet, so`
+        + ` there is nothing here to check the words against. Open the Wallet`
+        + ` and let this browser register it, then come back.`);
+      const key = await coins.coinKey(seed, chain.network);
+      const made = await coins.address(key.pubkey, chain.version);
+      if (made !== chain.address) throw new Error(
+        `those words make ${made}, and this account is ${chain.address}.`
+        + ` Those are not the same account, so they were not marked as backed up.`);
+    }
+    const answer = await fetch("/account/mainnet", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({words_match: true})});
+    const back = await answer.json();
+    if (!answer.ok) throw new Error(back.detail || "the node would not take it");
+    location.reload();            // the notice goes, the panel says so
+  } catch (e) {
+    say(String(e.message || e));
+  }
+};
+
+/* Show the words: the sealed copy, opened here with the password typed again
+ * on this page -- even with the wallet already open in this tab, so somebody
+ * at an unlocked browser cannot read them off (2026-10-08: "Make sure you have
+ * to enter the password a second time to view the 12 words"). The words are
+ * never sent anywhere; they go into the page and out again with Hide. */
+const shown = $("words-shown"), list = $("words-list");
+const RESTORE = {{ restore_chains|tojson }};
+let restoreSeed = null;                        // only while the words are shown, for the rescan switch
+const drawRestore = async () => {
+  if (!restoreSeed) return;
+  const kit = await import("/restore-kit.js");
+  kit.drawKits($("restore-kits"), await kit.kitsFor(restoreSeed, RESTORE, $("restore-whole").checked));
+};
+$("restore-whole").onchange = drawRestore;
+const hideWords = () => { list.replaceChildren(); $("ltc-key").textContent = "";
+                          $("chain-keys").replaceChildren(); $("restore-kits").replaceChildren();
+                          restoreSeed = null; shown.hidden = true; };
+$("hide-words").onclick = hideWords;
+addEventListener("pagehide", hideWords);
+$("show-words").onclick = async () => {
+  const box = $("words-trouble");
+  box.hidden = true;
+  hideWords();
+  const button = $("show-words");
+  button.disabled = true;
+  try {
+    const password = $("words-pw").value;
+    if (!password) throw new Error("type your password first.");
+    let sealed;
+    if (name) {
+      const answer = await fetch(`/signin/${encodeURIComponent(name)}`, {cache: "no-store"});
+      const said = await answer.json();
+      if (!answer.ok) throw new Error(said.detail || "the node would not hand back your sealed wallet");
+      sealed = said.blob;
+    } else {
+      const file = $("words-file").files[0];
+      if (!file) throw new Error("pick your backup file first.");
+      let said;
+      try { said = JSON.parse(await file.text()); } catch (e) { throw new Error("that file is not a wallet backup."); }
+      sealed = said.blob || said;
+    }
+    button.textContent = "Opening…";
+    const wallet = await import("/wallet.js");
+    const phrase = await wallet.open(sealed, password);
+    // Words that open with this password but make another account are said,
+    // not shown as if they were this one's.
+    if (REAL.length && REAL[0].address) {
+      const signin = await import("/signin.js");
+      const coins = await import("/coins.js");
+      const key = await coins.coinKey(await signin.toSeed(phrase), REAL[0].network);
+      if (await coins.address(key.pubkey, REAL[0].version) !== REAL[0].address)
+        throw new Error("that wallet opened, but its words are not this account's.");
+    }
+    $("words-pw").value = "";
+    {
+      // The Litecoin key on its own (coin type 3: the same key as Pepecoin and Dogecoin here).
+      const coins = await import("/coins.js");
+      const signin = await import("/signin.js");
+      const ltc = await coins.coinKey(await signin.toSeed(phrase), "ltc");
+      $("ltc-key").textContent = await coins.wif(ltc.key, coins.LTC_WIF);
+      // Every chain's key (2026-10-18): what each chain's own Core imports.
+      const seed = await signin.toSeed(phrase);
+      for (const [label, network] of [["Pepecoin main, Dogecoin and Flopcoin", "main"], ["Litecoin", "ltc"],
+                                      ["Bellscoin", "bel"], ["Luckycoin", "lky"], ["Kotia", "kot"],
+                                      ["Wojakcoin", "wjk"], ["DigiByte", "dgb"],
+                                      ["Pepecoin test", "test"], ["Litecoin test", "ltctest"]]) {
+        const one = await coins.coinKey(seed, network);
+        const dt = document.createElement("dt"), dd = document.createElement("dd");
+        dt.textContent = label;
+        const code = document.createElement("code");
+        code.style.cssText = "word-break:break-all;display:block;padding:6px 10px";
+        code.textContent = await coins.wif(one.key, coins.WIF[network]);
+        dd.style.margin = "2px 0 8px";
+        dd.append(code);
+        $("chain-keys").append(dt, dd);
+      }
+      // Restore without an arcade (2026-11-07): every chain's path and its Core's own commands.
+      restoreSeed = seed;
+      await drawRestore();
+    }
+    for (const word of phrase.trim().split(/\s+/)) {
+      const li = document.createElement("li");
+      li.textContent = word;
+      list.append(li);
+    }
+    shown.hidden = false;
+  } catch (e) {
+    box.textContent = String(e.message || e);
+    box.hidden = false;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Show my twelve words";
+  }
+};
+
+$("download").onclick = async () => {
+  $("trouble").hidden = true;
+  try {
+    const answer = await fetch(`/signin/${encodeURIComponent(name)}`);
+    const said = await answer.json();
+    if (!answer.ok) throw new Error(said.detail || "the node would not answer");
+    const text = JSON.stringify(said, null, 2);
+    const blob = new Blob([text], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dogecoinarcade-${name}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    $("trouble").textContent = String(e.message || e);
+    $("trouble").hidden = false;
+  }
+};
+document.body.dataset.backupReady = "yes";
+</script>
+<style>
+/* Restore without an arcade (restore_kit.js draws these; /recover has its own copy of the look) */
+.rk-chain{border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin:8px 0}
+.rk-summary{cursor:pointer}
+.rk-addr{color:var(--muted);font-family:ui-monospace,monospace;font-size:.82rem;word-break:break-all}
+.rk-note{font-size:.86rem;margin:6px 0}
+.rk-warn{color:var(--warn)}
+.rk-note code{word-break:break-all}
+.rk-cmd{display:flex;gap:8px;align-items:flex-start;margin:6px 0}
+.rk-pre{flex:1;margin:0;padding:8px 10px;border-radius:6px;white-space:pre-wrap;word-break:break-all;font-size:.78rem;
+        background:color-mix(in srgb,var(--muted) 12%,transparent)}
+</style>
+{% endblock %}

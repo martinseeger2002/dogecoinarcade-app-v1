@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}{{ wall_text(summary.collection, 'A collection') }} · {{ brand.name }}{% endblock %}
+{% block body %}
+{% import "_share_nft.html" as share %}
+<h1>{{ wall(summary.collection, 'collection name') }}</h1>
+{% set d = summary.details or {} %}
+{% if d.description %}<p style="max-width:70ch;margin:0 0 6px">{{ d.description }}</p>{% endif %}
+<p class="sub"><strong>{{ "{:,}".format(summary.count) }} of {{ "{:,}".format(summary.supply) if summary.supply else "∞" }}</strong>
+  on {{ chain.label }} by
+   {{ summary.creator|who }},
+  editions {{ summary.first_edition }} to {{ summary.last_edition }},
+  numbers #{{ "{:,}".format(summary.first_number) }} to #{{ "{:,}".format(summary.last_number) }}.</p>
+{% if d.artist or d.url %}
+<p class="muted" style="margin:-6px 0 12px;font-size:.9rem">
+  {% if d.artist %}Art by {{ d.artist }}{% endif %}{% if d.artist and d.url %} &middot; {% endif %}
+  {% if d.url %}<span class="mono" style="user-select:all" title="their link — copy it, do not click it">{{ d.url }}</span>{% endif %}</p>
+{% endif %}
+
+{# The holders' chat switch, here too (filming, 2026-09-26: it was only on the
+   collection's market page). Shown only to the signed-in account that made it. #}
+{% set hc_kind, hc_id, hc_name, hc_label, hc_creator = 'collection', 0, summary.collection, summary.collection, summary.creator %}
+{% include "_holders_chat.html" %}
+<div class="row" style="margin-bottom:14px">
+  <a class="btn ghost small" href="/collections">All collections</a>
+  <a class="btn ghost small" href="/r/collection/{{ summary.creator }}/{{ summary.collection|urlencode }}?traits=1">API</a>
+</div>
+
+{% if for_sale %}
+{# For sale first (a tester, 2026-09-27): every listed piece of the set, cheapest
+   first, bought with one press. #}
+<h2 style="margin:6px 0 8px">For sale</h2>
+<div class="panel" style="margin-bottom:16px">
+  <table class="wallets">
+    {% for f in for_sale %}
+    <tr>
+      <td style="width:46px"><a href="/inscriptions/{{ f.txid }}/view">
+        {%- if f.content_type.startswith('image/') %}<img src="/content/{{ f.txid }}" alt="" loading="lazy"
+          style="width:38px;height:38px;object-fit:cover;border-radius:8px;display:block">
+        {%- else %}<span class="coinface" style="border-radius:8px">#{{ f.number }}</span>{% endif %}</a></td>
+      <td><a href="/inscriptions/{{ f.txid }}/view"><strong>{{ wall(summary.collection, 'collection name') }} #{{ f.edition }}</strong></a>
+        <div class="muted" style="font-size:.76rem">listed by {{ f.owner|who }}</div></td>
+      <td style="text-align:right"><strong>{{ f.listing.price }}</strong></td>
+      <td style="text-align:right;width:90px">
+        {% if f.owner in owned %}<span class="muted small">yours</span>
+        {% elif account_view and f.listing.listing %}
+        <button type="button" class="small" data-buy-listing="{{ f.listing.listing }}"
+                data-piece="{{ wall_text(summary.collection) }} #{{ f.edition }}">Buy</button>
+        {% else %}<a class="btn ghost small" href="/inscriptions/{{ f.txid }}/view">Open</a>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="cards">
+  {% for row in inscriptions %}
+  {% set data = row.json|fromjson %}
+  <div class="card">
+    <div class="row" style="align-items:baseline">
+      <strong>{{ data.name if data and data.name else ('#' ~ row.edition) }}</strong>
+      <span class="muted" style="margin-left:auto">#{{ "{:,}".format(row.number) }}</span>
+    </div>
+    {% if row.held and row.content_type.startswith('image/') %}
+      <a class="media" href="/content/{{ row.txid }}?download=1"
+         data-view="/content/{{ row.txid }}" data-view-name="#{{ row.number }}">
+        <img src="/content/{{ row.txid }}" alt="{{ row.edition }}" loading="lazy"
+             style="max-width:100%;border-radius:8px;margin:8px 0"></a>
+    {% endif %}
+    {% if data and data.attributes is iterable and data.attributes is not string %}
+    <table>
+      {% for trait in data.attributes %}
+      {% if trait is mapping %}
+      <tr><td class="muted" style="width:40%">{{ trait.trait_type }}</td>
+          <td>{{ trait.value }}
+            {% set kind = traits.get(trait.trait_type|string, {}) %}
+            {% set n = kind.get(trait.value|string, 0) %}
+            {% if n %}<span class="muted"> · {{ "%.1f"|format(100 * n / summary.count) }}%</span>{% endif %}</td></tr>
+      {% endif %}
+      {% endfor %}
+    </table>
+    {% endif %}
+    <table>
+      <tr><td class="muted" style="width:74px">Owner</td>
+          <td class="mono" style="word-break:break-all">
+             {{ row.owner|who }}</td></tr>
+    </table>
+    <div class="row" style="margin-top:8px;align-items:center;gap:6px;flex-wrap:wrap">
+      {% if row.listing %}
+        <strong>{{ row.listing.price }}</strong>
+        {% if row.owner in owned %}<span class="muted small">your listing</span>
+        {% elif account_view and row.listing.listing %}
+        <button type="button" class="small" data-buy-listing="{{ row.listing.listing }}"
+                data-piece="{{ wall_text(summary.collection) }} #{{ row.edition }}">Buy</button>
+        {% endif %}
+      {% endif %}
+      <a class="btn ghost small" href="/inscriptions/{{ row.txid }}/view">Open</a>
+      {{ share.button(row.txid, (data.name if data and data.name else (wall_text(summary.collection) ~ ' #' ~ row.edition)), row.content_type) }}
+      {% if row.owner in owned and not account_view %}
+      <a class="btn ghost small" href="/inscriptions/{{ row.txid }}/send">Send</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if pages > 1 %}
+<nav class="pager">
+  {% if page > 1 %}<a class="btn ghost small" href="?page={{ page - 1 }}">Previous</a>{% endif %}
+  <span class="muted">page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn ghost small" href="?page={{ page + 1 }}">Next</a>{% endif %}
+  <form method="get" class="row" style="gap:6px;margin-left:auto">
+    <label class="muted" for="jump" style="margin:0">Page</label>
+    <input autocomplete="off" type="number" name="page" id="jump" min="1"
+           max="{{ pages }}" value="{{ page }}" style="width:5.5rem">
+    <button class="ghost small" type="submit">Go</button>
+  </form>
+</nav>
+{% endif %}
+
+{% if traits %}
+<h2>Traits</h2>
+<div class="panel" style="overflow-x:auto">
+  <table>
+    <tr><th>Trait</th><th>Value</th><th>Items</th><th>Share</th></tr>
+    {% for kind, values in traits.items() %}
+      {% for value, n in values.items()|sort(attribute='1') %}
+      <tr><td>{{ kind }}</td><td>{{ value }}</td><td>{{ n }}</td>
+          <td>{{ "%.1f"|format(100 * n / summary.count) }}%</td></tr>
+      {% endfor %}
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% if account_view %}{% include "_buy_listing.html" %}{% endif %}
+<script nonce="{{ csp_nonce }}">
+// A picture opens in the viewer, not as a download (the script policy, 2026-11-09: a listener, not an inline
+// onclick). The link's own href is the download the viewer offers.
+document.addEventListener('click', function (e) {
+  var a = e.target.closest && e.target.closest('a.media[data-view]');
+  if (!a) return;
+  e.preventDefault();
+  arcadeOpenImage(a.dataset.view, a.dataset.viewName, a.getAttribute('href'));
+});
+</script>
+{% endblock %}

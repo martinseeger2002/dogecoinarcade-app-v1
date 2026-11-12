@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+{% import "_account_wallettabs.html" as wt %}
+{% block title %}Your tokens · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Wallet</h1>
+{{ wt.tabs('tokens') }}
+<p class="sub">What this account's addresses hold in tokens, read off the
+  chain, and the way to send some of it.</p>
+
+<p class="muted" id="shut" hidden style="font-size:.86rem">
+  Your wallet is locked. Press Unlock at the top of the page, or just carry on: anything that needs your key asks for your password first.
+  <a href="/me">Open it</a> and come back.</p>
+
+<div class="msg err" id="trouble" hidden></div>
+<div class="msg ok" id="news" hidden></div>
+
+<div id="chains"></div>
+
+<div class="panel empty" id="nothing" hidden>
+  <p>Nothing yet.</p>
+  <p class="muted" style="font-size:.86rem">Be sent some, trade for some on
+    the <a href="/exchange">Exchange</a>, or
+    <a href="/tokens">create one</a> &mdash; that form is on the Tokens page,
+    and it signs here rather than asking this node to.</p>
+</div>
+
+<div class="panel" id="sending" hidden>
+  <h3 style="margin:0 0 6px" id="sending-what">Send it</h3>
+  <div class="row">
+    <div style="flex:1"><input autocomplete="off" id="to" class="mono"
+      spellcheck="false" placeholder="@name or address"></div>
+    <input type="text" id="amount" placeholder="how much"
+           inputmode="decimal" autocomplete="off" style="flex:0 0 140px">
+    <button type="button" id="offer">Send it</button>
+    <button type="button" class="ghost" id="cancel">Cancel</button>
+  </div>
+  <div class="confirm" id="confirm" hidden>
+    <p id="confirm-says"></p>
+    <button class="btn primary" id="yes">Yes, send it</button>
+    <button class="btn" id="no">No</button>
+  </div>
+</div>
+
+<div class="panel" id="pools" hidden>
+  <h3 style="margin:0 0 6px">Your prize pools</h3>
+  <div id="pools-list"></div>
+</div>
+
+<div class="panel" id="lots" hidden>
+  <h3 style="margin:0 0 6px" id="lots-what">Prize lots</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">Tokens a game or any
+    inscribed page can pay out. You set aside some lots; whoever the page hands
+    the phrase to can claim one, for the price you set. The lots are on no public
+    page. Anyone who reads the page's code can find the phrase, so price and
+    size them as a prize, not a vault.</p>
+  <div class="row" style="flex-wrap:wrap;gap:8px">
+    <label class="lotf">Tokens per lot<input id="lot-size" inputmode="decimal" autocomplete="off"></label>
+    <label class="lotf">How many lots<input id="lot-count" inputmode="numeric" value="10" autocomplete="off"></label>
+    <label class="lotf">Price per lot, coins<input id="lot-price" inputmode="decimal" value="0.01" autocomplete="off"></label>
+    <label class="lotf">Days<input id="lot-days" inputmode="numeric" value="30" autocomplete="off"></label>
+  </div>
+  <label class="lotf" style="display:block;margin-top:8px">Pays out only while I hold inscription (number or id, optional)
+    <input id="lot-bound" class="mono" autocomplete="off" spellcheck="false" placeholder="#198" style="width:auto"></label>
+  <label class="lotf" style="display:block;margin-top:8px">Phrase
+    <span class="row" style="gap:6px"><input id="lot-phrase" class="mono" autocomplete="off" spellcheck="false" style="flex:1">
+    <button type="button" class="ghost small" id="lot-new">Make one</button></span></label>
+  <div class="row" style="margin-top:10px;gap:6px">
+    <button type="button" id="lot-make">Set them aside</button>
+    <button type="button" class="ghost" id="lot-cancel">Cancel</button>
+  </div>
+  <div id="lot-done" hidden style="margin-top:12px">
+    <p style="margin:0 0 6px"><strong id="lot-done-what"></strong></p>
+    <p class="muted" style="font-size:.86rem;margin:0 0 6px">Give your page this
+      listing id and phrase. When a player wins, the page sends:</p>
+    <pre class="mono" id="lot-snippet" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem"></pre>
+  </div>
+</div>
+
+<style>
+.lotf{display:flex;flex-direction:column;gap:3px;font-size:.82rem;color:var(--muted)}
+.lotf input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel);color:var(--fg);font:inherit;min-width:0;width:130px}
+#lot-phrase{width:auto}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#to,#amount{padding:10px 12px;border:1px solid var(--line);
+  border-radius:8px;background:var(--panel);color:var(--fg);font:inherit}
+.chain-head{display:flex;align-items:baseline;gap:10px;margin:18px 0 8px}
+.chain-head h2{margin:0;font-size:1.05rem}
+</style>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+
+let keys = null, chosen = null;
+
+function row(token, chain) {
+  const box = document.createElement("div");
+  box.className = "card";
+  const top = document.createElement("div");
+  top.className = "row";
+  top.style.alignItems = "baseline";
+  const name = document.createElement("strong");
+  name.textContent = token.name;
+  if (token.sensitive && !arcadeShowSensitive()) {
+    // The show-me wall, as the server draws it on its own pages.
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "sens-btn";
+    b.textContent = "Sensitive token name \u2014 tap to show";
+    b.onclick = (e) => { e.stopPropagation(); b.replaceWith(document.createTextNode(token.name)); };
+    name.replaceChildren(b);
+  }
+  const id_ = document.createElement("span");
+  id_.className = "muted";
+  id_.style.fontSize = ".78rem";
+  id_.textContent = "#" + token.property_id;
+  const much = document.createElement("span");
+  much.style.marginLeft = "auto";
+  much.style.fontWeight = "600";
+  much.textContent = token.display;
+  top.append(name, id_, much);
+
+  const doing = document.createElement("div");
+  doing.className = "row";
+  doing.style.marginTop = "8px";
+  const open = document.createElement("a");
+  open.className = "btn ghost small";
+  open.href = `/tokens/${token.property_id}`;
+  // Yours to issue: grant, revoke and hand over live on the token's page.
+  open.textContent = token.issuer_is_me ? "Manage" : "Open";
+  const send = document.createElement("button");
+  send.className = "btn small";
+  send.textContent = "Send";
+  send.onclick = () => choose(token, chain);
+  const trade = document.createElement("a");
+  trade.className = "btn ghost small";
+  trade.href = `/exchange/pair/${token.property_id}`;
+  trade.textContent = "Trade";
+  doing.append(open, trade);
+  if (Number(token.balance) > 0) {
+    doing.append(send);
+  }
+
+  box.append(top, doing);
+  return box;
+}
+
+function choose(token, chain) {
+  say(""); news("");
+  chosen = {token, chain};
+  $("sending-what").textContent = `Send ${token.name} on ${chain.label}`;
+  $("confirm").hidden = true;
+  $("sending").hidden = false;
+  $("to").value = "";
+  $("amount").value = "";
+  $("to").focus();
+  $("sending").scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+$("cancel").onclick = () => { $("sending").hidden = true; chosen = null; };
+
+// Prize lots (2026-09-28: games that let players earn a token).
+let lotsFor = null;
+function chooseLots(token, chain) {
+  say(""); news("");
+  lotsFor = {token, chain};
+  $("lots-what").textContent = `Prize lots of ${token.name}`;
+  $("lot-done").hidden = true;
+  $("lots").hidden = false;
+  if (!$("lot-phrase").value) $("lot-new").onclick();
+  $("lot-size").focus();
+  $("lots").scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+$("lot-new").onclick = () => {
+  const words = new Uint8Array(12);
+  crypto.getRandomValues(words);
+  $("lot-phrase").value = [...words].map((b) => b.toString(36).padStart(2, "0")).join("").slice(0, 20);
+};
+$("lot-cancel").onclick = () => { $("lots").hidden = true; lotsFor = null; };
+$("lot-make").onclick = async () => {
+  say(""); news("");
+  if (!lotsFor) return;
+  const phrase = $("lot-phrase").value.trim();
+  const button = $("lot-make");
+  button.disabled = true;
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const made = await wallet.makePool(keys, {
+      property_id: lotsFor.token.property_id, lot: $("lot-size").value.trim(),
+      count: parseInt($("lot-count").value, 10) || 0, price: $("lot-price").value.trim(),
+      days: parseInt($("lot-days").value, 10) || 0, chain: lotsFor.chain.network,
+      bound: $("lot-bound").value.trim().replace(/^#/, ""),
+    }, phrase, (step) => news(step));
+    news("");
+    $("lot-done-what").textContent = `${made.ids.length} lot${made.ids.length === 1 ? "" : "s"} set aside: ${made.what}.`;
+    $("lot-snippet").textContent = $("lot-bound").value.trim()
+      ? "// the bound page finds its own pool: no listing id\n"
+        + `parent.postMessage({arcade: "claim", seq: 1, secret: ${JSON.stringify(phrase)}}, "*");`
+      : "parent.postMessage({arcade: \"claim\", seq: 1,\n"
+        + `  listing: ${JSON.stringify(made.ids[0] || "")},\n  secret: ${JSON.stringify(phrase)}}, "*");`;
+    $("lot-done").hidden = false;
+    await draw();
+    await drawPools();
+  } catch (e) { news(""); say(String(e.message || e)); await drawPools(); }
+  finally { button.disabled = false; }
+};
+
+$("offer").onclick = async () => {
+  say(""); news("");
+  if (!chosen) return;
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const asked = await fetch("/account/token/send", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        property_id: chosen.token.property_id,
+        to: $("to").value.trim(), amount: $("amount").value.trim(),
+        chain: chosen.chain.network,
+      }),
+    });
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that cannot be sent");
+    const shown = await wallet.checked(offer, keys);
+    $("confirm-says").textContent =
+      `${offer.what}? ${shown.says} Worked out in this browser from the `
+      + "transaction's own bytes, not from what this node says it does.";
+    $("confirm").hidden = false;
+    $("yes").onclick = async () => {
+      $("confirm").hidden = true;
+      try {
+        const done = await wallet.confirm(keys, offer);
+        news(`Sent: ${done.txid.slice(0, 16)}… It moves when its block does.`);
+        $("sending").hidden = true;
+        await draw();
+      } catch (e) { say(String(e.message || e)); }
+    };
+    $("no").onclick = () => { $("confirm").hidden = true; };
+  } catch (e) { say(String(e.message || e)); }
+};
+
+async function draw() {
+  const said = await (await fetch("/account/tokens")).json();
+  const chains = said.chains || [];
+  $("chains").innerHTML = "";
+  let any = 0;
+  for (const chain of chains) {
+    if (!chain.tokens.length) continue;
+    any += chain.tokens.length;
+    const head = document.createElement("div");
+    head.className = "chain-head";
+    const title = document.createElement("h2");
+    // Which coin as well as which net (2026-10-13): the letter in its network color.
+    const netl = document.createElement("b");
+    netl.className = "netl " + (chain.network === "doge" ? "dogecoin" : chain.mainnet ? "mainnet" : "testnet");
+    netl.textContent = chain.network === "doge" ? "D" : "P";
+    title.replaceChildren(netl, " " + (chain.mainnet || chain.network === "doge" ? "main" : "test"));
+    const where = document.createElement("span");
+    where.className = "muted mono";
+    where.style.fontSize = ".78rem";
+    where.textContent = chain.address;
+    head.append(title, where);
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    for (const token of chain.tokens) cards.appendChild(row(token, chain));
+    $("chains").append(head, cards);
+  }
+  $("nothing").hidden = any > 0;
+  if (!any) $("sending").hidden = true;
+}
+
+// Your prize pools, each with Withdraw: one transaction spends the coins
+// every lot stands on back to you, which is the only way to take back a
+// signature that has left this browser (2026-09-29).
+async function drawPools() {
+  let said = {pools: []};
+  try { said = await (await fetch("/account/claimpools?chain=" + CHAIN.network)).json(); }
+  catch (e) { /* no pools shown is the honest fallback */ }
+  const list = $("pools-list");
+  list.replaceChildren();
+  for (const p of (said.pools || [])) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.cssText = "align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line)";
+    const words = document.createElement("span");
+    words.style.flex = "1";
+    words.textContent = `${p.lots} lot${p.lots === 1 ? "" : "s"} of ${p.what} at `
+      + `${(p.price / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "")} coins`
+      + (p.bound_number !== null && p.bound_number !== undefined
+         ? ` · pays only while you hold #${p.bound_number}` : " · not bound to a page");
+    const id = document.createElement("code");
+    id.textContent = p.pool.slice(0, 10) + "…";
+    id.title = p.pool;
+    const go = document.createElement("button");
+    go.className = "btn ghost small";
+    go.textContent = p.address ? "Cancel and close" : "Withdraw";
+    if (p.address) {
+      go.onclick = () => closeIt(p.address, p.index, go);
+      row.append(words, id, go);
+      list.append(row);
+      continue;
+    }
+    go.onclick = async () => {
+      say(""); news("");
+      go.disabled = true;
+      try {
+        if (!keys) keys = await arcadeKeys(CHAIN);
+        const asked = await fetch("/account/list/cancel", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({pool: p.pool, chain: CHAIN.network})});
+        const offer = await asked.json().catch(() => ({}));
+        if (!asked.ok) throw new Error(offer.detail || "that pool could not be withdrawn");
+        const shown = await wallet.checked(offer, keys);
+        if (!(await arcadeAsk(`Withdraw ${p.lots} lot${p.lots === 1 ? "" : "s"}?`,
+            `${shown.says} Nobody can claim them once this is in a block.`, "Withdraw"))) return;
+        const done = await wallet.confirm(keys, offer);
+        news(`Withdrawn: ${done.txid.slice(0, 16)}… The lots close when its block lands.`);
+      } catch (e) { say(String(e.message || e)); }
+      finally { go.disabled = false; }
+    };
+    row.append(words, id, go);
+    list.append(row);
+  }
+  for (const s of (said.setup || [])) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.cssText = "align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line)";
+    const words = document.createElement("span");
+    words.style.flex = "1";
+    words.textContent = s.closing ? "Closing: its tokens and coins come back when the block lands"
+      : s.ready ? "Funded, lots not signed yet" : "Being funded: waiting for its block";
+    row.append(words);
+    if (s.ready) {
+      const finish = document.createElement("button");
+      finish.className = "btn small"; finish.textContent = "Finish setting up";
+      finish.onclick = async () => {
+        say(""); finish.disabled = true;
+        try {
+          if (!keys) keys = await arcadeKeys(CHAIN);
+          const made = await wallet.finishPool(keys, CHAIN.network, s.address, s.index, (t) => news(t));
+          news(`${made.ids.length} lots set aside.`);
+        } catch (e) { say(String(e.message || e)); }
+        finally { finish.disabled = false; await drawPools(); }
+      };
+      row.append(finish);
+    }
+    if (!s.closing) {
+      const close = document.createElement("button");
+      close.className = "btn ghost small"; close.textContent = "Cancel and close";
+      close.onclick = () => closeIt(s.address, s.index, close);
+      row.append(close);
+    }
+    list.append(row);
+  }
+  $("pools").hidden = !((said.pools || []).length || (said.setup || []).length);
+}
+
+// Cancel and close (2026-09-29): the pool's tokens and every coin back to you,
+// signed with the pool's own key; no lot can be claimed once it is in a block.
+async function closeIt(address, index, button) {
+  say(""); news("");
+  button.disabled = true;
+  try {
+    if (!keys) keys = await arcadeKeys(CHAIN);
+    const closing = await wallet.closePool(keys, CHAIN.network, address, index);
+    if (!(await arcadeAsk("Cancel and close this pool?",
+        `${closing.shown.says} Its tokens come back to you with it, and nobody can `
+        + "claim from it once this is in a block.", "Cancel and close"))) return;
+    const done = await wallet.sendClose(keys, closing);
+    news(`Closing: ${done.txid.slice(0, 16)}… Everything comes back when its block lands.`);
+  } catch (e) { say(String(e.message || e)); }
+  finally { button.disabled = false; await drawPools(); }
+}
+
+keys = await wallet.opened(CHAIN);
+$("shut").hidden = !!keys;
+await draw();
+await drawPools();
+document.body.dataset.walletTokensReady = "yes";
+</script>
+{% endblock %}

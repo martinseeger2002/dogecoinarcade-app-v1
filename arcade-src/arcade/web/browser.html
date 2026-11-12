@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser</title>
+<!-- Browser 1.3: every name's site, on every chain the arcade reads (served at /browser and inscribed as the App Store's
+     Browser card; the T-Deck's Browser reads .mesh sites only). 1.3 (2026-10-27): bookmarks and a homepage, kept by
+     the wallet in the card (arcade.storage) and by this browser at /browser. -->
+<style>
+:root { --bg:#141310; --fg:#ece8e0; --muted:#9b948a; --line:#2c2a25; --accent:#d9a520; --panel:#1c1b17; --link:#6fb0ff; }
+* { box-sizing:border-box; }
+html, body { height:100%; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; display:flex; flex-direction:column; }
+.bar { display:flex; gap:6px; align-items:center; padding:8px; background:var(--panel); border-bottom:1px solid var(--line); }
+.bar button { flex:none; width:34px; height:34px; display:grid; place-items:center; border:1px solid var(--line); background:transparent;
+  color:var(--accent); border-radius:999px; cursor:pointer; padding:0; }
+.bar button:disabled { opacity:.35; cursor:default; }
+.bar button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.bar input { flex:1; min-width:0; height:34px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:999px;
+  padding:0 14px; font:14px system-ui; }
+#view { flex:1; min-height:0; overflow:auto; }
+main { max-width:680px; margin:0 auto; padding:12px 16px 40px; }
+iframe { display:block; width:100%; height:100%; border:0; background:#fff; }
+h1 { color:var(--accent); font-size:1.4rem; margin:.4em 0 .3em; } h2 { font-size:1.15rem; margin:.8em 0 .2em; } h3 { font-size:1rem; margin:.7em 0 .2em; }
+p { margin:.2em 0; } a { color:var(--link); cursor:pointer; } blockquote { margin:.3em 0; padding-left:10px; border-left:3px solid var(--line); color:var(--muted); }
+pre { font:13px/1.25 ui-monospace, monospace; overflow:auto; }
+.pic img { display:block; max-width:100%; image-rendering:pixelated; border-radius:4px; }
+.pic span { color:var(--muted); font-size:12px; }
+.chain { color:var(--muted); font-size:12px; }
+.addr { flex:1; min-width:0; position:relative; display:flex; }
+.addr input { width:100%; padding-right:36px; }
+.bar .addr #star { position:absolute; right:2px; top:2px; width:30px; height:30px; border:0; }
+#star.on svg { fill:currentColor; }
+#panel { flex:none; max-height:60vh; overflow:auto; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px 14px; }
+#panel h2 { color:var(--accent); font-size:1rem; margin:.3em 0 .4em; }
+#panel .row { display:flex; gap:8px; align-items:center; padding:4px 0; border-top:1px solid var(--line); }
+#panel .row a { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#panel .row small { color:var(--muted); }
+#panel button.x { flex:none; border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:999px;
+  width:28px; height:28px; cursor:pointer; }
+#panel .act { border:1px solid var(--accent); background:transparent; color:var(--accent); border-radius:999px; padding:5px 12px;
+  font:600 13px system-ui; cursor:pointer; margin:2px 6px 2px 0; }
+#panel .note { color:var(--muted); font-size:12px; margin-top:8px; }
+@media (max-width:480px) { .bar #go { display:none; } .bar { gap:4px; padding:6px; } }
+.status { flex:none; padding:3px 12px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="back" title="Back" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <button id="fwd" title="Forward" aria-label="Forward"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+  <button id="reload" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button>
+  <button id="home" title="Home (hold or right-click to make this page home)" aria-label="Home"><svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7M6 10v10h12V10"/></svg></button>
+  <div class="addr">
+    <input id="addr" autocomplete="off" spellcheck="false" placeholder="name.mesh, name.pepe, doge:name.doge/page" aria-label="Address" enterkeyhint="go">
+    <button id="star" title="Bookmark this page" aria-label="Bookmark this page"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z"/></svg></button>
+  </div>
+  <button id="go" title="Go" aria-label="Go"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+  <button id="marks" title="Bookmarks and homepage" aria-label="Bookmarks and homepage"><svg viewBox="0 0 24 24"><path d="M7 3h10v18l-5-4-5 4z"/></svg></button>
+</div>
+<div id="panel" hidden></div>
+<div id="view"></div>
+<div class="status" id="status"></div>
+<script>
+// The Browser (docs/mesh-web.md): every p:dns name's site, from this arcade's /r/site. A name's site is the newest
+// record its holder inscribed; a page is MeshText (drawn here, pictures and all), HTML or another inscription (shown in
+// a sandboxed frame, as inscriptions always are). Root-relative URLs: the same file works at /browser and as a card.
+var back = [], fwd = [], at = null, title = "";
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); };
+// What is remembered (bookmarks, the homepage): in the card, the wallet's memory of it (arcade.storage, the same on every
+// device the account uses); at /browser, this browser's own localStorage. `kept` is null until one answers.
+var kept = null, framed = window.parent !== window;
+var local = {getItem: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+             setItem: function (k, v) { try { localStorage.setItem(k, v); return Promise.resolve(); } catch (e) { return Promise.reject(e); } }};
+function remember() {
+  if (!framed) { kept = local; return Promise.resolve(); }
+  return new Promise(function (done) {
+    var s = document.createElement("script"); s.src = "/r/storage.js";
+    var give = function () { if (!kept) { kept = local; } done(); };
+    setTimeout(give, 2500);                                        // no wallet answering: nothing remembered past this tab
+    s.onload = function () { window.arcade.storage.ready.then(function (st) { if (!kept) kept = st; done(); }, give); };
+    s.onerror = give;
+    document.head.appendChild(s);
+  });
+}
+var store = function (k, v) { if (v === undefined) return kept ? kept.getItem(k) : null; return kept ? kept.setItem(k, v) : Promise.reject(new Error("not ready")); };
+// The homepage unless the reader picked another (2026-10-27): the Me-Seeks search engine, itself an inscription.
+var DEFAULT_HOME = "me-seeks.pep";
+var home = function () { return store("browserhome") || DEFAULT_HOME; };
+function marks() { try { var m = JSON.parse(store("bookmarks") || "[]"); return Array.isArray(m) ? m : []; } catch (e) { return []; } }
+function saveMarks(m) {
+  return Promise.resolve(store("bookmarks", JSON.stringify(m))).catch(function () { $("status").textContent = "Could not save your bookmarks just now."; });
+}
+var marked = function (a) { return marks().some(function (m) { return m.a === a; }); };
+function drawStar() {
+  var on = !!at && marked(at);
+  $("star").classList.toggle("on", on); $("star").title = on ? "Remove this bookmark" : "Bookmark this page";
+  $("star").disabled = !at;
+}
+function drawPanel() {
+  var m = marks(), h = home();
+  var rows = m.map(function (b, i) {
+    return '<div class="row"><a data-to="' + esc(b.a) + '">' + esc(b.t || b.a) + (b.t && b.t !== b.a ? " <small>" + esc(b.a) + "</small>" : "")
+      + '</a><button class="x" data-drop="' + i + '" title="Remove" aria-label="Remove">&times;</button></div>';
+  }).join("");
+  $("panel").innerHTML = "<h2>Homepage</h2><p>" + (h === "directory" ? '<a data-to="directory">The directory</a>' : '<a data-to="' + esc(h) + '">' + esc(h) + "</a>")
+    + (h === DEFAULT_HOME ? " <small>(the default)</small>" : "") + "</p>"
+    + '<p>' + (at && at !== h ? '<button class="act" id="sethome">Make ' + esc(at === "directory" ? "the directory" : at) + " home</button>" : "")
+    + (h !== DEFAULT_HOME ? '<button class="act" id="defhome">Use ' + esc(DEFAULT_HOME) + "</button>" : "")
+    + (h !== "directory" ? '<button class="act" id="nohome">Use the directory</button>' : "") + "</p>"
+    + '<p><a data-to="directory">Every site (the directory)</a></p>'
+    + "<h2>Bookmarks</h2>" + (rows || '<p class="note">None yet. Tap the star in the address bar to bookmark a page.</p>')
+    + '<p class="note">' + (kept === local ? (framed ? "Kept in this tab only: no wallet answered." : "Kept in this browser.")
+                                         : "Kept by your wallet, on every device you use it from.") + "</p>";
+}
+function setHome(a) {
+  return Promise.resolve(store("browserhome", a)).then(function () {
+    $("status").textContent = (a === "directory" ? "The directory" : a) + " is your homepage."; drawPanel();
+  }, function () { $("status").textContent = "Could not save your homepage just now."; });
+}
+var atBrowser = location.pathname.indexOf("/browser") === 0;
+function siteOf(a) { var s = String(a || ""), c = s.match(/^([a-z0-9-]+):(?!\/)/); if (c) s = s.slice(c[0].length); return {chain: c ? c[1] : "", name: s.split("/")[0], rest: s}; }
+function resolve(t) {
+  t = t.replace(/^mesh:\/\//, "");
+  if (t.charAt(0) !== "/") return t;
+  var here = siteOf(at || ""); return (here.chain ? here.chain + ":" : "") + here.name + (t === "/" ? "" : t);
+}
+var PIC = /^!\[([^\]]*)\]\(\s*([0-9a-fA-F]{64}[iI]\d{1,6})\s*\)\s*$/;
+function meshtext(text) {
+  var out = [], pre = false;
+  String(text).split("\n").forEach(function (line) {
+    if (line.indexOf("```") === 0) { out.push(pre ? "</pre>" : "<pre>"); pre = !pre; return; }
+    if (pre) { out.push(esc(line)); return; }
+    var s = line.replace(/\s+$/, ""), m = s.trim().match(PIC);
+    if (m) out.push('<p class="pic"><img src="/content/' + esc(m[2].toLowerCase()) + '" alt="' + esc(m[1]) + '">' + (m[1] ? "<span>" + esc(m[1]) + "</span>" : "") + "</p>");
+    else if (s.indexOf("=>") === 0) { var p = s.slice(2).trim().split(/\s+/), t = p.shift(); if (t) out.push('<p><a data-to="' + esc(resolve(t)) + '">' + esc(p.join(" ") || t) + "</a></p>"); }
+    else if (s.indexOf("### ") === 0) out.push("<h3>" + esc(s.slice(4)) + "</h3>");
+    else if (s.indexOf("## ") === 0) out.push("<h2>" + esc(s.slice(3)) + "</h2>");
+    else if (s.indexOf("# ") === 0) out.push("<h1>" + esc(s.slice(2)) + "</h1>");
+    else if (s.indexOf("* ") === 0) out.push("<p>&bull; " + esc(s.slice(2)) + "</p>");
+    else if (s.charAt(0) === ">") out.push("<blockquote>" + esc(s.slice(1).trim()) + "</blockquote>");
+    else if (s) out.push("<p>" + esc(s) + "</p>");
+  });
+  if (pre) out.push("</pre>");
+  return "<main>" + out.join("") + "</main>";
+}
+function show(html, status, named) {
+  $("view").innerHTML = html; $("view").scrollTop = 0; title = named || "";
+  $("status").textContent = status; document.title = (named ? named + " · " : "") + "Browser"; drawStar();
+  $("back").disabled = !back.length; $("fwd").disabled = !fwd.length;
+}
+// The directory a page at a time (2026-10-27: "The directory at some point will be millions of pages long"):
+// "directory" is its first page, "directory/2" the second.
+function directory(n) {
+  n = Math.max(1, n || 1);
+  return fetch("/r/sites?page=" + (n - 1) + "&per=50").then(function (r) { return r.json(); }).then(function (d) {
+    var names = d.names || [], pages = d.pages || 1, lines = ["# The Browser"], m = marks();
+    if (n === 1 && m.length) { lines.push("## Your bookmarks"); m.forEach(function (b) { lines.push("=> " + b.a + " " + (b.t || b.a)); }); lines.push("## Every site"); }
+    lines.push("Every name with a site, newest first" + (d.total ? " (" + Number(d.total).toLocaleString() + ")" : "")
+      + (pages > 1 ? ", page " + n + " of " + pages : "") + ". Type any name above: .mesh, .pepe, .doge, ...", "");
+    names.forEach(function (x) { lines.push("=> " + x.chain + ":" + x.name + " " + x.name + (x.title ? " - " + x.title : "") + "  (" + x.chain + ")"); });
+    if (!names.length) lines.push(n > 1 ? "No more sites." : "Nobody has published a site yet. Claim a name and publish one from the arcade's Creator tab.");
+    if (pages > 1) { lines.push(""); if (n > 1) lines.push("=> directory" + (n > 2 ? "/" + (n - 1) : "") + " Previous page"); if (n < pages) lines.push("=> directory/" + (n + 1) + " Next page"); }
+    show(meshtext(lines.join("\n")), "Document: Done (" + names.length + " sites" + (pages > 1 ? ", page " + n + " of " + pages : "") + ")", "");
+  });
+}
+function go(address, how) {
+  address = String(address || "").trim().replace(/^mesh:\/\//, "").replace(/\/+$/, "");
+  if (!address) return;
+  if (how !== "back" && how !== "fwd" && how !== "reload") { if (at && at !== address) back.push(at); fwd = []; }
+  var listing = address.match(/^directory(?:\/(\d+))?$/);
+  at = address; $("addr").value = listing ? "" : address;
+  if (atBrowser && how !== "start") try { history.replaceState(null, "", "/browser/" + (address === "directory" ? "" : address)); } catch (e) {}
+  $("status").textContent = "Contacting " + address + "…";
+  if (listing) { directory(Number(listing[1] || 1)).catch(function () { show(meshtext("# Not found\nThis arcade did not answer."), "Document: not found"); }); return; }
+  var s = siteOf(address);
+  fetch("/r/site/" + s.rest + (s.chain ? "?chain=" + encodeURIComponent(s.chain) : "")).then(function (r) { return r.json(); }).then(function (p) {
+    if (p.choices) {
+      show(meshtext("# " + p.name + "\nThis name has a site on more than one chain:\n\n" + p.choices.map(function (c) { return "=> " + c.chain + ":" + p.name + (s.rest.indexOf("/") > 0 ? s.rest.slice(s.rest.indexOf("/")) : "") + " On " + c.chain; }).join("\n")), "Document: choose a chain", p.name);
+    } else if (p.kind === "text") {
+      show(meshtext(p.body), "Document: Done (" + p.body.length + " bytes, " + p.chain + ")", p.title || p.name);
+    } else if (p.url) {
+      show('<iframe sandbox="allow-scripts allow-pointer-lock" src="' + esc(p.url) + '" title="' + esc(p.name) + '"></iframe>', "Document: Done (" + p.chain + ", sandboxed)", p.title || p.name);
+    } else if (how === "start" && address === DEFAULT_HOME) {
+      go("directory", "start");
+    } else {
+      var also = (p.suggest || []).map(function (n) { return "=> " + n + (s.rest.indexOf("/") > 0 ? s.rest.slice(s.rest.indexOf("/")) : "") + " Did you mean " + n + "?"; }).join("\n");
+      show(meshtext("# Not found\n" + (p.detail || "") + "\n\n" + (also ? also + "\n" : "") + "=> " + home() + " Go home"), "Document: not found", "Not found");
+    }
+  }).catch(function () { show(meshtext("# Not found\nThis arcade did not answer.\n\n=> directory The directory"), "Document: not found", "Not found"); });
+}
+// A site shown in the frame may open another name here (a search result, a link to a friend's site): it posts
+// {arcade: "browser", go: "name.pepe/page"} to this window. Only the frame we drew may ask.
+window.addEventListener("message", function (e) {
+  var f = $("view").querySelector("iframe"), m = e.data || {};
+  if (!f || e.source !== f.contentWindow || m.arcade !== "browser" || typeof m.go !== "string") return;
+  var to = m.go.trim().replace(/^mesh:\/\//, "");
+  if (/^([a-z0-9-]+:)?[^\s\/:]+\.[^\s\/]+(\/\S*)?$/i.test(to) || to === "directory") go(to);
+});
+$("view").onclick = function (e) { var a = e.target.closest("a[data-to]"); if (a) go(a.dataset.to); };
+$("go").onclick = function () { go($("addr").value); };
+$("addr").onkeydown = function (e) { if (e.key === "Enter") go($("addr").value); };
+$("back").onclick = function () { if (back.length) { fwd.push(at); go(back.pop(), "back"); } };
+$("fwd").onclick = function () { if (fwd.length) { back.push(at); go(fwd.pop(), "fwd"); } };
+$("reload").onclick = function () { if (at) go(at, "reload"); };
+$("home").onclick = function () { go(home()); };
+var makeHome = function (e) { if (e) e.preventDefault(); if (at) setHome(at); };
+$("star").onclick = function () {
+  if (!at) return;
+  var m = marks(), had = m.some(function (b) { return b.a === at; });
+  m = had ? m.filter(function (b) { return b.a !== at; }) : m.concat([{a: at, t: at === "directory" ? "The directory" : (title || at)}]);
+  saveMarks(m).then(function () { drawStar(); if (!$("panel").hidden) drawPanel(); });
+  drawStar();
+  $("status").textContent = had ? "Bookmark removed." : at + " is bookmarked.";
+};
+$("marks").onclick = function () { $("panel").hidden = !$("panel").hidden; if (!$("panel").hidden) drawPanel(); };
+$("panel").onclick = function (e) {
+  var a = e.target.closest("a[data-to]"), x = e.target.closest("[data-drop]");
+  if (a) { $("panel").hidden = true; go(a.dataset.to); }
+  else if (x) { var m = marks(); m.splice(Number(x.dataset.drop), 1); saveMarks(m).then(function () { drawPanel(); drawStar(); }); drawPanel(); }
+  else if (e.target.id === "sethome") setHome(at);
+  else if (e.target.id === "nohome") setHome("directory");
+  else if (e.target.id === "defhome") setHome(DEFAULT_HOME);
+};
+$("home").oncontextmenu = makeHome;
+var held; $("home").onpointerdown = function () { held = setTimeout(makeHome, 700); };
+$("home").onpointerup = $("home").onpointerleave = function () { clearTimeout(held); };
+var start = atBrowser ? decodeURIComponent(location.pathname.replace(/^\/browser\/?/, "")) : "";
+remember().then(function () { go(start || home(), "start"); });
+</script>
+</body>
+</html>

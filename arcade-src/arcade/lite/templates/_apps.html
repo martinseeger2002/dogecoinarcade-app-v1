@@ -1,0 +1,51 @@
+{#- The Apps tab IS the Apps and games module, part of the core since 2026-11-07 (SadFrog: "the apps and games should
+    be a core module"), so it is in every window. It holds the App Store's apps and games, read with the console's
+    own listapps; every other module that is on has a tab of its own (modules.tabs, 2026-11-04). A card plays at /inscriptions/<opens>/full, which the Ord indexes module serves. -#}
+<section data-panel="apps" hidden>
+  <div>
+    <fieldset><legend>Apps and games</legend>
+      <div class="grid" style="margin-bottom:6px"><label for="a-sort">Show</label>
+        <select id="a-sort"><option value="popular">Popular</option><option value="new">New</option></select></div>
+      <table><thead><tr><th>App</th><th>By</th><th>Chain</th><th class="num">♥</th><th></th></tr></thead>
+        <tbody id="a-list"><tr><td class="muted">Loading…</td></tr></tbody></table>
+      {% if not ords_on %}<p class="muted" style="margin:8px 0 0">Playing an app needs the Ord indexes module on
+        here{{ ": switch it on in Edition and modules" if audience == 'operator' }}.</p>{% endif %}
+    </fieldset>
+  </div>
+</section>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var ORDS = {{ 'true' if ords_on else 'false' }};
+  var $ = function (id) { return document.getElementById(id); };
+  function cell(tr, text, cls) { var td = tr.insertCell(); td.textContent = text; if (cls) td.className = cls; return td; }
+  function load() {
+    var tb = $('a-list');
+    fetch('/lite/api/console', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-Arcade-Lite': '1'},
+      body: JSON.stringify({line: 'listapps ' + $('a-sort').value + ' 50'})})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        tb.textContent = '';
+        if (!j.ok) { cell(tb.insertRow(), j.error || 'The App Store did not answer.', 'bad'); return; }
+        j.result.forEach(function (a) {
+          var tr = tb.insertRow(), name = cell(tr, a.name);
+          name.title = a.description || '';
+          cell(tr, a.by); cell(tr, a.chain, 'muted'); cell(tr, String(a.likes || 0), 'num');
+          var play = tr.insertCell();
+          if (ORDS) {
+            var link = document.createElement('a');
+            link.href = '/inscriptions/' + encodeURIComponent(a.opens) + '/full';
+            link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'Play';
+            play.appendChild(link);
+          }
+        });
+        if (!j.result.length) cell(tb.insertRow(), 'No apps on this arcade’s chains yet.', 'muted');
+      })
+      .catch(function () { tb.textContent = ''; cell(tb.insertRow(), 'The node did not answer.', 'bad'); });
+  }
+  $('a-sort').onchange = load;
+  var tab = document.querySelector('.toolbar [data-tab="apps"]');
+  if (tab) tab.addEventListener('click', load);
+  if (location.hash === '#apps') load();
+})();
+</script>

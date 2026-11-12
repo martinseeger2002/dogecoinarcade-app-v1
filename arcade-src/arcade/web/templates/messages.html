@@ -1,0 +1,591 @@
+{% extends "base.html" %}
+{% block title %}Messages · {{ brand.name }}{% endblock %}
+{% block body %}
+
+{% if not state.unlocked %}
+  <h1>Messages</h1>
+  <p class="sub">Set up an identity on the <a href="/">Overview</a> page first.</p>
+{% else %}
+
+{# `open` says a conversation is showing. On a phone the two panes are one
+   screen's worth, not two: the list hands over to the conversation and the back
+   button hands back. On a desktop the class changes nothing -- both panes fit
+   side by side, which is the better way to read a conversation when they do. #}
+<div class="msgr{% if peer %} open{% endif %}">
+  <aside class="threads">
+    <div class="threads-head">
+      <strong>Conversations</strong>
+      <button type="button" class="ghost small" id="newconv-open">New</button>
+    </div>
+
+    <form method="post" action="/messages/start" id="newconv" class="newconv" {% if not request.query_params.get('new') %}hidden{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label>Their contact code</label>
+      <input autocomplete="off" name="code" class="mono" spellcheck="false"
+             placeholder="@tag, their address, or their contact code" required>
+      <label style="margin-top:8px">Name them (optional)</label>
+      <input autocomplete="off" name="name" placeholder="e.g. a test machine">
+      <div class="row" style="margin-top:9px">
+        <button type="submit" class="small">Start</button>
+        <button type="button" class="ghost small" id="newconv-cancel">Cancel</button>
+      </div>
+      <p class="muted" style="font-size:.78rem;margin:9px 0 0">
+        Ask them for the code shown on their Overview page. Nothing needs to be
+        published on the chain.</p>
+    </form>
+
+    {% if not threads %}
+      <p class="muted empty">No conversations yet. Press <strong>New</strong> and
+         paste someone's contact code.</p>
+    {% endif %}
+    {% for t in threads %}
+      <a class="thread {{ 'on' if peer and peer.pubkey == t.pubkey }}" href="/messages/{{ t.pubkey.hex() }}">
+        <div class="thread-top">
+          {# A name you typed wins: it is yours. Failing that the @tag, which
+             the chain can be asked about, and only then the address. #}
+          {% set handle = tags.get(t.address) if tags else None %}
+          <span class="who {{ 'unnamed' if not (t.name or handle) }}">
+            {{- t.name or ('@' ~ handle if handle else None) or t.address or 'Unknown sender' -}}</span>
+          {% if t.unread %}<span class="badge new" title="{{ t.unread }} new">{{ t.unread }}</span>{% endif %}
+        </div>
+        <div class="thread-preview">{{ 'You: ' if t.outgoing }}{{ t.preview[:64].decode('utf-8', 'replace') }}</div>
+        <div class="thread-when">{{ when(t.last) }}</div>
+      </a>
+    {% endfor %}
+  </aside>
+
+  <section class="convo">
+  {% if not peer %}
+    <div class="nothing">
+      <p>Select a conversation, or start one with someone's contact code.</p>
+      <p class="muted" style="font-size:.88rem">Your own code is on the
+        <a href="/">Overview</a> page — send it to whoever wants to reach you.</p>
+    </div>
+  {% else %}
+    <header class="convo-head">
+      <a class="back" href="/messages" title="All conversations"
+         aria-label="Back to all conversations">&#8592; Back</a>
+      <div>
+        {% set handle = tags.get(peer.address) if tags and peer.address else None %}
+        <div class="convo-name">
+          {{- peer.name or ('@' ~ handle if handle else None) or peer.address or 'Unnamed contact' -}}</div>
+        {% if peer.address and (peer.name or handle) %}
+          <div class="convo-sub">
+            {%- if handle and peer.name %}@{{ handle }} &middot; {% endif -%}
+            {{ peer.address }}</div>
+        {% endif %}
+      </div>
+      {# Naming is offered only while there is nothing to show. Once somebody is
+         in the address book the field is answering a question that has been
+         answered, and the way to change it is the address book itself. #}
+      {% if not peer.name %}
+      <form method="post" action="/messages/{{ peer.hex }}/name" class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input autocomplete="off" name="name" placeholder="name them" class="small-input">
+        <button class="ghost small" type="submit">Save</button>
+      </form>
+      {% endif %}
+      <a class="ghost small btn" href="{{ '/contacts?edit=' ~ peer.contact_id if peer.contact_id else '/contacts' }}"
+         title="Their addresses and your notes">{{ 'Address book' if peer.name else 'Add to address book' }}</a>
+    </header>
+
+    {% if error %}<div class="msg err" style="margin:14px 16px 0">{{ error }}</div>{% endif %}
+
+    <div id="live" data-generation="{{ state.generation }}" class="live"></div>
+    <div class="bubbles" id="bubbles">
+      {% if not thread %}
+        <p class="muted nothing" style="padding:30px 0">
+          No messages yet. Write the first one below.</p>
+      {% endif %}
+      {% for m in thread %}
+        <div class="bubble-row {{ 'mine' if m.mine else 'theirs' }}">
+          <div class="bubble">
+            {% if m.body %}<div class="text">{{ render_post(m.body.decode('utf-8', 'replace'), drawable) }}</div>{% endif %}
+            {% if m.file %}
+              {% if m.file.kind == 'image' %}
+                {# Still an anchor, so it works with no JavaScript and the
+                   middle-click and right-click menus behave. The click itself
+                   opens it instead. #}
+                <a class="media" href="{{ m.file.url }}?download=1"
+                   title="{{ m.file.name }} — click to open"
+                   data-open-image="{{ m.file.url }}" data-name="{{ m.file.name }}">
+                  <img src="{{ m.file.url }}" alt="{{ m.file.name }}" loading="lazy"></a>
+              {% elif m.file.kind == 'audio' %}
+                <audio class="media" controls preload="none"
+                       src="{{ m.file.url }}"></audio>
+              {% elif m.file.kind == 'video' %}
+                <video class="media" controls preload="metadata"
+                       src="{{ m.file.url }}"></video>
+              {% endif %}
+              <a class="file" href="{{ m.file.url }}?download=1">
+                <span class="file-icon">{{ '🖼' if m.file.kind == 'image'
+                  else ('🎵' if m.file.kind == 'audio'
+                  else ('🎬' if m.file.kind == 'video' else '📄')) }}</span>
+                <span class="file-meta">
+                  <strong>{{ m.file.name }}</strong>
+                  <span class="muted">{{ m.file.label or 'file' }} ·
+                    {{ "{:,}".format(m.file.size) }} bytes · save</span>
+                </span>
+              </a>
+            {% endif %}
+            <div class="stamp">
+              {# A message you sent shows "unconfirmed" rather than a time, until
+                 it is in a block. The only time available before that is when
+                 this computer pressed send, which is not when the message exists
+                 for anyone else -- and a timestamp implies it does. #}
+              {% if m.mine and not m.get('confirmed') %}
+                {% if m.get('parts', 1) > 1 %}
+                  {# Dozens of transactions confirm in whatever order the miner
+                     chooses, so a bare "unconfirmed" says nothing about whether
+                     this is nearly done or has not started. #}
+                  <span class="unconfirmed">{{ m.parts_done }} of {{ m.parts }}
+                    transactions in blocks</span>
+                {% else %}
+                  <span class="unconfirmed">unconfirmed</span>
+                {% endif %}
+              {% else %}
+                {{ when(m.when) }}
+                {%- if m.height %} &middot; block {{ "{:,}".format(m.height) }}
+                {%- else %} &middot; <span class="unconfirmed">in the pool, not
+                  in a block yet</span>{% endif %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+
+      {# Drawn only while a long message is on its way. It is an outgoing bubble
+         because that is what it will become. #}
+      {% if unfinished %}
+      <div class="bubble-row mine">
+        <div class="bubble failed-note">
+          <div class="text">This message stopped after
+            {{ unfinished.sent }} of {{ unfinished.total }} transactions.</div>
+          {% if unfinished.sent %}
+          <div class="stamp">What is on the chain cannot be taken back, and the
+            message cannot be read until the rest goes out.</div>
+          {% else %}
+          <div class="stamp">Nothing reached the chain. Sending again starts
+            from the first transaction.</div>
+          {% endif %}
+          <form method="post" action="/messages/{{ peer.hex }}/resume"
+                style="margin-top:9px" data-send-once>
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="small">Finish sending</button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="bubble-row mine" id="sending-bubble" hidden>
+        <div class="bubble">
+          <div class="text" id="sending-text">Sending…</div>
+          <div class="bar-row">
+            <div class="bar"><div class="bar-fill" id="sending-fill"></div></div>
+            <span class="bar-pct" id="sending-pct">0%</span>
+          </div>
+          <div class="stamp" id="sending-stamp"></div>
+        </div>
+      </div>
+    </div>
+
+    {% if prepared %}
+      {# Only the first chunk exists yet -- the rest spend its change -- so the
+         cost of a multi-transaction message is estimated from the first. #}
+      {% set count = plan.transactions if plan else 1 %}
+      {# No arithmetic here. Both composers used to scale the first chunk's
+         figures themselves and they did it differently -- this one multiplied
+         by the count, the public one did not, so a post was offered at half
+         its price. `cost` comes from send_cost(), which is the single
+         definition both routes call. #}
+      {# Only the total. The fee and the dust were pulled out here too and
+         never shown -- and a component sitting in the template is how the
+         screen came to quote one: a test machine posted for 0.04568 having been shown
+         "fee 0.00568000". One number, and it is the whole number. (Named
+         without their field names on purpose: test_web sweeps this file for
+         them, and a comment is not the place to trip that.) #}
+      {% set total = cost.total if cost else 0 %}
+      <div class="confirm">
+        {% if attached_name %}
+          <strong>Send {{ attached_name }}?</strong>
+          {% if timing and timing.will_split %}
+            {{ count }} transactions. Your wallet has
+            {{ timing.independent }} output{{ '' if timing.independent == 1 else 's' }}
+            ready, so it is split first and then they all go at once:
+            <strong>{{ timing.typical }}</strong>, sometimes {{ timing.slow }}
+            &mdash; one wait for the split, not one per transaction.
+          {% elif timing and timing.waits %}
+            This takes <strong>{{ timing.typical }}</strong>, sometimes
+            {{ timing.slow }}: it goes as {{ count }} linked transactions and each
+            one waits for the previous to confirm.
+          {% elif timing and timing.independent > 1 %}
+            {{ count }} transaction{{ '' if count == 1 else 's' }}, going at once
+            &mdash; your wallet has {{ timing.independent }} separate outputs, so
+            none of them waits for another.
+          {% else %}
+            One transaction, so it goes straight away.
+          {% endif %}
+          Costs about <strong>{{ "%.4f"|format(total) }}</strong>. Most of that
+          is spent into the {{ plan.multisig_outputs if plan else '' }} outputs
+          that carry the file and cannot be recovered.
+        {% else %}
+          <strong>Send this?</strong>
+          {{ count }} transaction{{ '' if count == 1 else 's' }}{% if count > 1 %},
+          and one more first to split the wallet if it does not already have
+          enough separate outputs &mdash; those coins come straight back as
+          change, so the split costs only its own fee{% endif %}.
+          Costs about <strong>{{ "%.5f"|format(total) }}</strong>.
+          It becomes permanent once broadcast.
+        {% endif %}
+        {% if timing and timing.readable and count > 1 %}
+        <div class="note" style="margin:10px 0 0">
+          Broadcast is the fast part. A chunked message cannot be READ until
+          every chunk is in a block, and large chunks do not share one, so
+          expect <strong>{{ timing.readable }}</strong> before they can open it
+          &mdash; measured on both chains.
+        </div>
+        {% endif %}
+        {% if count > 1 %}
+        <div class="note" style="margin:10px 0 0">
+          If sending stops part way, what is already on the chain cannot be taken
+          back and the message can never be read by anyone. Leave this page open
+          until it finishes.
+        </div>
+        {% endif %}
+        <form method="post" action="/messages/{{ peer.hex }}/send" style="margin-top:10px"
+              data-send-once>
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="body" value="{{ draft }}">
+          <input type="hidden" name="confirmed" value="yes">
+          <input type="hidden" name="attached_b64" value="{{ attached_b64 or '' }}">
+          <input type="hidden" name="attached_name" value="{{ attached_name or '' }}">
+          <input type="hidden" name="attached_type" value="{{ attached_type or '' }}">
+          <input type="hidden" name="share_profile" value="{{ share_profile or '' }}">
+          <div class="row">
+            <button type="submit" class="small">Send it</button>
+            <a class="muted" href="/messages/{{ peer.hex }}" style="font-size:.87rem">Cancel</a>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+
+    <form method="post" action="/messages/{{ peer.hex }}/send" class="composer"
+          enctype="multipart/form-data" data-send-once
+          {% if prepared %}data-awaiting-confirm="yes"{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <textarea autocomplete="off" name="body" rows="1" placeholder="Write a message…"
+                id="composer-body">{{ draft or '' }}</textarea>
+      <label class="attach" title="Send a file">
+        <input type="file" name="attachment" id="attachment" hidden>
+        <span id="clip">📎</span>
+      </label>
+      {# A pending confirmation must be the only way to act on this content. The
+      composer's own submit button stayed live BEHIND the confirmation -- three
+      buttons on screen, two of them saying Send -- so a page reading "Send this?" would also accept a fresh submission of whatever was
+      in the box. a test machine clicked the wrong one and re-submitted an empty composer.
+      Nothing was spent, but a live control contradicting a pending confirmation is
+      a hazard for anyone in a hurry. The Enter handler checks the same flag, or
+      disabling the button alone would just move the hazard to the keyboard. #}
+      <button type="submit" {% if prepared %}disabled
+        title="Confirm or cancel the message waiting above first"{% endif %}>Send</button>
+      {% if is_new_contact %}
+      <label class="introduce">
+        <input type="checkbox" name="share_profile" value="yes" checked>
+        <span>Introduce myself</span>
+      </label>
+      {% endif %}
+    </form>
+    <p class="muted composer-note" id="picked" hidden>
+      <span id="picked-text"></span>
+      <span id="picked-sizes" class="sizes" hidden></span>
+      <button type="button" class="ghost small" id="picked-clear">Remove</button>
+    </p>
+    {% if is_new_contact %}
+    <p class="muted composer-note">
+      <strong>Introduce myself</strong> sends {{ profile_name or 'your addresses' }}
+      {%- if profile_name %} and your addresses{% endif %} with this first message,
+      so they know who is writing. It links this identity to your mainnet address
+      for them &mdash; untick it to stay anonymous.
+      {% if not profile_name %}<a href="/contacts">Claim an @tag</a> and it goes
+      with them.{% endif %}
+    </p>
+    {% endif %}
+    <p class="msg info" id="sending" hidden style="margin:0 16px 10px"></p>
+    <p class="muted composer-note" style="padding-bottom:2px">
+      Your own messages are kept on this computer only: each one is encrypted to
+      the person you sent it to, so it cannot be read back off the chain &mdash;
+      not by you either. They have their copy; this is yours.</p>
+    <p class="muted composer-note">
+      Encrypted to {{ peer.name or 'them' }} only. Costs a transaction fee and is
+      permanent once sent. Enter sends; Shift+Enter starts a new line.</p>
+  {% endif %}
+  </section>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+// Enter sends. Shift+Enter starts a new line, which is what every messenger
+// does and what a one-line box implies. Sending is not a decision that needs a
+// second click here: a testnet message costs free coins, goes as one
+// transaction, and is on the chain the moment it is broadcast either way.
+// A file can take minutes: the wallet may be split first, and that split has to
+// confirm before the chunks can go. Showing nothing while that happens invites a
+// second click, and a second click starts a SECOND send -- which selects its own
+// outputs, can collide with the first, and can strand a half-written message on
+// the chain. So: one submission only, and say what is going on.
+function resetComposer(reason){
+  // Undoes everything startSending paints. Its absence was the bug: the
+  // transition was one-way, so a submission that never completed left the
+  // interface convincingly frozen -- "Sending…", a disabled button, an amber
+  // notice -- while the server had no send at all and would not accept another,
+  // because the button was disabled. a test machine measured exactly that state against
+  // an idle server.
+  document.querySelectorAll('form[data-sending="yes"]').forEach(function (form) {
+    delete form.dataset.sending;
+    form.querySelectorAll('button').forEach(function (b) {
+      b.disabled = false;
+      if (b.type === 'submit') {
+        b.textContent = b.dataset.label || 'Send';
+      }
+    });
+  });
+  var note = document.getElementById('sending');
+  if (note) {
+    if (reason) {
+      note.hidden = false;
+      note.className = 'msg err';
+      note.textContent = reason;
+    } else {
+      note.hidden = true;
+    }
+  }
+}
+
+function startSending(form){
+  if (form.dataset.sending === 'yes') return false;
+  form.dataset.sending = 'yes';
+  form.querySelectorAll('button').forEach(function (b) {
+    if (b.type === 'submit' && !b.dataset.label) b.dataset.label = b.textContent;
+    b.disabled = true;
+    if (b.type === 'submit') b.textContent = 'Sending…';
+  });
+  var note = document.getElementById('sending');
+  if (note) {
+    note.hidden = false;
+    note.className = 'msg info';
+    note.innerHTML = '<span class="spin"></span> Sending. A long message is sent ' +
+      'as several transactions and the wallet may be split first, which waits ' +
+      'for one block &mdash; this can take a few minutes. Leave this page open; ' +
+      'it will move on by itself when the message is away.';
+  }
+
+  // If the page has not navigated by now, the request connected and then never
+  // answered -- a server that accepts and hangs. Note what this does NOT cover:
+  // a failure at the network level navigates the browser to its own error page,
+  // so the page that would freeze is already gone. a test machine established that by
+  // stopping the server and submitting: Firefox went to about:neterror and no
+  // frozen composer could exist. So this timeout is for the hanging case only,
+  // which is the one that leaves a live page waiting.
+  //
+  // Overridable so a test can exercise it in a second rather than twenty-five.
+  window.setTimeout(function () {
+    if (document.querySelector('form[data-sending="yes"]')) {
+      resetComposer('That did not reach the application, so nothing was sent. ' +
+                    'Try again.');
+    }
+  }, window.ARCADE_SEND_TIMEOUT || 25000);
+  return true;
+}
+
+// A page restored from history comes back exactly as it was left, mid-send
+// paint and all, with no request behind it.
+window.addEventListener('pageshow', function (event) {
+  if (event.persisted) resetComposer('');
+});
+
+function sendOnEnter(event, box){
+  if (event.key !== 'Enter' || event.shiftKey) return;
+  event.preventDefault();
+  if (!box.value.trim()) return;
+  // requestSubmit, not submit: form.submit() bypasses onsubmit entirely, so the
+  // double-send guard never ran on the Enter path -- the very path most likely
+  // to be pressed twice.
+  var form = box.form;
+  // Do NOT call startSending here. requestSubmit fires the form's own submit event,
+  // and that runs the form's startSending listener (below) -- so calling it first set
+  // form.dataset.sending, the handler's second call saw it already set, returned
+  // false, and CANCELLED the submission. Enter painted "Sending..." over a form
+  // that never posted; the button worked because a click goes through onsubmit
+  // exactly once. The operator reported precisely that: "the first time I pressed
+  // enter it gave me the error and the second time I pressed the send button it
+  // sent." Measured in a browser -- pressing Enter left the page alive with no
+  // request behind it, while clicking reached the server.
+  //
+  // The flag is only READ here, to swallow a second Enter. form.submit() is the
+  // old-browser fallback and does NOT fire onsubmit, so that branch has to paint
+  // the sending state itself.
+  if (form.dataset.sending === 'yes') return;
+  // A confirmation for this content is already on screen; acting on it is the
+  // only way forward. Without this, disabling the button would just move the
+  // hazard to the keyboard.
+  if (form.dataset.awaitingConfirm === 'yes') return;
+  if (form.requestSubmit) form.requestSubmit();
+  else if (startSending(form)) form.submit();
+}
+function grow(box){
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, 160) + 'px';
+}
+
+// Priced the moment a file is chosen, not after a click. The arithmetic is the
+// encoder's: a chunk carries 7,628 payload bytes, and a multisig output carries
+// two 30-byte packets, so 60 bytes per output. Dust is 0.01 per output and is
+// never spendable again.
+function estimateFile(bytes){
+  var perChunk = 7628, perOutput = 60, dustEach = 0.01;
+  var chunks = Math.ceil(bytes / perChunk);
+  var outputs = Math.ceil(bytes / perOutput) + chunks;
+  var blocks = Math.ceil((chunks * 12600) / 1048576);
+  return {chunks: chunks, outputs: outputs, coins: outputs * dustEach,
+          blocks: Math.max(1, blocks)};
+}
+function clearPick(){
+  // There was no way to unpick a file. One chosen and then abandoned stayed
+  // attached to whatever was typed next, so pressing Enter to send a sentence
+  // produced a file error instead -- with nothing on screen explaining why.
+  var input = document.getElementById('attachment');
+  input.value = '';
+  showPick(input);
+  document.getElementById('post') && document.getElementById('post').focus();
+}
+function showPick(input){
+  // The picking itself is shared (base.html): it remembers the original,
+  // measures Large, Medium and Small, and swaps the chosen one into the input
+  // so the form carries it. This draws the sentence underneath.
+  arcadePick(input, drawPicked);
+}
+
+function drawPicked(file){
+  var note = document.getElementById('picked');
+  if (!file) { note.hidden = true; document.getElementById('clip').textContent = '📎'; return; }
+  var e = estimateFile(file.size);
+  var mins = Math.round(e.blocks * 35 / 60);
+  note.hidden = false;
+  note.className = 'muted picked' + (e.chunks > 40 ? ' costly' : '');
+  var said = document.getElementById('picked-text');
+  said.innerHTML = '<strong></strong> — ' +
+    arcadeSize(file.size) + ', sent as <strong>' +
+    e.chunks.toLocaleString() + '</strong> transaction' + (e.chunks === 1 ? '' : 's') +
+    ' costing about <strong>' + arcadeCoins(arcadeFileCost(file.size).coins) +
+    '</strong>, most of it spent into outputs that cannot be recovered, and ' +
+    'filling at least ' +
+    e.blocks.toLocaleString() + ' block' +
+    (e.blocks === 1 ? '' : 's') + (mins >= 1 ? ' (~' + mins + ' min)' : '') + '.';
+  // The name as text (2026-11-09, security review): a file can be called anything, markup included.
+  said.querySelector('strong').textContent = file.name;
+  document.getElementById('clip').textContent = '📎•';
+}
+
+  var b = document.getElementById('bubbles');
+  if (b) b.scrollTop = b.scrollHeight;
+
+// The page's controls, attached here rather than written into the markup as on...= handlers, so the script policy
+// (2026-11-09) can stop every inline handler. Each does what its handler did.
+(function () {
+  var newconv = document.getElementById('newconv');
+  document.getElementById('newconv-open').addEventListener('click', function () { newconv.hidden = false; });
+  document.getElementById('newconv-cancel').addEventListener('click', function () { newconv.hidden = true; });
+  // One submission only: a form whose send is under way stays put.
+  document.querySelectorAll('form[data-send-once]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      if (!startSending(form)) event.preventDefault();
+    });
+  });
+  var box = document.getElementById('composer-body');
+  if (box) {
+    box.addEventListener('input', function () { grow(box); });
+    box.addEventListener('keydown', function (event) { sendOnEnter(event, box); });
+  }
+  var attachment = document.getElementById('attachment');
+  if (attachment) attachment.addEventListener('change', function () { showPick(attachment); });
+  var unpick = document.getElementById('picked-clear');
+  if (unpick) unpick.addEventListener('click', function () { clearPick(); });
+  // A picture opens over the page; the link stays a download for no script, the middle click and the menu.
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest && event.target.closest('a[data-open-image]');
+    if (!link) return;
+    event.preventDefault();
+    var src = link.getAttribute('data-open-image');
+    arcadeOpenImage(src, link.getAttribute('data-name'), src + '?download=1');
+  });
+})();
+
+// Watch a send running in the background. The request returned the moment the
+// send started, so nothing here holds a connection open -- this asks what is
+// happening and draws it. Showing nothing for minutes is what made a second
+// click look like the right thing to do.
+(function () {
+  var row = document.getElementById('sending-bubble');
+  if (!row) return;
+  var text = document.getElementById('sending-text');
+  var fill = document.getElementById('sending-fill');
+  var pctText = document.getElementById('sending-pct');
+  var stamp = document.getElementById('sending-stamp');
+  var peer = '{{ peer.hex if peer else "" }}';
+
+  function draw(s) {
+    if (!s || s.peer !== peer) {
+      row.hidden = true;
+      // The server says nothing is in flight. If the composer still looks busy
+      // it is a leftover paint job, not a send -- clearing the bubble alone left
+      // the worst combination: a page that refuses input while telling the truth
+      // in one small element.
+      if (document.querySelector('form[data-sending="yes"]')) resetComposer('');
+      return;
+    }
+    row.hidden = false;
+    if (s.error) {
+      row.classList.add('failed');
+      text.textContent = s.error;
+      fill.style.width = '100%';
+      pctText.textContent = '';
+      stamp.textContent = 'stopped';
+      return;
+    }
+    var pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+    fill.style.width = Math.max(4, pct) + '%';
+    pctText.textContent = pct + '%';
+    text.textContent = 'Sending as ' + s.total + ' transactions';
+    var left = s.total - s.done;
+    stamp.textContent = s.note + ' \u00b7 ' +
+      (s.done ? left + ' to go' : 'estimated ' + s.estimate);
+    if (s.finished) {
+      pctText.textContent = '100%';
+      // Reload ONCE per send. Without this the page reloads, polls, still sees
+      // a finished send, and reloads again -- a flashing loop at 100%. The
+      // server clears finished progress when the conversation reloads, but this
+      // must not depend on that having happened first.
+      var key = 'arcade-sent-' + s.started;
+      var already = false;
+      try { already = sessionStorage.getItem(key) === '1'; } catch (e) {}
+      if (already) {
+        row.hidden = true;
+        return;
+      }
+      try { sessionStorage.setItem(key, '1'); } catch (e) {}
+      stamp.textContent = 'sent \u00b7 updating';
+      setTimeout(function () { location.reload(); }, 900);
+    }
+  }
+
+  function poll() {
+    fetch('/events', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) { draw(d.sending); })
+      .catch(function () { /* momentary; try again */ });
+  }
+  poll();
+  setInterval(poll, 2000);
+})();
+</script>
+{% endif %}
+{% endblock %}

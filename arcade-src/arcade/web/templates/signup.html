@@ -1,0 +1,423 @@
+{% extends "base.html" %}
+{% block title %}Join · {{ brand.name }}{% endblock %}
+{% block body %}
+<h1>Join the arcade</h1>
+<p class="sub">A name and a password. Your wallet is made here, in this
+  browser, and stays yours &mdash; this node never sees your password and
+  cannot open it.</p>
+
+<div class="panel seats">
+  {% if free > 0 %}
+    <p class="count"><strong>{{ free }}</strong> of {{ seats }} seats open</p>
+    <p class="muted" style="margin:6px 0 0">Or
+      <a href="/clone">run your own arcade</a> &mdash; the program and a
+      copy of this node's index are both served from here.</p>
+  {% else %}
+    <p class="count"><strong>No open seats.</strong></p>
+    <p class="muted">All {{ seats }} are taken. <a href="/clone">Run your
+      own</a> &mdash; your name, coins and posts live on the chain, so they
+      come with you.</p>
+  {% endif %}
+</div>
+
+{% if not secure_enough %}
+<div class="msg err">{{ why_not }}</div>
+{% endif %}
+
+<div id="forms" {% if not secure_enough or free <= 0 %}hidden{% endif %}>
+  {# Issue #15 (2026-10-25): players who "Played on another arcade" made a new character here, with a new empty
+     wallet, under their own name. The way to their real account is said first. #}
+  <div class="panel" id="extension-door" hidden style="border-color:var(--accent)">
+    <h2 style="margin-top:0">Sign in with your Arcade Wallet</h2>
+    <p class="muted" style="margin:0 0 10px">Your Arcade Wallet extension is in this browser. Your words stay in it: it
+      asks you, in its own window, before it signs you in here.</p>
+    <button class="btn primary" id="extension-go">Sign in with Arcade Wallet</button>
+  </div>
+
+  <div class="panel" id="played-elsewhere" style="border-color:var(--accent)">
+    <p style="margin:0"><strong>Played on another arcade?</strong>
+      <a href="#in-tag" id="to-signin">Sign in</a> with the same name and password: this arcade finds your account
+      there and brings it here. A new account here is a new, empty wallet.</p>
+  </div>
+
+  <div class="panel" id="make">
+    <h2 style="margin-top:0">Make an account</h2>
+    <div class="field">
+      <label for="tag">Your name</label>
+      <div class="tagrow">
+        <span class="at">@</span>
+        <input type="text" id="tag" autocomplete="username" autocapitalize="off"
+               spellcheck="false" placeholder="yourname"{% if fruit %} value="{{ fruit }}"{% endif %}>
+      </div>
+      {% if fruit %}
+      {# 2026-10-20: a new arcade's operator gets a fruit name, held for it by another arcade (arcade/fruit.py). #}
+      <p class="muted small" id="tag-said">This arcade has no operator yet. Keep <strong>@{{ fruit }}</strong> and
+        this account becomes it: every new arcade's operator gets a fruit, and the arcade that holds the fruit names
+        sends this one a minute or two after you sign up. Type another name for an ordinary account.</p>
+      {% else %}
+      <p class="muted small" id="tag-said">Lower case letters, digits,
+        underscores. This is how people find you.</p>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="pw">A password</label>
+      <input type="password" id="pw" autocomplete="new-password"
+             placeholder="at least twelve characters">
+      <p class="muted small">At least twelve characters; a few words in a row are easy to remember.
+        It opens your wallet from any device, and
+        <strong>nobody can reset it</strong> &mdash; not us, not anybody.
+        You will get twelve words afterwards, which are the only way back.</p>
+      <p class="muted small">This password is the only thing standing between
+        a stranger and your coins. This node hands your encrypted wallet to
+        anybody who asks for your name, so somebody can take it away and guess
+        at it as long as they like &mdash; nothing counts the tries and nothing
+        stops them. The node never sees the password itself, which is why
+        nobody can hand it back to you and why a password you would pick to
+        type quickly is not a convenience.</p>
+      <p class="small" id="pw-says"></p>
+    </div>
+    <div class="field">
+      <label for="pw2">The password again</label>
+      <input type="password" id="pw2" autocomplete="new-password"
+             placeholder="type it once more, so a slip of the finger shows now">
+      <p class="small" id="pw2-says"></p>
+    </div>
+    {# Its own id (2026-10-30): it was id="make" like the panel round it, so $("make") was the PANEL and a tap
+       anywhere in it -- the name box too -- pressed this button and jumped to the password again. #}
+    <button class="btn primary" id="make-go">Create my account</button>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Already have one?</h2>
+    <div class="tagrow">
+      <span class="at">@</span>
+      <input type="text" id="in-tag" autocomplete="username"
+             autocapitalize="off" spellcheck="false" placeholder="yourname">
+    </div>
+    <input type="password" id="in-pw" autocomplete="current-password"
+           placeholder="password">
+    <p class="muted small" style="margin:6px 0 8px">Made on another arcade? The same name and password work here:
+      this arcade finds your encrypted wallet there by itself.</p>
+    <button class="btn" id="enter">Sign in</button>
+    <p class="muted small" style="margin:10px 0 0">This node kept your
+      encrypted wallet when you signed up. It did not keep it? Use the file
+      its Backup page saved, below.</p>
+    <p class="small" style="margin:6px 0 0"><a href="/restore">Forgot your
+      password? Restore with your twelve words</a></p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">I have a backup file</h2>
+    <p class="muted">
+      The file a node&rsquo;s Backup page saves &mdash; from any node you
+      made this account on. Your password opens it in this browser, so the
+      words never leave here and the password never comes here either. This
+      page asks for no words. <strong>The one page that ever asks for your twelve
+      words is Restore, reached from &ldquo;Forgot your password?&rdquo; under
+      Sign in, and it never sends them anywhere. Anything else asking for them
+      is stealing them.</strong></p>
+    <p class="muted">
+      A node you hand a file to keeps no copy of it, which means it cannot
+      send it back afterwards &mdash; the copy on your disk is the copy.
+      Your name, coins and posts are on the chain, not here, so they are
+      what opens at the next node, not this one.</p>
+    <input type="file" id="backup-file" accept=".json,application/json">
+    <input type="password" id="backup-pw" autocomplete="current-password"
+           placeholder="password">
+    <button class="btn" id="open-file">Open it</button>
+  </div>
+</div>
+
+<div class="panel" id="written" hidden style="border-color:var(--accent)">
+  <h2 style="margin-top:0">Write these down</h2>
+  <p class="muted">Twelve words. They are the only way back into your wallet
+    if you forget your password, and this is the only time they are shown.
+    Not on a screenshot &mdash; on paper.</p>
+  <p class="rule">After this, this site unlocks with your password. The one
+    page that ever asks for these words is <strong>Restore</strong>, reached
+    from &ldquo;Forgot your password?&rdquo; under Sign in, for the day the
+    password is gone &mdash; it checks them in your browser and never sends
+    them anywhere. Nothing else asks for them: not to verify, not to migrate,
+    not in a message, not by a helper. Anything else that asks is stealing them,
+    whichever name it is sitting under. Type them only on a domain you typed
+    yourself, never one you followed a link to.</p>
+  <p id="gift" class="muted" hidden></p>
+  <ol class="words" id="words"></ol>
+  <div class="panel" id="setting-up" style="margin:12px 0">
+    <strong>Setting your account up</strong>
+    <ul class="steps">
+      <li id="step-coins">coins &mdash; <span>waiting</span></li>
+      <li id="step-name">your name on the chain &mdash; <span>waiting</span></li>
+      <li id="step-key">your key, so people can write to you &mdash;
+        <span>waiting</span></li>
+    </ul>
+    <p class="muted small" id="setup-note">This happens by itself while you
+      write the words down. You can leave before it finishes.</p>
+  </div>
+  <label class="keepit">
+    <input type="checkbox" id="kept"> I have written them down
+  </label>
+  <button class="btn primary" id="done" disabled>Take me in</button>
+</div>
+
+<div class="msg err" id="trouble" hidden></div>
+
+<style>
+.seats .count{font-size:1.3rem;margin:0 0 6px}
+/* The @ inside the name box, so the name and the password line up (2026-10-19). */
+.tagrow{position:relative;display:block}
+.tagrow .at{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:1rem;color:var(--muted);pointer-events:none}
+#forms input,#written input[type=text]{width:100%;padding:10px 12px;margin:4px 0;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel);
+  color:var(--fg);font:inherit}
+#forms .tagrow input{width:100%;box-sizing:border-box;padding-left:32px}
+.words{columns:3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--code);border-radius:8px;padding:14px 14px 14px 40px;margin:12px 0}
+.words li{break-inside:avoid;padding:2px 0}
+.keepit{display:flex;align-items:center;gap:8px;margin:10px 0}
+.keepit input{width:auto}
+.rule{border-left:3px solid var(--warn);padding-left:10px;margin:12px 0}
+.small{font-size:.85rem}
+.steps{margin:8px 0 0;padding-left:18px;line-height:1.8}
+.steps span{color:var(--muted)}
+.field{margin-bottom:14px}
+</style>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (text) => { $("trouble").textContent = text;
+                        $("trouble").hidden = !text; };
+// Where to go once signed in: back to the page that sent them here, this site's
+// own paths only -- never "//elsewhere" or a full URL (a tester, 2026-09-26).
+const NEXT = (() => {
+  const n = new URLSearchParams(location.search).get("next") || "";
+  return /^\/(?![\/\\])/.test(n) ? n : "/";
+})();
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+
+function wire() {
+  // Told as they type, not after they press: a name refused at the end of
+  // a form is a form somebody fills in twice.
+  let asking = null;
+  $("tag").oninput = () => {
+    clearTimeout(asking);
+    asking = setTimeout(async () => {
+      const wanted = $("tag").value.trim();
+      if (!wanted) { $("tag-said").textContent = ""; return; }
+      const said = await wallet.available(wanted);
+      $("tag-said").textContent = said.free
+        ? `@${said.tag} is free`
+        : (said.detail || "that name cannot be used");
+      $("tag-said").style.color = said.free ? "var(--ok)" : "var(--bad)";
+      // Held on another arcade (issue #15): its sign-in, one click away, with the name filled in.
+      if (said.elsewhere) {
+        const go = document.createElement("a");
+        go.href = "#in-tag";
+        go.textContent = ` Sign in as @${said.tag}`;
+        go.onclick = (e) => { e.preventDefault(); toSignIn(said.tag); };
+        $("tag-said").appendChild(go);
+      }
+    }, 300);
+  };
+  const toSignIn = (name) => {
+    if (name) $("in-tag").value = name;
+    $("in-tag").scrollIntoView({block: "center"});
+    ($("in-tag").value ? $("in-pw") : $("in-tag")).focus();
+  };
+  $("to-signin").onclick = (e) => { e.preventDefault(); toSignIn($("tag").value.trim().replace(/^@/, "")); };
+
+  // What they have chosen, said plainly, as they type. Below twelve characters it says the rule, and "Create my
+  // account" refuses it (2026-10-25, issue #12, SadFrog: "12-character minimum for new passwords"; wallet.js signUp).
+  let checking = null;
+  $("pw").oninput = () => {
+    const said = wallet.strength($("pw").value);
+    $("pw-says").textContent = said.says;
+    $("pw-says").style.color = said.ok ? "var(--ok)"
+      : said.short ? "var(--bad)" : "var(--warn)";
+    // Leaked already? Said as they type (2026-10-20); "Create my account" refuses it either way.
+    clearTimeout(checking);
+    const typed = $("pw").value;
+    checking = setTimeout(async () => {
+      const seen = await wallet.leaked(typed);
+      if (seen && $("pw").value === typed) {
+        $("pw-says").textContent = `This password is on leaked-password lists (${seen.toLocaleString()} times), `
+          + "so it would be refused. Choose another.";
+        $("pw-says").style.color = "var(--bad)";
+      }
+    }, 600);
+  };
+
+  // The password twice (SadFrog, 2026-10-25): nobody can reset it, so a typo made
+  // here would lock the account for good. Said as they type, refused at the button.
+  const pwSame = () => {
+    const a = $("pw").value, b = $("pw2").value;
+    $("pw2-says").textContent = !b ? "" : a === b ? "The two match." : "Not the same yet.";
+    $("pw2-says").style.color = a === b ? "var(--ok)" : "var(--warn)";
+    return !!a && a === b;
+  };
+  $("pw2").oninput = pwSame;
+  $("pw").addEventListener("input", () => { if ($("pw2").value) pwSame(); });
+
+  $("make-go").onclick = async () => {
+    say("");
+    if (!pwSame()) {
+      say($("pw2").value ? "The two passwords are not the same. Type the same password in both boxes."
+                         : "Type your password a second time, in the box under it.");
+      $("pw2").focus();
+      return;
+    }
+    $("make-go").disabled = true;
+    try {
+      const made = await wallet.signUp($("tag").value.trim(),
+                                       $("pw").value, CHAIN);
+      const list = $("words");
+      list.innerHTML = "";
+      for (const word of made.wallet.phrase.split(" ")) {
+        const item = document.createElement("li");
+        item.textContent = word;
+        list.appendChild(item);
+      }
+      const gift = $("gift");
+      gift.hidden = false;
+      if (made.given) {
+        gift.textContent = "You have been sent "
+          + (made.given / 100000000).toLocaleString() + " test coins to start "
+          + "with \u2014 enough to claim your name, post, and inscribe "
+          + "something. They will arrive in a minute or two.";
+        gift.style.color = "var(--ok)";
+      } else {
+        gift.textContent = made.no_coins
+          || "No coins this time; you can still sign in.";
+        gift.style.color = "var(--muted)";
+      }
+      $("forms").hidden = true;
+      $("written").hidden = false;
+
+      // The two transactions that make an account real: its name on the
+      // chain, and its key where people can find it. Started here rather
+      // than offered as buttons, and running while the words are being
+      // written down.
+      setUp(made).catch(() => {});
+    } catch (e) {
+      say(String(e.message || e));
+    } finally {
+      $("make-go").disabled = false;
+    }
+  };
+
+  async function setUp(made) {
+    const mail = await import("/messaging.js");
+    const identity = await mail.identity(made.wallet.phrase);
+    const shown = {coins: $("step-coins"), name: $("step-name"),
+                   key: $("step-key")};
+    const out = await wallet.setUp(made.wallet, identity, made.tag, {
+      onStep: ({what, how}) => {
+        const row = shown[what];
+        if (row) row.querySelector("span").textContent = how;
+      },
+      // The faucet's own reason, if it refused. Repeating it here is the
+      // difference between "nothing arrived" and a sentence a person can
+      // act on, and the wait below would otherwise spend three minutes
+      // looking for coins that were declined on purpose.
+      faucetRefusal: made.no_coins,
+      // The operator's fruit name comes by transfer from the arcade holding it, not by a claim from here.
+      fruit: !!made.fruit,
+    });
+    if (out.trouble.length) {
+      $("setup-note").textContent = out.trouble.join("; ")
+        + ". You can finish this from your own page at any time.";
+      $("setup-note").style.color = "var(--warn)";
+    } else {
+      $("setup-note").textContent =
+        "Done. Your name and your key are on the chain: people can find you "
+        + `by @${made.tag} and write to you.`;
+      $("setup-note").style.color = "var(--ok)";
+    }
+  }
+
+  $("kept").onchange = () => { $("done").disabled = !$("kept").checked; };
+  $("done").onclick = () => { location.href = NEXT; };
+
+  // Opening a wallet takes a few seconds (600,000 rounds of PBKDF2, then a
+  // session), and a button that looked idle meanwhile got pressed again and
+  // again -- each press starting over and fetching the wallet anew, 13 times in
+  // one sign-in, close to the rate limit (2026-09-28: "I just had to
+  // click the button a few times"). So it says it is working, and holds still.
+  const busy = (button, text) => {
+    if (button.disabled) return false;
+    button.dataset.was = button.textContent;
+    button.disabled = true;
+    button.textContent = text;
+    return true;
+  };
+  const idle = (button) => {
+    button.disabled = false;
+    if (button.dataset.was) button.textContent = button.dataset.was;
+  };
+
+  $("enter").onclick = async () => {
+    const button = $("enter");
+    if (!busy(button, "Opening your wallet\u2026")) return;
+    say("");
+    try {
+      // Signing in opens the wallet: it is the same password and the same
+      // moment, and asking for it again on the next page is asking the
+      // same question twice.
+      // An account made on another arcade is found there by itself (2026-10-19: no checkbox, no address).
+      await wallet.signIn($("in-tag").value.trim(), $("in-pw").value, CHAIN);
+      button.textContent = "Signed in \u2713";
+      location.href = NEXT;
+    } catch (e) { idle(button); say(String(e.message || e)); }
+  };
+
+  // The optional Arcade Wallet extension (signin.js): offered only when it is in this browser.
+  import("/signin.js").then(async (signer) => {
+    if (!(await signer.extension())) return;
+    $("extension-door").hidden = false;
+    $("extension-go").onclick = async () => {
+      const button = $("extension-go");
+      if (!busy(button, "Waiting for your Arcade Wallet\u2026")) return;
+      say("");
+      try {
+        await signer.signInWithExtension({join: true});
+        button.textContent = "Signed in \u2713";
+        location.href = NEXT;
+      } catch (e) { idle(button); say(String(e.message || e)); }
+    };
+  });
+
+  $("open-file").onclick = async () => {
+    const button = $("open-file");
+    if (button.disabled) return;
+    say("");
+    const file = $("backup-file").files[0];
+    if (!file) { say("choose the file the Backup page saved"); return; }
+    let said;
+    try { said = JSON.parse(await file.text()); }
+    catch (e) { say("that file is not something this can read."); return; }
+    busy(button, "Opening your wallet\u2026");
+    try {
+      // Read and opened in this tab, and nowhere else. This node is told
+      // nothing about the file at all until the key inside it signs
+      // something, which is the only thing a node believes -- so an
+      // account whose wallet was made elsewhere can be used here without
+      // this node ever holding what makes it spendable.
+      await wallet.openFile(said, $("backup-pw").value, CHAIN);
+      location.href = NEXT;
+    } catch (e) { idle(button); say(String(e.message || e)); }
+  };
+}
+
+if (typeof crypto !== "undefined" && crypto.subtle) {
+  try {
+    wire();
+    document.body.dataset.signupReady = "yes";
+  } catch (e) {
+    say("This page's own script stopped: " + String(e.message || e));
+  }
+}
+</script>
+{% endblock %}

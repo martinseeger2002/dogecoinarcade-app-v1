@@ -1,0 +1,372 @@
+{#- Window -> Build, and the website's /build and /me/keys, which draw the same (`page`; 2026-11-08) (2026-11-04, SadFrog: "a guide and how to for people making new themes, how to make them and how to
+    add them to the shared themes other operators can enable"). The guide is for everyone; offering a theme and taking
+    one from linked arcades are the operator's, through the console's own sharetheme, sharedthemes and taketheme. -#}
+<div class="dialog" id="build" role="dialog" aria-label="Build">
+  <div class="window" style="width:min(820px,96vw)">
+    <header><span>Build</span><button type="button" data-close aria-label="Close">×</button></header>
+    <div class="wtabs" role="tablist">
+      <button type="button" data-btab="guide" aria-selected="true">Make a theme</button>
+      {% if audience == 'operator' %}<button type="button" data-btab="share">Share a theme</button>
+      <button type="button" data-btab="others">Shared by others</button>{% endif %}
+      <button type="button" data-btab="keys">API keys</button>
+      <button type="button" data-btab="apiref">API reference</button>
+    </div>
+    <div class="wbody">
+      <div data-bpanel="guide" class="steps">
+        <ol id="b-steps">
+          <li><button type="button" data-step="1" aria-selected="true">Make a folder</button></li>
+          <li><button type="button" data-step="2">Pick the colours</button></li>
+          <li><button type="button" data-step="3">A font (optional)</button></li>
+          <li><button type="button" data-step="4">Try it on</button></li>
+          <li><button type="button" data-step="5">Check and install</button></li>
+          <li><button type="button" data-step="6">Wear it</button></li>
+          <li><button type="button" data-step="7">Share it</button></li>
+        </ol>
+        <div>
+          <section data-stepbody="1">
+            <h3>1 · Make a folder</h3>
+            <p>A theme is a folder with a <code>manifest.json</code>: values only, no CSS and no scripts. Start from
+              ArcadeCore's own look. In a terminal on the arcade's own machine:</p>
+            <pre>arcade-cli new theme my-theme</pre>
+            <p class="muted">That makes <code>~/my-theme</code> with every value named and a README. A name is 2 to 32
+              lower-case letters, digits and dashes.</p>
+          </section>
+          <section data-stepbody="2" hidden>
+            <h3>2 · Pick the colours</h3>
+            <p>Open <code>~/my-theme/manifest.json</code> and change the colours under <code>look.light</code> and
+              <code>look.dark</code>. Each has the same eleven:</p>
+            <table class="b-keys"><tbody>
+              <tr><td><code>window</code></td><td>the window's background</td><td><code>panel</code></td><td>boxes and fields</td></tr>
+              <tr><td><code>text</code></td><td>words</td><td><code>muted</code></td><td>quieter words</td></tr>
+              <tr><td><code>line</code></td><td>borders</td><td><code>bar</code></td><td>menu, tab and status bars</td></tr>
+              <tr><td><code>accent</code></td><td>what is picked</td><td><code>accent_text</code></td><td>words on the accent</td></tr>
+              <tr><td><code>ok</code></td><td>synced, done</td><td><code>warn</code> · <code>bad</code></td><td>waiting · failed</td></tr>
+            </tbody></table>
+            <pre>"look": {
+  "light": { "window": "#f5eadc", "panel": "#fff8f0", "text": "#1d1d1d", "accent": "#b85c2e", ... },
+  "dark":  { "window": "#2b2622", "panel": "#211d1a", "text": "#ece4da", "accent": "#d0773f", ... },
+  "font": "system", "radius": 3 }</pre>
+            <p class="muted">Leave <code>dark</code> out to use the light colours in both. Words must stand out from
+              what they sit on: <code>checktheme</code> (step 5) refuses a pair too faint to read an address in, and
+              says which one.</p>
+          </section>
+          <section data-stepbody="3" hidden>
+            <h3>3 · A font (optional)</h3>
+            <p><code>look.font</code> is one of {{ fonts|join(', ') }}. Or put a font of your own in the folder as
+              <code>files/name.woff2</code> and name it there. <code>look.radius</code> rounds corners, 0 to 12 pixels.</p>
+            <p class="muted">A theme holds at most {{ most_files }} files and {{ most_kb }} kB, so other arcades can fetch it
+              quickly.</p>
+          </section>
+          <section data-stepbody="4" hidden>
+            <h3>4 · Try it on</h3>
+            <p>See it in this machine's browser only, as the folder is now. Change the folder and reload to see it again.</p>
+            <pre>trytheme ~/my-theme</pre>
+            <p class="muted">Nobody else sees it. <code>trytheme off</code> goes back.</p>
+            {% if audience == 'operator' %}<button type="button" data-type="trytheme ~/my-theme">Type it in the console</button>{% endif %}
+          </section>
+          <section data-stepbody="5" hidden>
+            <h3>5 · Check and install</h3>
+            <pre>checktheme ~/my-theme
+installtheme ~/my-theme</pre>
+            <p class="muted"><code>checktheme</code> says what is wrong, or the theme's id: a hash of every file, so a
+              changed theme is a new id. <code>installtheme</code> keeps it under that id; it shows nowhere yet.</p>
+            {% if audience == 'operator' %}<button type="button" data-type="checktheme ~/my-theme">Type it in the console</button>{% endif %}
+          </section>
+          <section data-stepbody="6" hidden>
+            <h3>6 · Wear it</h3>
+            <pre>settheme my-theme        this arcade's look, for everyone who has not picked one
+allowtheme my-theme      people may pick it in Settings → Theme…</pre>
+            <p class="muted"><code>settheme none</code> goes back to ArcadeCore's own look.</p>
+          </section>
+          <section data-stepbody="7" hidden>
+            <h3>7 · Share it</h3>
+            <p>Offer it to the arcades this one links with: <b>Share a theme</b> here, or</p>
+            <pre>sharetheme my-theme</pre>
+            <p class="muted">Each of their operators sees it under <b>Shared by others</b> and chooses whether to install
+              it; nothing installs by itself. It travels over the mesh, checked against its id on arrival, and since a
+              theme is colours and a font only, no code goes with it. <code>sharetheme my-theme off</code> stops
+              offering it; arcades that installed it keep it.</p>
+          </section>
+          <p class="b-nav"><button type="button" id="b-prev">‹ Back</button> <button type="button" id="b-next">Next ›</button></p>
+        </div>
+      </div>
+      {% if audience == 'operator' %}
+      <div data-bpanel="share" hidden>
+        <p style="margin:0 0 8px">Offer one of your themes to the arcades you link with. Each operator sees it under
+          <b>Shared by others</b> and decides whether to install it.</p>
+        <table><thead><tr><th>Your theme</th><th>Id</th><th>From</th><th>Offered</th><th></th></tr></thead>
+          <tbody id="b-mine"><tr><td class="muted" colspan="5">Loading…</td></tr></tbody></table>
+        <p class="muted" style="margin:8px 0 0">Install a theme first (Make a theme, step 5) to offer it.</p>
+      </div>
+      <div data-bpanel="others" hidden>
+        <p style="margin:0 0 8px">Themes the arcades you link with offer. Installing one keeps it here; it shows nowhere
+          until you wear it or let people pick it.</p>
+        <table><thead><tr><th>Theme</th><th>Id</th><th>Offered by</th><th></th></tr></thead>
+          <tbody id="b-others"><tr><td class="muted" colspan="4">Loading…</td></tr></tbody></table>
+        <p class="err bad" id="b-err"></p>
+      </div>
+      {% endif %}
+      {#- API keys (arcade/apikeys.py): the operator's own and the say over users'; an account's own; a visitor is told
+          how to get one. -#}
+      <div data-bpanel="keys" hidden>
+        {% if audience == 'anyone' %}
+        <p>An API key lets a program or a website use this arcade as you would: read, post, trade, all of it, with
+          the key in the <code>Authorization</code> header. <a href="/join">Sign in or make an account</a> to get
+          one, then come back here.</p>
+        <p class="muted">Like what you can build? Run an arcade of your own: then the keys, the coins and the data are
+          yours alone.</p>
+        {% else %}
+        <p style="margin:0 0 8px">{% if audience == 'operator' %}A key you make here acts as you, the operator: every
+          page and action you have, spending included, unless you narrow it below. Use it for the websites that run on
+          this arcade.{% else %}A key you make here acts as your account, as you would signed in here: never as the
+          node, and never anyone else. Try what an arcade can do; then run your own.{% endif %} A key is shown once.</p>
+        <table><thead><tr><th>Key</th><th>Opens</th><th>Can</th><th>From</th><th>Last used</th><th></th></tr></thead>
+          <tbody id="k-list"><tr><td class="muted" colspan="6">Loading…</td></tr></tbody></table>
+        <fieldset style="margin-top:10px"><legend>New key</legend>
+          <div class="grid">
+            <label for="k-name">Name</label><input id="k-name" maxlength="40" placeholder="my-website">
+            <label>Opens</label><div><label><input type="radio" name="k-scope" value="all" checked> every module</label>
+              <label><input type="radio" name="k-scope" value="some"> only these:</label>
+              <div id="k-mods" class="b-mods" hidden></div></div>
+            <label>Can</label><div><label><input type="checkbox" id="k-write"> write too (post, trade{% if audience == 'operator' %},
+              spend the node's coins{% endif %}); off reads only</label></div>
+            <label for="k-where">From</label><div><select id="k-where"><option value="anywhere">anywhere</option>
+              <option value="lan">this machine and its network</option><option value="machine">this machine only</option>
+              <option value="list">these addresses…</option></select> <input id="k-ips" placeholder="1.2.3.4, 10.0.0.0/8" hidden></div>
+            <label for="k-days">Ends</label><div><select id="k-days"><option value="">never</option><option value="1">in a day</option>
+              <option value="30">in 30 days</option><option value="90" selected>in 90 days</option>
+              <option value="365">in a year</option></select></div>
+          </div>
+          <p style="margin:8px 0 0"><button type="button" id="k-make">Make the key</button></p>
+          <div id="k-new" hidden><p style="margin:8px 0 4px">Copy it now; it is not shown again:</p>
+            <code id="k-shown" class="b-key"></code></div>
+        </fieldset>
+        {% if audience == 'operator' %}
+        <fieldset><legend>Users' keys</legend>
+          <div class="grid">
+            <label>Users</label><label><input type="checkbox" id="k-users"> may make keys of their own, acting as their account</label>
+            <label for="k-per">Each</label><div><input id="k-per" type="number" min="0" max="100" style="width:5em"> keys at most</div>
+            <label for="k-rate">Calls</label><div><input id="k-rate" type="number" min="0" style="width:6em"> a minute per key (0: no limit)</div>
+          </div>
+          <p style="margin:8px 0 0"><button type="button" id="k-rules">Keep</button></p>
+        </fieldset>
+        {% endif %}
+        {% endif %}
+        <p class="err bad" id="k-err"></p>
+      </div>
+      <div data-bpanel="apiref" hidden>
+        <div class="b-ref">
+          <div><table><thead><tr><th>Module</th><th class="num">Routes</th></tr></thead><tbody id="r-mods"></tbody></table>
+            <p class="muted">And the console: <code>POST /api/v1/run {"line": "help"}</code> runs any command it lists.</p></div>
+          <div id="r-routes"><p class="muted">Pick a module.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<style>
+#build .steps{display:grid;grid-template-columns:170px minmax(0,1fr);gap:14px}
+#build .steps ol{margin:0;padding-left:20px}
+#build .steps ol button{background:none;border:0;padding:3px 0;text-align:left;cursor:pointer;color:var(--ink)}
+#build .steps ol button[aria-selected=true]{font-weight:600}
+#build h3{margin:0 0 6px;font-size:14px}
+#build pre{margin:6px 0;padding:8px;background:var(--panel);border:1px solid var(--line);font:12px/1.45 var(--mono);
+  white-space:pre-wrap;overflow-wrap:anywhere}
+#build .b-keys td{border:0;padding:1px 8px 1px 0}
+#build .b-nav{margin:12px 0 0}
+#build .grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 10px;align-items:start}
+#build .b-mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:2px 10px;margin:4px 0 0}
+#build .b-key{display:block;padding:6px 8px;background:#fff3c4;color:#1d1d1d;border:1px solid #d6b84a;user-select:all}
+#build .b-ref{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px}
+#build .b-ref tbody tr{cursor:pointer} #build .b-ref tr.on td{font-weight:600}
+#build .b-route{border-bottom:1px solid var(--line);padding:6px 0}
+@media (max-width:700px){ #build .steps, #build .b-ref{grid-template-columns:1fr} }
+</style>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var step = 1;
+  function show(n) {
+    step = Math.max(1, Math.min(7, n));
+    document.querySelectorAll('#build [data-step]').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.step == step); });
+    document.querySelectorAll('#build [data-stepbody]').forEach(function (s) { s.hidden = s.dataset.stepbody != step; });
+    $('b-prev').disabled = step === 1; $('b-next').disabled = step === 7;
+  }
+  document.querySelectorAll('#build [data-step]').forEach(function (b) { b.onclick = function () { show(+b.dataset.step); }; });
+  $('b-prev').onclick = function () { show(step - 1); };
+  $('b-next').onclick = function () { show(step + 1); };
+  show(1);
+  function tab(name) {
+    document.querySelectorAll('#build [data-btab]').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.btab === name); });
+    document.querySelectorAll('#build [data-bpanel]').forEach(function (p) { p.hidden = p.dataset.bpanel !== name; });
+    if (name === 'share' || name === 'others') load();
+    if (name === 'keys') keys();
+    if (name === 'apiref') reference();
+  }
+
+  // --- API keys and the reference (arcade/apikeys.py, web/apikeys_web.py) ---
+  var OPERATOR = {{ 'true' if audience == 'operator' else 'false' }}, SIGNED = {{ 'false' if audience == 'anyone' else 'true' }};
+  var KEYS = OPERATOR ? '/admin/api/keys' : '/account/keys', routes = null;
+  function call(url, method, body) {
+    return fetch(url, {method: method || 'GET', credentials: 'same-origin', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', 'X-Arcade-Admin': '1'}, body: body ? JSON.stringify(body) : undefined})
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || r.statusText); return j; }); });
+  }
+  function getRoutes() { return routes || (routes = fetch('/api/v1/routes', {credentials: 'same-origin'}).then(function (r) { return r.json(); })); }
+  function ago(t) {
+    if (!t) return 'never';
+    var s = Date.now() / 1000 - t;
+    return s < 120 ? 'just now' : s < 7200 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago'
+      : new Date(t * 1000).toLocaleDateString();
+  }
+  function keys() {
+    if (!SIGNED) return;
+    var err = $('k-err'); err.textContent = '';
+    Promise.all([call(KEYS), getRoutes()]).then(function (got) {
+      var d = got[0], mods = got[1].modules, list = $('k-list'), titles = {};
+      mods.forEach(function (m) { titles[m.id] = m.title; });
+      var box = $('k-mods');
+      if (!box.childNodes.length) mods.forEach(function (m) {
+        var l = document.createElement('label'), c = document.createElement('input');
+        c.type = 'checkbox'; c.value = m.id; l.appendChild(c); l.appendChild(document.createTextNode(' ' + m.title)); box.appendChild(l);
+      });
+      list.textContent = '';
+      d.keys.forEach(function (k) {
+        var tr = list.insertRow();
+        var name = tr.insertCell(); name.innerHTML = '<b></b><div class="muted"><code></code></div>';
+        name.querySelector('b').textContent = k.name + (k.owner === 'account' && OPERATOR ? ' (a user\'s)' : '');
+        name.querySelector('code').textContent = 'ak_' + k.id + '…';
+        tr.insertCell().textContent = k.modules ? k.modules.map(function (m) { return titles[m] || m; }).join(', ') : 'everything';
+        tr.insertCell().textContent = (k.write ? 'read, write' : 'read') + (k.off ? ' · off' : '')
+          + (k.expires ? ' · ends ' + new Date(k.expires * 1000).toLocaleDateString() : '');
+        tr.insertCell().textContent = k.where;
+        tr.insertCell().textContent = ago(k.used);
+        var acts = tr.insertCell();
+        [[k.off ? 'Switch on' : 'Switch off', function () { return call(KEYS + '/' + k.id, 'POST', {off: !k.off}); }],
+         ['Delete', function () { return confirm('Delete the key ' + k.name + '? Whatever uses it stops at once.')
+           ? call(KEYS + '/' + k.id, 'DELETE') : Promise.reject(new Error('')); }]].forEach(function (a) {
+          var b = document.createElement('button'); b.type = 'button'; b.textContent = a[0];
+          b.onclick = function () { a[1]().then(keys, function (e) { err.textContent = e.message; }); };
+          acts.appendChild(b); acts.appendChild(document.createTextNode(' '));
+        });
+      });
+      if (!d.keys.length) list.insertRow().insertCell().textContent = 'No keys yet.';
+      if (OPERATOR) { $('k-users').checked = d.rules.users; $('k-per').value = d.rules.per_user; $('k-rate').value = d.rules.per_minute; }
+      else if (!d.rules.users) { err.textContent = 'This arcade\'s operator does not give users keys now.'; }
+    }).catch(function (e) { err.textContent = e.message; });
+  }
+  if (SIGNED) {
+    document.querySelectorAll('#build [name="k-scope"]').forEach(function (r) {
+      r.onchange = function () { $('k-mods').hidden = !document.querySelector('#build [name="k-scope"][value="some"]').checked; };
+    });
+    $('k-where').onchange = function () { $('k-ips').hidden = $('k-where').value !== 'list'; };
+    $('k-make').onclick = function () {
+      var some = document.querySelector('#build [name="k-scope"][value="some"]').checked;
+      var body = {name: $('k-name').value, write: $('k-write').checked, days: $('k-days').value || null,
+                  where: $('k-where').value === 'list' ? $('k-ips').value : $('k-where').value,
+                  modules: some ? [].map.call(document.querySelectorAll('#k-mods input:checked'), function (c) { return c.value; }) : null};
+      $('k-err').textContent = '';
+      call(KEYS, 'POST', body).then(function (j) {
+        $('k-shown').textContent = j.key; $('k-new').hidden = false; $('k-name').value = ''; keys();
+      }, function (e) { $('k-err').textContent = e.message; });
+    };
+    if (OPERATOR) $('k-rules').onclick = function () {
+      call('/admin/api/keys/rules', 'POST', {users: $('k-users').checked, per_user: +$('k-per').value || 0,
+                                             per_minute: +$('k-rate').value || 0})
+        .then(keys, function (e) { $('k-err').textContent = e.message; });
+    };
+  }
+  function reference() {
+    getRoutes().then(function (d) {
+      var tb = $('r-mods'); tb.textContent = '';
+      d.modules.forEach(function (m) {
+        var tr = tb.insertRow(); tr.insertCell().textContent = m.title;
+        var n = tr.insertCell(); n.className = 'num'; n.textContent = m.routes.length;
+        tr.onclick = function () {
+          tb.querySelectorAll('tr').forEach(function (x) { x.classList.toggle('on', x === tr); });
+          var box = $('r-routes'); box.textContent = '';
+          m.routes.forEach(function (r) {
+            var div = document.createElement('div'); div.className = 'b-route';
+            var head = document.createElement('code'); head.textContent = r.methods.join(' ') + ' ' + r.path;
+            div.appendChild(head);
+            if (r.about) { var p = document.createElement('div'); p.className = 'muted'; p.textContent = r.about; div.appendChild(p); }
+            var pre = document.createElement('pre');
+            var write = r.methods.indexOf('GET') < 0;
+            pre.textContent = 'curl ' + (write ? '-X ' + r.methods[0] + ' -H "Content-Type: application/json" -d \'{}\' ' : '')
+              + '-H "Authorization: Bearer $ARCADE_KEY" \\\n  ' + location.origin + r.path;
+            div.appendChild(pre); box.appendChild(div);
+          });
+        };
+      });
+      if (tb.rows[0]) tb.rows[0].onclick();
+    });
+  }
+  document.querySelectorAll('#build [data-btab]').forEach(function (b) { b.onclick = function () { tab(b.dataset.btab); }; });
+  document.querySelectorAll('#build [data-type]').forEach(function (b) {
+    b.onclick = function () {
+      // The window's console; on the website, its /console with the line typed in (2026-11-08)
+      var win = document.querySelector('[data-win="console"]');
+      if (!win) { location.href = '/console#' + encodeURIComponent(b.dataset.type); return; }
+      $('build').classList.remove('open');
+      win.click();
+      $('line').value = b.dataset.type; $('line').focus();
+    };
+  });
+  {#- On the website (/build, and /me/keys for API keys) the window is the page, opened on the tab its address names. #}
+  {% if page %}(function () {
+    var h = location.hash.slice(1) || {{ (start or '')|tojson }};
+    if (h && document.querySelector('#build [data-btab="' + h + '"]')) tab(h);
+  })();{% endif %}
+  {% if audience == 'operator' %}
+  function run(line) {
+    return fetch('/lite/api/console', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-Arcade-Lite': '1', 'X-Arcade-Admin': '1'},
+      body: JSON.stringify({line: line})}).then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error || 'refused'); return j.result; });
+  }
+  function cells(tr, list) {
+    list.forEach(function (c) {
+      var td = tr.insertCell();
+      if (c && c.nodeType) td.appendChild(c); else { td.textContent = c == null ? '' : String(c); }
+    });
+  }
+  function button(text, act) {
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = text;
+    b.onclick = function () {
+      b.disabled = true; $('b-err').textContent = '';
+      act().then(load, function (e) { b.disabled = false; $('b-err').textContent = e.message; });
+    };
+    return b;
+  }
+  function load() {
+    Promise.all([run('sharedthemes'), fetch('/lite/api/overview', {credentials: 'same-origin'}).then(function (r) { return r.json(); })])
+      .then(function (got) {
+        var d = got[0], names = {};
+        (got[1].arcades || []).forEach(function (a) { names[a.id] = a.operator ? '@' + a.operator : String(a.id).slice(0, 12); });
+        var mine = $('b-mine'), others = $('b-others');
+        mine.textContent = ''; others.textContent = '';
+        d.mine.forEach(function (t) {
+          var tr = mine.insertRow();
+          cells(tr, [t.title, t.id.slice(0, 8) + '…', t.from === 'local' ? 'made here' : 'taken from the mesh',
+                     t.shared ? 'yes' : 'not yet',
+                     button(t.shared ? 'Stop offering' : 'Offer to the mesh', function () {
+                       return run('sharetheme ' + t.id + ' ' + (t.shared ? 'off' : 'on'));
+                     })]);
+        });
+        if (!d.mine.length) cells(mine.insertRow(), ['No theme is installed here yet.']);
+        d.offered.forEach(function (t) {
+          var tr = others.insertRow();
+          cells(tr, [t.title + ' ' + t.version, t.id.slice(0, 8) + '…',
+                     t.from.map(function (p) { return names[p] || String(p).slice(0, 12); }).join(', '),
+                     t.installed ? 'installed' : button('Install', function () { return run('taketheme ' + t.id); })]);
+          tr.title = t.summary || '';
+        });
+        if (!d.offered.length) cells(others.insertRow(), [d.mesh ? 'No linked arcade offers a theme yet.' : 'This arcade is not on the mesh.']);
+      })
+      .catch(function (e) { $('b-err').textContent = e.message; });
+  }
+  {% else %}
+  function load() {}
+  {% endif %}
+})();
+</script>

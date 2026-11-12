@@ -1,0 +1,1474 @@
+{% extends "base.html" %}
+{% import "_tip.html" as tipui with context %}
+{% block title %}{{ wall_text('@' ~ whose.tag, 'A profile') if whose else 'Feed' }} · {{ brand.name }}{% endblock %}
+
+{# One card, drawn for a post and for every reply under it, however deep: a
+   reply is a post as far as this page is concerned, which is what the format
+   says too (D-138). #}
+{% macro card(p, depth=0) %}
+{# `acts` is the reader being an account on this instance. It does not change
+   what the card looks like — the same buttons in the same places — only who
+   pays when one is pressed: the node, through the form's own route, or this
+   tab, through /account/react. See the script at the bottom of the page. #}
+{% set acts = public and mine.tag %}
+<div class="panel feedpost{{ ' reply' if p.is_reply }}" data-author="{{ p.author }}"
+     data-key="{{ p.txid }}"
+     style="margin:0 0 12px;{{ 'margin-left:%dpx' % (depth * 22) if depth }}">
+  {% set who = bylines.get(p.author, {}) %}
+  <div class="row" style="align-items:center;gap:10px">
+    {% if who.face %}
+      <img class="coinface" src="/content/{{ who.face }}" alt=""
+           style="width:38px;height:38px;border-radius:50%;object-fit:cover">
+    {% else %}
+      {# A letter, as Notifications draws one, not an empty circle (a tester). #}
+      {% set initial = (who.tag or p.author[1:2] or '?')[:1]|upper %}
+      <span class="coinface" aria-hidden="true"
+            style="width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+                   font-weight:700;color:#fff;background:hsl({{ p.author|hue }} 45% 42%)">{{ initial }}</span>
+    {% endif %}
+    <div>
+      {% if who.tag %}
+        <a href="/u/{{ who.tag }}" style="font-weight:600">{{ wall('@' ~ who.tag) }}</a>
+      {% else %}
+        <span style="font-weight:600">{{ p.author|who }}</span>
+      {% endif %}
+      <div class="muted" style="font-size:.78rem">
+        {{ when(p.block_time) if p.block_time else 'just now' }}
+        {% if not p.height %}<span class="pill warn"
+          title="In the mempool: everybody's node can see it, and it is not settled until its block lands">waiting for its block</span>{% endif %}
+        {% if p.edited %}&middot; edited{% endif %}
+      </div>
+    </div>
+    {# Two ways a post is yours. `p.mine` is the node's own book — this machine
+       sent it — which is the right test on the operator's page and no test at
+       all for an account, whose posts are on the chain under an address the
+       node never held. So the second half asks the chain. #}
+    {% if (p.mine and not public) or (acts and p.author == mine.address) %}
+    <form method="post" action="/feed/{{ p.txid }}/delete" style="margin-left:auto"
+          {% if not acts %}data-ask="Delete this? The words stay on the chain for ever — no arcade will show them."{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small" type="submit">Delete</button></form>
+    {% endif %}
+  </div>
+
+  {% if p.muted %}
+    <p class="muted" style="margin:10px 0 0;font-size:.86rem">Hidden — you muted
+      this person.
+      {% if not public %}
+      {# Mute is a row in this node's own table, so it says something about
+         the machine rather than about the person pressing it, and an account
+         has no table here to write in. Not offered publicly, and the posts it
+         would uncover are still counted — just hidden by whoever runs this. #}
+      <form method="post" action="/feed/{{ p.txid }}/unmute" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="text" value="{{ p.author }}">
+        <input type="hidden" name="back" value="{{ here }}">
+        <button class="ghost small" type="submit">Unmute</button></form>
+      {% endif %}</p>
+  {% else %}
+    {# Text, with any /content/<id> in it drawn rather than printed: a picture
+       is shown, a page goes in the sandbox the viewer already uses, and
+       anything else stays a link (D-138). #}
+    {# Screened first when this arcade screens (arcade/moderation.py): removed if
+       illegal, behind a cover the reader can lift if sensitive, and covered
+       while it is still being checked (2026-09-25). #}
+    {% set seen = screen_text(p.text) %}
+    {% if seen == 'illegal' %}
+    <p class="muted posttext" style="margin:10px 0 0">Removed by this arcade.</p>
+    {% elif seen == 'sensitive' %}
+    <details class="covered" style="margin:10px 0 0">
+      <summary>Sensitive post &mdash; tap to show</summary>
+      <div class="posttext" style="margin:8px 0 0;white-space:pre-wrap"
+        >{{ render_post(p.text, drawable, frames) }}</div>
+      {# The screening gets things wrong; the operator can say so (base.html). #}
+      {% if operator_here %}<button type="button" class="ghost small sens-clear"
+        data-txid="{{ p.txid }}" style="margin-top:8px">Not sensitive</button>{% endif %}</details>
+    {# Your own post, still being checked, shows your own words (a tester):
+       the check is about what OTHER people are shown. #}
+    {% elif seen is none and p.author != (mine.address or '') %}
+    {# Says what the wait is for, and a post's WORDS may be shown before the check
+       ends (2026-09-28) -- pictures and files in it still wait for theirs,
+       because an unchecked one could be illegal, and those are served screened. #}
+    <details class="covered checking" style="margin:10px 0 0">
+      <summary>Checking this post for sensitive material&hellip; tap to show it now</summary>
+      <div class="posttext" style="margin:8px 0 0;white-space:pre-wrap"
+        >{{ render_post(p.text, drawable, frames) }}</div></details>
+    {% else %}
+    <div class="posttext" style="margin:10px 0 0;white-space:pre-wrap"
+      >{{ render_post(p.text, drawable, frames) }}</div>
+    {% endif %}
+  {% endif %}
+
+  {% if not public or acts %}
+  <div class="row" style="margin-top:10px;gap:6px;align-items:center">
+    <form method="post" action="/feed/{{ p.txid }}/{{ 'unlike' if p.liked_by_me else 'like' }}"
+          style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small likebtn{{ ' liked' if p.liked_by_me }}" type="submit"
+              data-count="{{ p.likes }}"
+              aria-pressed="{{ 'true' if p.liked_by_me else 'false' }}"
+              title="Every like is a transaction, so everybody counts the same number">
+        {{ '♥' if p.liked_by_me else '♡' }} {{ p.likes }}</button></form>
+
+    {# A dislike lowers where a post sits; one opinion per person, the latest
+       (feed.DISLIKE, 2026-09-25). Pressed again, it is taken back. #}
+    <form method="post" action="/feed/{{ p.txid }}/{{ 'undislike' if p.disliked_by_me else 'dislike' }}"
+          style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small dislikebtn{{ ' disliked' if p.disliked_by_me }}" type="submit"
+              data-count="{{ p.dislikes }}"
+              aria-pressed="{{ 'true' if p.disliked_by_me else 'false' }}"
+              aria-label="{{ 'Take back the dislike' if p.disliked_by_me else 'Dislike' }}"
+              title="A dislike moves this post down the feed, as a like moves it up">
+        &#128078;{% if p.dislikes %} {{ p.dislikes }}{% endif %}</button></form>
+
+    <button class="ghost small" type="button"
+            data-toggle="reply-{{ p.txid }}">Reply</button>
+
+    {# Shared once is shared: a second share is a second paid transaction
+       saying the same thing (a tester, 2026-09-26). So a share you made
+       becomes Unshare, which deletes YOUR share and nothing else (2026-09-29). #}
+    {% if p.shared_by_me and p.my_share %}
+    <form method="post" action="/feed/{{ p.my_share }}/unshare" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small on" type="submit" title="Take your share back">
+        Unshare {{ p.shares or '' }}</button></form>
+    {% else %}
+    <form method="post" action="/feed/{{ p.txid }}/share" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small" type="submit" title="Put this on your own feed">
+        Share {{ p.shares or '' }}</button></form>
+    {% endif %}
+
+    {% if acts or not public %}
+    {# The one of these that costs something gets the amount box the
+       operator's own tip page has. The form is unchanged on purpose —
+       `/feed/<txid>/tip` is the route, it is simply not one the door opens
+       for anybody but whoever runs the node, so the script at the bottom of
+       this page answers it here instead, with this key. #}
+    <button class="ghost small" type="button" data-tip-for="{{ p.txid }}" data-toggle="tip-{{ p.txid }}"
+            title="Coins to the author, in the same transaction that says which post{{ ' — tipped %d time%s so far' % (p.tips, '' if p.tips == 1 else 's') if p.tips }}">Tip</button>
+    <form method="post" action="/feed/{{ p.txid }}/tip" id="tip-{{ p.txid }}"
+          data-author="{{ p.author }}" data-author-name="{{ p.author|who_text }}" hidden style="margin:6px 0 0;width:100%">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <div class="row" style="flex-wrap:wrap">
+        {# PEP on either chain, or a token you hold on either (2026-10-13). #}
+        {{ tipui.tip_pay() }}
+        <div style="flex:1 1 120px"><input autocomplete="off" name="amount"
+          inputmode="decimal" placeholder="How many?" maxlength="24"></div>
+        <button class="small" type="submit">Send the tip</button>
+      </div>
+    </form>
+    {% else %}
+    <a class="ghost btn small" href="/feed/{{ p.txid }}/tip"
+       title="Send coins, a token or a piece — on either chain{{ ' — tipped %d time%s so far' % (p.tips, '' if p.tips == 1 else 's') if p.tips }}">Tip</a>
+    {% endif %}
+
+    {% if p.tipped %}
+    {# The running total this post has pulled in. Per chain, because the
+       units differ and adding across chains would be a lie; confirmed only,
+       and never the author's own — the same three rules that place this
+       post in the page (store.py, 2026-09-23). #}
+    <span class="muted small"
+          title="Tipped on this post — per chain, once confirmed, not counting the author's own"
+          >{% for net, sats in p.tipped|dictsort %}&#9921; {{ sats|coins }} {{ net }}{% if not loop.last %} &middot;{% endif %}{% endfor %}</span>
+    {% endif %}
+    {% if p.token_tipped %}
+    {# Token tips, counted only once the chain shows the send (app._verify_token_tips). #}
+    <span class="muted small" title="Tipped in tokens on this post, once confirmed">
+      {%- for name, amount in p.token_tipped|dictsort %}&#9670; {{ amount }} {{ wall_text(name, 'a token') }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</span>
+    {% endif %}
+
+    {% if not p.mine and not public %}
+    <form method="post" action="/feed/{{ p.txid }}/mute" style="margin-left:auto">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="text" value="{{ p.author }}">
+      <input type="hidden" name="back" value="{{ here }}">
+      <button class="ghost small" type="submit"
+              title="Hidden here and nowhere else. They are not told.">Mute</button></form>
+    {% endif %}
+  </div>
+  {% else %}
+  {# Nothing here is a button, because every one of them would be refused:
+     these routes spend the node's wallet and a public instance does not let
+     anybody reach that. The numbers stay — they are the post's, not the
+     reader's — and what is not offered is the doing of them (the operator,
+     § "A public instance should not offer what it will refuse"). #}
+  <div class="row" style="margin-top:10px;gap:10px;align-items:center">
+    <span class="muted" style="font-size:.82rem"
+          title="Every like, tip and share is a transaction, so everybody counts the same number">
+      &#9825; {{ p.likes }} like{{ '' if p.likes == 1 else 's' }}
+      {% if p.dislikes %}&middot; {{ p.dislikes }} dislike{{ '' if p.dislikes == 1 else 's' }}{% endif %}
+      {% if p.tips %}&middot; {{ p.tips }} tip{{ '' if p.tips == 1 else 's' }}{% endif %}
+      {% if p.shares %}&middot; {{ p.shares }} share{{ '' if p.shares == 1 else 's' }}{% endif %}
+      {% if p.tipped %}&middot; {% for net, sats in p.tipped|dictsort %}&#9921; {{ sats|coins }} {{ net }} tipped{% if not loop.last %} &middot;{% endif %}{% endfor %}{% endif %}
+      {# Token tips for visitors too (a tester, 2026-09-27). #}
+      {% if p.token_tipped %}&middot; {% for name, amount in p.token_tipped|dictsort %}&#9670; {{ amount }} {{ wall_text(name, 'a token') }}{% if not loop.last %} &middot;{% endif %}{% endfor %}{% endif %}</span>
+    <a class="muted" style="font-size:.82rem" href="/join">Make an account</a>
+  </div>
+  {% endif %}
+
+  {# Comments are folded behind their own count: a post with forty replies
+     is one post, and a feed that draws all forty is a feed nobody can
+     scroll (the operator). The count is always shown, so nothing is hidden
+     without saying that it is. #}
+  {% if p.replies %}
+  {% set count = p.replies|length %}
+  <button class="ghost small" type="button" style="margin-top:8px"
+          id="fold-{{ p.txid }}"
+          data-shut="{{ count }} comment{{ '' if count == 1 else 's' }}"
+          data-open="Hide {{ count }} comment{{ '' if count == 1 else 's' }}"
+          data-fold="thread-{{ p.txid }}">
+    {{ count }} comment{{ '' if count == 1 else 's' }}</button>
+  {% endif %}
+
+  {% if not public or acts %}
+  <form method="post" action="/feed/{{ p.txid }}/reply" id="reply-{{ p.txid }}"
+        hidden style="margin-top:10px">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="{{ here }}">
+    {# Top-aligned: the @-name list opens under the input, and a centred
+       button slid down beside it (a tester, 2026-09-28). #}
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1"><input autocomplete="off" name="text"
+        placeholder="Say something" maxlength="2000"></div>
+      <button type="submit" class="small">Reply</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% if p.replies %}
+<div id="thread-{{ p.txid }}" hidden>
+  {% for child in p.replies %}{{ card(child, depth + 1) }}{% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% block body %}
+<style>
+    /* A picture in a post fits the card; tapping it opens the full-size viewer. Nothing
+       sized .postmedia before, so a big inscription was drawn at its own width and ran
+       off a phone screen (2026-09-25). */
+    /* A long unbroken string (a link, an id) pushed its card 44px past a phone's edge. */
+    .posttext{overflow-wrap:anywhere}
+    .posttext img.postmedia{display:block;max-width:100%;height:auto;max-height:70vh;
+      object-fit:contain;border-radius:10px;margin:8px 0;cursor:zoom-in}
+    /* An inscribed page in a post: tall enough to use (2026-09-27: a
+       mintpad in the feed was "a short window, and you can't see the entire
+       content" -- an iframe with no height is 150px). A page that says how
+       tall it is gets exactly that (base.html, {arcade: "size"}). */
+    .posttext iframe.postmedia{display:block;width:100%;max-width:100%;border:0;
+      border-radius:10px;margin:8px 0;height:min(78vh,640px)}
+</style>
+{% if whose %}
+{# A profile, redone (2026-10-08, the prototype the operator approved: "things need
+   to be clean and intuitive"). A banner and a face, the name they publish
+   with the @tag the chain vouches for under it, their own words, a few
+   counts, one row of buttons, and everything else behind the ⋯. Below it
+   Posts / Games / Collections; Posts is the feed this page always was. #}
+{% set own = whose.address and mine.address and whose.address == mine.address %}
+{% set account = public and mine.address %}
+<div class="profile">
+  <div class="pbanner" style="background:linear-gradient(120deg,hsl({{ whose.hue }} 45% 30%),hsl({{ (whose.hue + 40) % 360 }} 55% 45%))"></div>
+  <section class="pcard">
+    <div class="ptop">
+      {% if whose.face %}
+        <img class="pav" src="/content/{{ whose.face }}" alt="">
+      {% else %}
+        <span class="pav pinit" style="background:hsl({{ whose.hue }} 45% 38%)">{{ (whose.name or whose.tag)[:1]|upper }}</span>
+      {% endif %}
+      {% if whose.address %}
+      <button type="button" class="pmore" id="pmore" aria-label="More">&#8943;</button>
+      {% endif %}
+    </div>
+    {# The published name is theirs to choose and nobody checks it; the @tag
+       under it is the part the chain vouches for, so the tick sits there. #}
+    {% set tick %}{% if whose.address and not whose.claiming %}<span class="claimed" title="This @name is claimed on the chain by the address below">&#10003;</span>{% endif %}{% endset %}
+    <h1 class="pname">{% if whose.name %}{{ wall(whose.name) }}{% else %}{{ wall('@' ~ whose.tag) }}{{ tick }}{% endif %}{% if whose.claiming %}
+      <span class="pill warn" style="font-size:.55em;vertical-align:middle"
+            title="Their claim is in the mempool: every node can see it, and it is theirs when its block lands"
+        >claiming</span>{% endif %}</h1>
+    <div class="ptag">{% if whose.name %}{{ wall('@' ~ whose.tag) }}{{ tick }}{% endif %}<span id="my-note" class="pnote{{ ' first' if not whose.name }}" hidden></span></div>
+    {% if whose.bio %}<p class="pbio">{{ whose.bio }}</p>{% endif %}
+    <div class="pmeta">
+      {# Their link, as words. NOT an anchor, and that is a decision rather
+         than a loose end (2026-09-22): a stranger's clickable link
+         inside a wallet is the one-tap delivery path for "claim your
+         airdrop" onto a lookalike arcade, which is the attack
+         docs/multi-user.md § "The rule that does protect a user" is
+         written against. Shown in full so the domain can be READ before
+         anybody goes anywhere, and `user-select:all` so one click picks the
+         whole thing up to paste. If this is ever revisited the replacement
+         is an interstitial naming the destination — never a bare anchor. #}
+      {% if whose.url %}
+        <span class="mono" style="overflow-wrap:anywhere;min-width:0;user-select:all"
+              title="their link, published by them — copy it, do not click it"
+              >{{ whose.url }}</span>
+      {% endif %}
+      {% if whose.joined_text %}<span>Joined {{ whose.joined_text }}</span>{% endif %}
+      {% if whose.address %}
+        <button type="button" class="paddr mono" id="copy-addr" data-address="{{ whose.address }}"
+                title="Copy their {{ chain.label|lower }} address">{{ whose.address[:8] }}… <b>Copy</b></button>
+      {% endif %}
+    </div>
+    {% if whose.address %}
+    <div class="pstats">
+      <a href="#posts" data-tab="posts"><b>{{ whose.posts }}</b> posts</a>
+      <a href="#games" data-tab="games"><b>{{ whose.games|length }}</b> {{ 'game' if whose.games|length == 1 else 'games' }}</a>
+      <a href="#collections" data-tab="collections"><b>{{ '{:,}'.format(whose.pieces) }}</b> pieces</a>
+    </div>
+    <div class="pacts">
+      {% if own %}
+        <a class="pmain" href="/me">Edit profile</a>
+        <button type="button" id="share-me">Share</button>
+      {% else %}
+        {# Straight to your conversation with them (2026-09-26). Signed out,
+           Message is the way to sign in, as it always was. #}
+        <a class="pmain" id="msg-them"
+           href="{% if not public %}/compose?to=@{{ whose.tag }}{% elif mine.address %}/me/messages?to=@{{ whose.tag }}{% else %}/me{% endif %}"
+           {% if public and not mine.address %}title="Sign in to message {{ wall_text('@' ~ whose.tag, 'someone') }}"{% endif %}>Message</a>
+        {# Signed out and on the operator's own view too, and only with a coin to offer (2026-11-02). #}
+        {% if whose.pay %}<button type="button" id="pay-them">Pay</button>{% endif %}
+        {% if account %}
+          <button type="button" id="save-them" data-tag="{{ whose.tag }}">+ Save</button>
+        {% else %}
+          <a href="/u/{{ whose.tag }}/wallet">Wallet</a>
+        {% endif %}
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+  <p class="msg info" id="blocked-says" hidden>You blocked {{ wall('@' ~ whose.tag) }}: their
+    posts and messages are hidden from you. Undo it from the ⋯ menu here or
+    under Blocked in your <a href="{{ '/me/contacts' if public else '/contacts' }}">address book</a>.</p>
+
+  {% if whose.address %}
+  <nav class="ptabs" role="tablist">
+    <button type="button" role="tab" data-tab="posts" aria-selected="true">Posts</button>
+    <button type="button" role="tab" data-tab="games" aria-selected="false">Games</button>
+    <button type="button" role="tab" data-tab="collections" aria-selected="false">Collections</button>
+  </nav>
+  {% endif %}
+</div>
+
+{# The ⋯ sheet: the rest of what can be done about somebody. #}
+<div class="psheetback" id="psheet" hidden>
+  <div class="psheet" role="dialog" aria-modal="true" aria-labelledby="psheet-title">
+    <div class="pgrab"></div>
+    <h2 id="psheet-title">{{ wall('@' ~ whose.tag) }}<button type="button" class="px" id="psheet-x" aria-label="Close">&times;</button></h2>
+    <div class="pmenu" id="pmenu">
+      <button type="button" id="m-fav" hidden>&#9734; Add to favorites</button>
+      <button type="button" id="m-note" hidden>&#9998; Add a private note</button>
+      <div id="m-noteform" hidden>
+        <input id="m-notein" maxlength="60" placeholder="Only you see this" autocomplete="off">
+        <button type="button" class="btn" id="m-notesave">Save note</button>
+      </div>
+      <button type="button" id="m-link">&#128279; Copy profile link</button>
+      <button type="button" id="m-addr">&#128203; Copy {{ chain.label|lower }} address</button>
+      <a href="/u/{{ whose.tag }}/wallet">&#128176; What they hold</a>
+      {% if whose.address and not own %}
+      <button type="button" id="block-them" class="pdanger"
+              {# The name stays whole here, where the drawn text above it is covered:
+                 this is the address of the thing the button acts on, not a copy of
+                 it for a person to read. Blank it and Block would block nobody. #}
+              data-tag="{{ whose.tag }}" data-address="{{ whose.address }}">Block</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# Pay: a coin, then the Wallet's own Send sheet with them in To. The amount, the review and the signing are all
+   there, so this page never spends. Signed out, a link goes through sign-in and comes back to the sheet (_to_join). #}
+{% if whose.pay %}
+<div class="psheetback" id="ppay" hidden>
+  <div class="psheet" role="dialog" aria-modal="true" aria-labelledby="ppay-title">
+    <div class="pgrab"></div>
+    <h2 id="ppay-title">Pay {{ wall('@' ~ whose.tag) }}<button type="button" class="px" id="ppay-x" aria-label="Close">&times;</button></h2>
+    <p class="muted ppay-says">{% if whose.pay_signin %}Sign in to pay them from your own wallet. Pick a coin and
+      you come back to it once you are signed in.{% else %}Pick a coin. Your Wallet opens with them in To; you type
+      the amount and review it there before anything is sent.{% endif %}</p>
+    <div class="pmenu">
+      {% for c in whose.pay %}
+      <a href="{{ c.href }}" data-network="{{ c.network }}" title="{{ c.address }}">{{ net_badge(c.network) }} {{ c.label }}<code class="mono ppay-at">{{ c.address[:8] }}…{{ c.address[-6:] }}</code></a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<style>
+.pbanner{height:110px;border-radius:18px 18px 0 0}
+.pcard{background:var(--panel);border:1px solid var(--line);border-top:0;border-radius:0 0 18px 18px;
+  padding:0 16px 16px;box-shadow:var(--shadow)}
+.ptop{display:flex;align-items:flex-end;gap:10px;margin-top:-40px}
+.pav{width:84px;height:84px;border-radius:50%;border:4px solid var(--panel);object-fit:cover;flex:none;
+  background:var(--code)}
+.pinit{display:grid;place-items:center;color:#fff;font-weight:750;font-size:2rem}
+.pcard .pmore{margin-left:auto;width:40px;height:40px;min-height:0;border-radius:50%;padding:0;font-size:1.2rem;
+  background:var(--panel);color:var(--muted);border:1px solid var(--line);box-shadow:none}
+.pname{font-size:1.4rem;margin:8px 0 0;overflow-wrap:anywhere}
+.ptag{color:var(--muted);font-size:.92rem;overflow-wrap:anywhere}
+.claimed{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;
+  background:var(--accent);color:var(--accent-fg);font-size:.62rem;font-weight:800;vertical-align:1px;margin-left:4px}
+.pnote{color:var(--accent);margin-left:6px}
+.pnote::before{content:"· "}
+.pnote.first{margin-left:0}
+.pnote.first::before{content:""}
+.pbio{margin:10px 0 6px;max-width:60ch;overflow-wrap:anywhere}
+.pmeta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.84rem;color:var(--muted);align-items:center;margin-top:4px}
+.pcard .paddr{background:none;box-shadow:none;border:0;padding:0;min-height:0;color:var(--muted);
+  font-size:.8rem;font-weight:400}
+.paddr b{color:var(--accent);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.pstats{display:flex;gap:18px;margin:12px 0 2px;font-size:.88rem}
+.pstats a{color:var(--muted)}
+.pstats b{color:var(--fg);font-variant-numeric:tabular-nums}
+.pacts{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-top:14px}
+.pcard .pacts > a,.pcard .pacts > button{display:flex;align-items:center;justify-content:center;margin:0;
+  min-height:44px;padding:10px 6px;border:0;border-radius:12px;box-shadow:none;background:var(--code);
+  color:var(--fg);font-weight:700;font-size:.92rem;line-height:1.2}
+.pcard .pacts > .pmain{background:var(--accent);color:var(--accent-fg)}
+.pcard .pacts > a:hover{text-decoration:none;filter:brightness(.97)}
+.pcard .pacts > .saved{color:var(--ok)}
+.ptabs{display:flex;gap:4px;margin:18px 0 12px;border-bottom:1px solid var(--line)}
+.ptabs button{padding:9px 12px;font-weight:600;font-size:.92rem;color:var(--muted);background:none;
+  box-shadow:none;border:0;border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px;min-height:0}
+.ptabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.psheetback{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}
+.psheet{background:var(--panel);width:100%;max-width:520px;border-radius:20px 20px 0 0;
+  padding:10px 18px calc(22px + env(safe-area-inset-bottom,0px))}
+.pgrab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 12px}
+.psheet h2{display:flex;align-items:center;margin:0 0 6px;font-size:1.05rem;text-transform:none;letter-spacing:0;color:var(--fg)}
+.psheet .px{margin-left:auto;background:none;box-shadow:none;border:0;min-height:0;color:var(--muted);font-size:1.4rem;padding:0 6px}
+.pmenu > button,.pmenu > a{min-height:0;display:flex;gap:12px;align-items:center;width:100%;padding:13px 4px;border:0;
+  border-bottom:1px solid var(--line);border-radius:0;background:none;box-shadow:none;color:var(--fg);
+  font-weight:600;text-align:left}
+.pmenu > a:hover{text-decoration:none}
+.pmenu > :last-child{border-bottom:0}
+.pmenu .pdanger{color:var(--bad)}
+#ppay .psheet{max-height:85vh;overflow-y:auto}
+.ppay-says{margin:0 0 4px;font-size:.86rem}
+.pmenu .ppay-at{margin-left:auto;background:none;padding:0;color:var(--muted);font-size:.76rem;font-weight:400}
+#m-noteform{display:flex;gap:8px;padding:10px 0}
+#m-noteform input{flex:1;min-width:0}
+.ptab[hidden]{display:none!important}
+.pgames{display:grid;gap:10px}
+.pgame{display:flex;gap:12px;align-items:center;padding:10px}
+.pgame .thumb{width:72px;height:54px;border-radius:10px;flex:none;object-fit:cover;background:var(--code);
+  display:grid;place-items:center;font-weight:700;color:var(--muted);overflow:hidden}
+.pcolls{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media(min-width:640px){.pcolls{grid-template-columns:repeat(3,1fr)}}
+.pcolls .pcoll{min-height:0;display:flex;flex-direction:column;gap:2px;text-align:left;padding:8px;border-radius:16px;background:var(--panel);
+  border:1px solid var(--line);color:var(--fg);font-weight:400;box-shadow:none;min-width:0}
+.pcoll b{margin-top:6px;font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcoll small{color:var(--muted);font-size:.78rem}
+.mosaic{display:grid;grid-template-columns:1fr 1fr;gap:3px;aspect-ratio:1;border-radius:11px;overflow:hidden;width:100%;background:var(--code)}
+.mosaic img,.mosaic i{display:block;width:100%;height:100%;object-fit:cover;background:var(--code)}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.pgrid a{aspect-ratio:1;border-radius:12px;overflow:hidden;background:var(--code);display:grid;place-items:center;
+  color:var(--muted);font-size:.8rem;font-weight:700}
+.pgrid img{width:100%;height:100%;object-fit:cover}
+</style>
+<script type="module" nonce="{{ csp_nonce }}">
+// The profile's buttons. The book, the note and favorites are this browser's
+// (messaging.js, encrypted to follow the account); the block list is too
+// (window.arcadeBlocked). Nothing here tells the node who you saved.
+const $ = (id) => document.getElementById(id);
+const TAG = {{ whose.tag|tojson }}, ADDR = {{ (whose.address or '')|tojson }};
+const ACCOUNT = {{ (account or False)|tojson }};
+const MINE = {{ (own or False)|tojson }};
+const toast = (t) => (window.arcadeToast ? arcadeToast(t) : alert(t));
+async function copy(text, said) {
+  try { await navigator.clipboard.writeText(text); toast(said); }
+  catch (e) { toast("Copy is blocked here: " + text); }
+}
+const sheet = (open) => { $("psheet").hidden = !open; if (!open) $("m-noteform").hidden = true; };
+if ($("pmore")) $("pmore").onclick = () => sheet(true);
+$("psheet-x").onclick = () => sheet(false);
+$("psheet").addEventListener("click", (e) => { if (e.target === $("psheet")) sheet(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") sheet(false); });
+$("m-link").onclick = () => { copy(`${location.origin}/u/${TAG}`, "Profile link copied"); sheet(false); };
+$("m-addr").onclick = () => { copy(ADDR, "Address copied"); sheet(false); };
+if ($("copy-addr")) $("copy-addr").onclick = () => copy(ADDR, "Address copied");
+if ($("share-me")) $("share-me").onclick = () => copy(`${location.origin}/u/${TAG}`, "Profile link copied");
+if ($("ppay")) {
+  const paySheet = (open) => { $("ppay").hidden = !open; };
+  $("pay-them").onclick = () => paySheet(true);
+  $("ppay-x").onclick = () => paySheet(false);
+  $("ppay").addEventListener("click", (e) => { if (e.target === $("ppay")) paySheet(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") paySheet(false); });
+}
+
+// Tabs: Posts is the page as it always was; Games and Collections are drawn
+// on the server and shown in place. #games / #collections open one directly.
+function tab(name) {
+  for (const b of document.querySelectorAll(".ptabs button"))
+    b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  for (const t of document.querySelectorAll(".ptab")) t.hidden = t.id !== "ptab-" + name;
+  if (name === "collections") drawColls();
+}
+for (const b of document.querySelectorAll("[data-tab]"))
+  b.addEventListener("click", (e) => { e.preventDefault(); tab(b.dataset.tab); history.replaceState(null, "", "#" + b.dataset.tab); });
+if (["#games", "#collections"].includes(location.hash)) tab(location.hash.slice(1));
+
+// Collections: cards first, then one collection's pieces, sixty at a time.
+const COLLS = {{ (whose.collections or [])|tojson }};
+function drawColls() {
+  const box = $("pcolls-box");
+  if (!box || box.dataset.drawn) return;
+  box.dataset.drawn = "1";
+  showCards();
+}
+function showCards() {
+  const box = $("pcolls-box");
+  box.replaceChildren();
+  if (!COLLS.length) {
+    const p = document.createElement("div"); p.className = "panel empty";
+    p.textContent = `@${TAG} doesn't hold any pieces yet.`; box.appendChild(p); return;
+  }
+  const grid = document.createElement("div"); grid.className = "pcolls";
+  for (const c of COLLS) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "pcoll";
+    const m = document.createElement("span"); m.className = "mosaic";
+    for (let i = 0; i < 4; i++) {
+      if (c.covers[i]) { const im = document.createElement("img"); im.loading = "lazy"; im.alt = "";
+        im.src = "/content/" + c.covers[i]; m.appendChild(im); }
+      else m.appendChild(document.createElement("i"));
+    }
+    const n = document.createElement("b"); n.textContent = c.collection || "Not in a collection";
+    const k = document.createElement("small"); k.textContent = `${c.count.toLocaleString()} ${c.count === 1 ? "piece" : "pieces"}`;
+    b.append(m, n, k);
+    b.onclick = () => openColl(c);
+    grid.appendChild(b);
+  }
+  box.appendChild(grid);
+}
+async function openColl(c) {
+  const box = $("pcolls-box");
+  box.replaceChildren();
+  const back = document.createElement("button"); back.type = "button"; back.className = "ghost small";
+  back.textContent = "← Collections"; back.onclick = showCards;
+  const h = document.createElement("h3"); h.style.margin = "10px 0 0";
+  h.textContent = c.collection || "Not in a collection";
+  const n = document.createElement("div"); n.className = "muted"; n.style.fontSize = ".86rem";
+  n.textContent = `${c.count.toLocaleString()} pieces`;
+  const grid = document.createElement("div"); grid.className = "pgrid";
+  const more = document.createElement("button"); more.type = "button"; more.className = "ghost";
+  more.style.cssText = "width:100%;margin-top:12px"; more.textContent = "Show more"; more.hidden = true;
+  box.append(back, h, n, grid, more);
+  let offset = 0;
+  const page = async () => {
+    more.disabled = true;
+    const r = await fetch(`/u/${encodeURIComponent(TAG)}/pieces?collection=${encodeURIComponent(c.collection)}&offset=${offset}`);
+    const said = await r.json().catch(() => ({pieces: []}));
+    for (const it of said.pieces || []) {
+      // Somebody else's piece opens where an offer is made (2026-10-09: "I want to
+      // be able to make an offer on the piece").
+      const a = document.createElement("a"); a.href = `/inscriptions/${it.txid}/view${MINE ? "" : "#make-offer"}`;
+      a.title = `#${it.number}`;
+      if (String(it.content_type || "").startsWith("image/")) {
+        const im = document.createElement("img"); im.loading = "lazy"; im.alt = `#${it.number}`;
+        im.src = "/content/" + it.txid; a.appendChild(im);
+      } else a.textContent = `#${it.number}`;
+      grid.appendChild(a);
+    }
+    offset += (said.pieces || []).length;
+    more.hidden = !said.more; more.disabled = false;
+  };
+  more.onclick = page;
+  await page();
+}
+
+// Block / unblock, with the same card it always asked with.
+const blockBtn = $("block-them");
+function drawBlocked() {
+  if (!blockBtn || !window.arcadeBlocked) return;
+  const on = window.arcadeBlocked.has(ADDR);
+  blockBtn.textContent = on ? "⊘ Unblock @" + TAG : "⊘ Block @" + TAG;
+  $("blocked-says").hidden = !on;
+}
+if (blockBtn) blockBtn.onclick = async () => {
+  if (!window.arcadeBlocked) return;
+  sheet(false);
+  if (window.arcadeBlocked.has(ADDR)) window.arcadeBlocked.remove(ADDR);
+  else {
+    const words = "Their posts and messages are hidden from you. Nothing is put on "
+                + "the chain and they are not told.";
+    if (!(await arcadeAsk("Block @" + TAG + "?", words, "Block"))) return;
+    window.arcadeBlocked.add(TAG, ADDR);
+  }
+  drawBlocked();
+};
+document.addEventListener("arcade:blocked", drawBlocked);
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", drawBlocked);
+else drawBlocked();
+
+// Saved, favorite and note: an account's own book.
+if (ACCOUNT && $("save-them")) {
+  const mail = await import("/messaging.js");
+  const find = async () => (await mail.book()).find((e) => e.tag === TAG) || null;
+  async function draw() {
+    const e = await find();
+    const save = $("save-them");
+    save.textContent = e ? "✓ Saved" : "+ Save";
+    save.classList.toggle("saved", !!e);
+    $("m-fav").hidden = $("m-note").hidden = !e;
+    if (e) {
+      $("m-fav").textContent = e.fav ? "★ Remove from favorites" : "☆ Add to favorites";
+      $("m-note").textContent = e.note ? "✎ Edit your note" : "✎ Add a private note";
+      $("my-note").textContent = e.note || ""; $("my-note").hidden = !e.note;
+    } else $("my-note").hidden = true;
+    return e;
+  }
+  let entry = await draw();
+  // Keep the book's copy of their face and name current: this page just
+  // asked the node about them anyway.
+  if (entry) {
+    const name = {{ (whose.name or '')|tojson }}, faceId = {{ (whose.face or '')|tojson }};
+    if ((entry.name || "") !== name || (entry.face || "") !== faceId)
+      mail.updateBookEntry(TAG, {name, face: faceId}).catch(() => {});
+  }
+  $("save-them").onclick = async () => {
+    const e = await find();
+    try {
+      if (e) {
+        if (!(await arcadeAsk(`Remove @${TAG} from your address book?`,
+                              "Messages already received are kept.", "Remove"))) return;
+        await mail.removeFromBook(TAG); toast(`Removed @${TAG}`);
+      } else { await mail.addToBook(TAG); toast(`Saved @${TAG} to your address book`); }
+    } catch (err) { toast(String(err.message || err)); }
+    entry = await draw();
+  };
+  $("m-fav").onclick = async () => {
+    const e = await find(); if (!e) return;
+    await mail.updateBookEntry(TAG, {fav: !e.fav}); sheet(false);
+    toast(e.fav ? "Removed from favorites" : "Added to favorites"); entry = await draw();
+  };
+  $("m-note").onclick = async () => {
+    const e = await find(); $("m-noteform").hidden = false;
+    $("m-notein").value = (e && e.note) || ""; $("m-notein").focus();
+  };
+  $("m-notesave").onclick = async () => {
+    await mail.updateBookEntry(TAG, {note: $("m-notein").value.trim().slice(0, 60)});
+    sheet(false); toast("Note saved"); entry = await draw();
+  };
+}
+document.body.dataset.profileReady = "yes";
+</script>
+  {% if not whose.address %}
+    <div class="panel empty" style="margin-top:16px">
+      <p>Nobody holds <strong>{{ wall('@' ~ whose.tag) }}</strong> on this chain.</p>
+      <p class="muted">A tag exists here once its claim is in a block this node
+        has read.</p></div>
+  {% endif %}
+{% else %}
+  {# No heading or explanation here (2026-09-27): the tab already says
+     Feed, and Popular / New / Friends say themselves. #}
+  <nav class="row feedsort" aria-label="Order" style="gap:6px;margin:0 0 16px">
+    <a class="btn small {{ 'on' if sort not in ('new', 'friends') else 'ghost' }}" href="/feed">Popular</a>
+    <a class="btn small {{ 'on' if sort == 'new' else 'ghost' }}" href="/feed?sort=new">New</a>
+    <a class="btn small {{ 'on' if sort == 'friends' else 'ghost' }}" href="/feed?sort=friends">Friends</a>
+  </nav>
+  <div class="panel empty" id="no-friends" hidden></div>
+{% endif %}
+
+{% if not whose %}
+<div class="panel" style="margin-bottom:18px">
+  {% if mine.tag and not public %}
+  {# The box, the clip and the button are one row and the same height. Three
+     controls with three different paddings and three different fonts do not
+     line up by accident, and the box grows downwards as you type, so they
+     are pinned to its bottom edge (the operator). #}
+  <style>
+    .feedcomposer{display:flex;align-items:flex-end;gap:8px}
+    .feedcomposer .saybox{flex:1 1 auto;min-width:0}
+    .feedcomposer textarea{display:block;box-sizing:border-box;height:48px;min-height:48px;
+      max-height:220px;padding:10px 12px;margin:0;
+      font:inherit;font-size:.95rem;line-height:1.35;
+      font-family:inherit;resize:none;overflow:hidden}
+    .feedcomposer .attach{display:inline-flex;align-items:center;
+      justify-content:center;box-sizing:border-box;height:48px;width:48px;
+      padding:0;margin:0;font-size:1.05rem;line-height:1;cursor:pointer;flex:none}
+    .feedcomposer button{box-sizing:border-box;height:48px;padding:0 18px;
+      margin:0;flex:none}
+  </style>
+  <form method="post" action="/feed/post" enctype="multipart/form-data"
+        id="composer">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="feedcomposer">
+      <div class="saybox">
+        <textarea autocomplete="off" name="text" id="say" rows="2"
+          placeholder="Say something as @{{ mine.tag }}"></textarea></div>
+      <label class="ghost btn attach"
+             title="Attach a file — it becomes an inscription you own">📎
+        <input type="file" name="attachment" id="attach" hidden
+               accept="image/*,video/*,audio/*"></label>
+      <button type="submit">Post</button>
+    </div>
+    <div class="muted" id="attached" hidden style="font-size:.8rem;margin-top:6px"></div>
+  </form>
+  {% else %}
+  {% if public %}
+  {% if mine.tag %}
+  {# An account posts with its own key, so the composer signs in the
+     browser rather than submitting a form. Same box, same buttons; what
+     differs is that nothing is sent until it is signed here. #}
+  <div class="feedcomposer" id="account-composer">
+    <div class="saybox">
+      <textarea autocomplete="off" id="account-say" rows="2" maxlength="2000"
+        aria-label="Your post"
+        placeholder="Say something as @{{ mine.tag }}"></textarea></div>
+    <button type="button" id="account-post">Post</button>
+  </div>
+  {# The same cap as a reply, shown as it is typed: a longer post is more bytes
+     on the chain, and costs more (a tester, 2026-09-26). #}
+  <div class="muted small" id="account-count" style="text-align:right" aria-live="polite"></div>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    var box = document.getElementById('account-say'), out = document.getElementById('account-count');
+    if (!box || !out) return;
+    var draw = function () {
+      var n = box.value.length;
+      out.textContent = n ? n + ' / 2000' + (n > 280 ? ' \u00b7 longer posts cost a little more' : '') : '';
+    };
+    box.addEventListener('input', draw);
+  })();
+  </script>
+  <div class="muted small" id="account-said" style="margin-top:6px"></div>
+  {# No password box here (2026-09-27): the unlock pop-up opens the
+     wallet the moment something needs it (arcadeKeys, base.html). #}
+  <style>
+    .feedcomposer{display:flex;align-items:flex-end;gap:8px}
+    .feedcomposer .saybox{flex:1 1 auto;min-width:0}
+    .feedcomposer textarea,.feedcomposer input[type=password]{
+      display:block;box-sizing:border-box;width:100%;height:48px;
+      min-height:48px;max-height:220px;padding:10px 12px;margin:0;
+      font:inherit;font-size:.95rem;line-height:1.35;resize:none;
+      overflow:hidden;border:1px solid var(--line);border-radius:8px;
+      background:var(--panel);color:var(--fg)}
+    .feedcomposer button{box-sizing:border-box;height:48px;padding:0 18px;
+      margin:0;flex:none}
+    .small{font-size:.85rem}
+  </style>
+  <script type="module" nonce="{{ csp_nonce }}">
+    import * as wallet from "/wallet.js";
+    const CHAIN = {network: "{{ chain.network }}",
+                   version: {{ chain.params.pubkeyhash_version }}};
+    const $ = (id) => document.getElementById(id);
+    const say = (text, bad) => {
+      $("account-said").textContent = text;
+      $("account-said").style.color = bad ? "var(--bad)" : "var(--muted)";
+    };
+    {# The key this tab already holds, STARTED here and taken up by whoever
+       presses something — not awaited at the top. Awaiting it here put the two
+       lines that attach the handlers a second or two behind the page appearing
+       on screen, and a press in that gap is answered by nothing at all: the
+       button is not wired yet, so it is a click on a word. No error, no
+       transaction, no word — the person presses again and it works, which is
+       how it stayed unfound for as long as it did. #}
+    const opening = wallet.opened(CHAIN);
+    let keys = null;
+    opening.then((found) => { keys = keys || found; });
+    const take = async () => keys || (keys = await opening);
+
+    $("account-post").onclick = async () => {
+      say("");
+      const text = $("account-say").value.trim();
+      // Said, not silently ignored (a tester, 2026-09-26).
+      if (!text) { say("Write something first.", true); $("account-say").focus(); return; }
+      const held = (await take()) || await arcadeKeys(CHAIN).catch(() => null);
+      if (!held) { say("Unlock your wallet to post.", true); return; }
+      $("account-post").disabled = true;
+      try {
+        const out = await wallet.post(held, text);
+        $("account-say").value = "";
+        say(`Posted. It appears here when its block lands (${out.txid.slice(0, 12)}…).`);
+      } catch (e) {
+        say(String(e.message || e), true);
+      } finally { $("account-post").disabled = false; }
+    };
+
+    // This box sits at the Post button's height until the text needs more of
+    // it, and gives the extra back when it doesn't. The operator's box has had
+    // this since 5877a3f; the account's never did, and it only mattered once
+    // the height stopped being the rows attribute.
+    $("account-say").addEventListener("input", () => {
+      const box = $("account-say");
+      box.style.height = "auto";
+      box.style.height = Math.min(box.scrollHeight, 220) + "px";
+    });
+  </script>
+  {% else %}
+  <p style="margin:0">The feed is open to read.
+    <a href="/join">Make an account</a> to post, or
+    <a href="/clone">run your own arcade</a>.</p>
+  {% endif %}
+  {% else %}
+  <p style="margin:0">You need a name before you can post &mdash; it is what
+    your posts appear under, and it is one button on the
+    <a href="/contacts">address book</a>.</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}
+
+{% if public and mine.tag %}
+{# Every button on the cards above is the operator's form, unchanged. On this
+   instance those routes spend the node's wallet and the door shuts them, so
+   the same form is answered here instead: the same bytes /account/post puts on
+   the chain, built out of this account's own coins, and nothing is signed that
+   this tab has not read for itself first. It is NOT inside the composer's
+   script above — that block is drawn on /feed only, and a profile page is the
+   page you are most likely to be standing on when you decide to answer
+   somebody. #}
+<div class="muted small" id="acts-said" style="margin:0 0 14px"></div>
+<script type="module" nonce="{{ csp_nonce }}">
+  import * as wallet from "/wallet.js";
+
+  // Which byte each of these words means, straight out of
+  // arcade/messaging/feed.py. Typed out here it would be a copy that can
+  // drift, and a wrong byte is a wrong transaction on the chain — not a page
+  // that looks slightly wrong.
+  const KINDS = {{ kinds|tojson }};
+  // Tip in PEP or a token you hold, on either chain (wallet.tip, 2026-10-13).
+  wallet.tipPicker();
+  const CHAIN = {network: "{{ chain.network }}",
+                 version: {{ chain.params.pubkeyhash_version }}};
+  const $ = (id) => document.getElementById(id);
+  const DONE = {like: "Liked", unlike: "Like taken back", reply: "Replied",
+                dislike: "Disliked", undislike: "Dislike taken back",
+                share: "Shared", unshare: "Unshared", edit: "Edited", delete: "Deleted",
+                tip: "Tipped"};
+  const say = (text, bad) => {
+    $("acts-said").textContent = text;
+    $("acts-said").style.color = bad ? "var(--bad)" : "var(--muted)";
+    // #acts-said sits at the top of the page, out of sight of the card that was
+    // pressed, and the page reloads the moment the node sees the transaction, so a
+    // like or a tip seemed to do nothing at all (walk-through, 2026-09-25). Say it
+    // where the reader is looking, and carry it across that reload.
+    feedToast(text, bad);
+    try { sessionStorage.setItem("feedToast", JSON.stringify({text, bad, at: Date.now()})); } catch (e) {}
+  };
+  // Same reason as the composer's: started, not awaited. Here the cost of
+  // awaiting was worse than a swallowed press — the listener below is what
+  // keeps these forms from submitting, so a card pressed before it was
+  // attached went to the server as a form, and on this instance the door
+  // answered it. The handler is attached on this tick and takes the key when
+  // it needs it, which is the only moment it ever needed it.
+  const opening = wallet.opened(CHAIN);
+  let keys = null;
+  const take = async () => keys || (keys = await opening);
+
+  document.addEventListener("submit", async (event) => {
+    const form = event.target;
+    const one = (form.getAttribute("action") || "").match(
+      /^\/feed\/([0-9a-f]{64})\/(like|unlike|dislike|undislike|reply|share|unshare|edit|delete|tip)$/);
+    if (!one) return;               // the composer, or a page with no door
+    event.preventDefault();
+    say("");
+    const flip = arcadePress(form, one[2]);     // pink at once (2026-09-28)
+    // Locked: the unlock sheet opens right here, and the like, reply or tip
+    // carries on after (a tester, 2026-09-26).
+    const held = (await take()) || await arcadeKeys(CHAIN).catch(() => null);
+    if (!held) {
+      if (flip) flip.undo();
+      say("Unlock your wallet to do that.", true);
+      return;
+    }
+    const [, txid, doing] = one;
+    const button = form.querySelector("button[type=submit]");
+    if (doing === "delete" && !(await arcadeAsk("Delete this?",
+        "The words stay on the chain for ever, but no arcade will show them.", "Delete"))) {
+      return;
+    }
+    if (button) button.disabled = true;
+    try {
+      let out;
+      if (doing === "tip") {
+        // Coins or a token, on either chain: one flow with the Games tab
+        // (wallet.tip). Asked first and marked after (filming, 2026-09-26: a
+        // tip changed nothing on screen, so a person would press it again).
+        out = await wallet.tip(held, form, txid, KINDS, arcadeAsk);
+        if (!out) { if (button) button.disabled = false; return; }
+        form.reset();
+        form.elements.token.hidden = true;
+        form.elements.net.dispatchEvent(new Event("change", {bubbles: true}));   // the coin named for the network again
+        form.hidden = true;
+        const opener = document.querySelector(`[data-tip-for="${txid}"]`);
+        if (opener) { opener.textContent = "Tipped \u2713 waiting for its block"; opener.disabled = true; }
+      } else {
+        // An unshare is a delete of the share itself (the txid is the share).
+        out = await wallet.react(held, txid, KINDS[doing === "unshare" ? "delete" : doing],
+                                 (form.elements.text || {}).value || "");
+        if (form.elements.text) {
+          form.elements.text.value = "";
+          form.hidden = true;
+        }
+      }
+      say(`${DONE[doing]}. It counts here when its block lands `
+          + `(${out.txid.slice(0, 12)}…).`);
+      near(form, `${DONE[doing]}. It counts when its block lands, in a minute or so.`, true);
+    } catch (e) {
+      if (flip) flip.undo();
+      say(String(e.message || e), true);
+      near(form, String(e.message || e));
+    } finally { if (button) button.disabled = false; }
+  });
+
+  // What went wrong, said beside the button that was pressed, not only in the
+  // box at the top of the page (a tester, 2026-09-26: a tip over the balance
+  // "gives no message at all" -- it did, out of sight).
+  function near(form, text, ok) {
+    const at = form.closest(".row") || form;
+    let p = at.parentNode.querySelector(":scope > .acterr");
+    if (!p) {
+      p = document.createElement("p");
+      p.className = "msg acterr";
+      p.style.margin = "6px 0 0";
+      at.after(p);
+    }
+    p.classList.toggle("ok", !!ok);
+    p.classList.toggle("err", !ok);
+    p.textContent = text.charAt(0).toUpperCase() + text.slice(1);
+  }
+</script>
+{% endif %}
+
+{% if whose and whose.address %}<div class="ptab" id="ptab-posts">{% endif %}
+{% if loading %}
+{#- THE FEED IS LOADING (2026-11-07, SadFrog): while the reader catches up with the chain, a bar instead of the posts,
+    so they do not pour in one batch after another; the page shows them once it has caught up. -#}
+{%- set span = [loading.tip - loading['from'], 1]|max %}
+<div class="panel feedloading" id="feedloading" role="status" aria-live="polite">
+  <p style="margin:0 0 6px"><b>The feed is loading</b></p>
+  <p class="muted" style="margin:0 0 10px">Reading posts from the {{ chain.label }} chain:
+    block <span id="fl-read">{{ "{:,}".format(loading.read) }}</span> of <span id="fl-tip">{{ "{:,}".format(loading.tip) }}</span>.
+    The posts show here once it has caught up.</p>
+  <progress id="fl-bar" max="{{ span }}" value="{{ loading.read - loading['from'] }}" style="width:100%;height:12px"></progress>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var fmt = function (n) { return Number(n).toLocaleString('en-US'); };
+  function poll() {
+    fetch('/feed/progress', {cache: 'no-store', credentials: 'same-origin'})
+      .then(function (r) { return r.json(); })
+      .then(function (p) {
+        if (!p.loading) { location.reload(); return; }
+        var bar = document.getElementById('fl-bar');
+        if (!bar) return;
+        bar.max = Math.max(p.tip - p.from, 1); bar.value = p.read - p.from;
+        document.getElementById('fl-read').textContent = fmt(p.read);
+        document.getElementById('fl-tip').textContent = fmt(p.tip);
+        setTimeout(poll, 2000);
+      })
+      .catch(function () { setTimeout(poll, 5000); });
+  }
+  setTimeout(poll, 2000);
+})();
+</script>
+{% elif posts %}
+  {% for p in posts %}{{ card(p) }}{% endfor %}
+  {% if cursor %}
+  <div id="more" data-next="{{ cursor }}" style="text-align:center;padding:14px">
+    <a class="ghost btn" href="{{ here }}{{ '&' if '?' in here else '?' }}before={{ cursor }}">Older posts</a>
+  </div>
+  {% endif %}
+{% else %}
+  <div class="panel empty">
+    {% if missing %}
+    {# The link said "this post", and this node's feed has no such row. The
+       other empty panels on this page talk about a feed with nothing in it;
+       this one has to talk about the id, because that is the thing that is
+       missing -- and a person holding a correct link and a wrong verb already
+       has to guess (S-work-3), so a link one character off should not also be
+       a guess (a tester, 2026-09-27). The id is printed because it is the
+       only way to compare it against the one you meant, and it reached here
+       only by passing the txid shape check in the route. #}
+    <p>That post is not on this node.</p>
+    <p class="muted"><code>{{ missing }}</code> is not a post this node has. It
+      may live on another node, it may never have been broadcast, or the link
+      may have lost a character on the way.</p>
+    <p><a class="ghost btn" href="/feed">Everybody's posts</a></p>
+    {% elif not_an_id %}
+    <p>That is not a post id.</p>
+    <p class="muted">A <code>post=</code> has to be a 64-character transaction
+      id. Nothing was looked up, so nothing was hidden from you.</p>
+    <p><a class="ghost btn" href="/feed">Everybody's posts</a></p>
+    {% else %}
+    <p>Nothing here yet.</p>
+    <p class="muted">{% if whose %}{{ wall('@' ~ whose.tag) }} has not posted on this
+      chain.{% else %}Be the first: say something above.{% endif %}</p>
+    {% endif %}
+  </div>
+{% endif %}
+{% if whose and whose.address %}</div>
+<div class="ptab" id="ptab-games" hidden>
+  {% if whose.games %}
+  <div class="pgames">
+    {% for g in whose.games %}
+    <div class="panel pgame">
+      {% if g.cover %}<img class="thumb" src="/content/{{ g.cover }}" alt="" loading="lazy">
+      {% else %}<span class="thumb">{{ (g.name or '?')[:1]|upper }}</span>{% endif %}
+      <div style="flex:1;min-width:0"><strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wall(g.name, 'name') }}</strong>
+        <span class="muted" style="font-size:.84rem">{% if g.version %}v{{ g.version }}{% endif %}</span></div>
+      <a class="btn small" target="_blank" rel="noopener" href="/inscriptions/{{ g.opens or g.txid }}/full">Play</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="panel empty"><p>{{ wall('@' ~ whose.tag) }} hasn't inscribed a game yet.</p></div>
+  {% endif %}
+</div>
+<div class="ptab" id="ptab-collections" hidden><div id="pcolls-box"></div></div>
+{% endif %}
+
+<script nonce="{{ csp_nonce }}">
+// The element with this id INSIDE the card that was pressed, before any other
+// on the page (2026-09-27: "if I scroll down far enough on a feed
+// comments quit opening"). Scrolling adds older pages, and a post can come
+// back on one of them -- the order moves, a share shows its original -- so an
+// id can be on the page twice, and the page-wide lookup found the first copy,
+// far up the page, and opened that one.
+function inCard(from, id){
+  var card = from && from.closest && from.closest('.feedpost');
+  if (card) {
+    var mine = card.querySelector('[id="' + id + '"]');
+    if (mine) return mine;
+    // A post's thread is the element right after its card, not inside it.
+    var next = card.nextElementSibling;
+    if (next && next.id === id) return next;
+  }
+  return document.getElementById(id);
+}
+function toggle(id, from){
+  var el = inCard(from || (window.event && window.event.target), id);
+  if (el) el.hidden = !el.hidden;
+}
+// Reply, Tip and the comment count answer these listeners rather than inline onclicks (the script policy,
+// 2026-11-09); on the document, so the posts scrolling and the in-place refresh add answer too.
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('button[data-toggle], button[data-fold]');
+  if (!b) return;
+  if (b.dataset.fold) foldComments(b, b.dataset.fold);
+  else toggle(b.dataset.toggle, b);
+});
+// Delete asks first on the node's own page (the question is the form's data-ask).
+document.addEventListener('submit', function(e){
+  var form = e.target;
+  if (form.matches && form.matches('form[data-ask]') && !confirm(form.dataset.ask)) e.preventDefault();
+});
+
+// Comments fold both ways: a count that only opens is a count you can press
+// once (the operator).
+function foldComments(button, id){
+  var thread = inCard(button, id);
+  if (!thread) return;
+  thread.hidden = !thread.hidden;
+  button.textContent = thread.hidden ? button.dataset.shut : button.dataset.open;
+  if (thread.hidden) arcadeOpenThreads.delete(id); else arcadeOpenThreads.add(id);
+}
+
+// Threads the reader opened stay open (2026-09-27: "sometimes when I click
+// on the comments ... the comments do not open"). The page refreshes itself in
+// place when anything new arrives (base.html), and a refresh that lined a card up
+// wrongly swapped an open thread for the server's shut one a moment after the
+// press. So the page remembers what was opened, and opens it again after every
+// refresh. (Cards also carry data-key now, so they line up by post.)
+var arcadeOpenThreads = new Set();
+document.addEventListener('arcade:changed', function(){
+  arcadeOpenThreads.forEach(function(id){
+    var thread = document.getElementById(id);
+    if (!thread || !thread.hidden) return;
+    thread.hidden = false;
+    var button = document.getElementById('fold-' + id.slice(7));
+    if (button) button.textContent = button.dataset.open;
+  });
+});
+
+// The count under a post is a promise about a thread, and until today the page
+// kept it for exactly one navigation path: foldComments above is the only code
+// that clears `hidden`, and it only ever ran from a click. Arrive at the same
+// URL by bookmark, pasted link, or Back, and #thread-<txid> resolved to a div
+// that stayed shut with nothing on the page that opens it -- "2 comments" and
+// no way to read them (a tester, 2026-09-27). So open it here, before
+// anything is painted, and put the button in its open state so it does not
+// offer what is already on screen.
+//
+// No scrollIntoView, deliberately: base.html scrolls the active nav item on
+// DOMContentLoaded (base.html:902), which runs after this line, so a scroll
+// started here loses to it and the page ends up wherever the nav chip is.
+//
+// Three triggers, one function, because a document gets to this URL three ways
+// and only one of them runs the line below. A fragment change inside the tab it
+// is already open in is not a navigation: nothing reloads and no first-paint
+// code re-runs, so the page has to answer hashchange or a link pasted into a
+// live tab lands on a closed thread. And a page that comes back from the
+// back/forward cache fires pageshow and never DOMContentLoaded -- it shows the
+// document exactly as it was left, which is not necessarily what the fragment
+// asked for (a tester, 2026-09-27). A pageshow listener covers that without
+// turning the fix into a router: there is no history stack here, just the one
+// question the URL already answers.
+function openThreadFromUrl(){
+  // Not decodeURIComponent: a stray % in a hand-typed fragment would throw
+  // here and take the rest of this script with it. Every fragment this page
+  // can legitimately carry is a hex txid, so percent-decoding buys nothing and
+  // a mistyped % costs the whole script.
+  var id = (location.hash || '').slice(1);
+  if (id.indexOf('thread-') !== 0) return;
+  var thread = document.getElementById(id);
+  if (!thread || !thread.hidden) return;
+  thread.hidden = false;
+  arcadeOpenThreads.add(id);
+  var button = document.getElementById('fold-' + id.slice(7));
+  if (button) button.textContent = button.dataset.open;
+}
+openThreadFromUrl();
+addEventListener('hashchange', openThreadFromUrl);
+// Persisted only: a normal load ran the call above already, and a second run
+// on the same document would be a second place the same decision is made.
+addEventListener('pageshow', function(event){
+  if (event.persisted) openThreadFromUrl();
+});
+
+// Enter posts; shift-enter is a new line. The box grows with what is typed
+// rather than starting three rows tall (the operator).
+(function(){
+  var say = document.getElementById('say');
+  var composer = document.getElementById('composer');
+  if (say && composer) {
+    say.addEventListener('keydown', function(event){
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (say.value.trim() || document.getElementById('attach').files.length) {
+          composer.submit();
+        }
+      }
+    });
+    say.addEventListener('input', function(){
+      // Back to nothing first, then to what the text needs: measuring
+      // without resetting only ever grows. The field starts at the same
+      // height as the clip and the button, and min-height keeps it there
+      // when the text is cleared again.
+      say.style.height = 'auto';
+      say.style.height = Math.min(say.scrollHeight, 220) + 'px';
+    });
+  }
+  var attach = document.getElementById('attach');
+  var note = document.getElementById('attached');
+  if (attach && note) {
+    attach.addEventListener('change', function(){
+      var file = attach.files[0];
+      note.hidden = !file;
+      if (file) note.textContent = file.name +
+        ' — it becomes an inscription you own, like any other piece';
+    });
+  }
+})();
+
+// A short note floated at the bottom of the screen: what just happened to the post
+// that was pressed. Survives the live reload that follows every action (see say()).
+function feedToast(text, bad) {
+  var t = document.getElementById('feedtoast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'feedtoast'; t.setAttribute('role', 'status');
+    t.style.cssText = 'position:fixed;left:16px;right:16px;margin:0 auto;width:fit-content;' +
+      'bottom:18px;z-index:6;max-width:520px;padding:10px 16px;border-radius:12px;font-size:.9rem;' +
+      'background:var(--fg);color:var(--bg);box-shadow:0 4px 16px rgba(0,0,0,.25)';
+    document.body.appendChild(t);
+  }
+  t.textContent = text; t.style.background = bad ? 'var(--bad)' : 'var(--fg)';
+  t.hidden = false; clearTimeout(t._h);
+  t._h = setTimeout(function () { t.hidden = true; }, 7000);
+}
+(function () {
+  try {
+    var held = JSON.parse(sessionStorage.getItem('feedToast') || 'null');
+    sessionStorage.removeItem('feedToast');
+    if (held && Date.now() - held.at < 15000) {
+      document.addEventListener('DOMContentLoaded', function () { feedToast(held.text, held.bad); });
+      if (document.readyState !== 'loading') feedToast(held.text, held.bad);
+    }
+  } catch (e) {}
+})();
+
+// Tap a picture in a post to see it whole (the same viewer as everywhere else).
+// Delegated, so the posts added by scrolling get it too.
+document.addEventListener('click', function (event) {
+  var img = event.target.closest && event.target.closest('.posttext img.postmedia');
+  if (!img || typeof arcadeOpenImage !== 'function') return;
+  event.preventDefault();
+  arcadeOpenImage(img.src, '', img.src);
+});
+
+// Ten at a time, and the next ten when somebody reaches the bottom (D-138).
+// A link is there whether or not this runs: scrolling is a convenience, not
+// the only way to see an older post.
+//
+// The next ten are fetched and ADDED under the ones already showing. This used
+// to navigate to the link instead, which replaced the page with the older ten
+// only: 300px from the bottom of a ten-post page is a few seconds of reading on
+// a tall screen, so the feed seemed to refresh by itself and the posts being
+// read vanished (2026-09-25). Once more than the first page is showing,
+// body[data-reading] holds the live reload in base.html, which would otherwise
+// put the reader back on the first ten at the next block.
+(function(){
+  var more = document.getElementById('more');
+  if (!more || !window.IntersectionObserver || !window.fetch) return;
+  var asking = false;
+  // A post is known by its reply form's id (reply-<txid>), not its markup: its
+  // counts can change between two pages -- a dislike moves it down past the cut.
+  // By the card's own key first (data-key, the post it is), then its reply form.
+  var idOf = function (c) {
+    if (c.dataset && c.dataset.key) return 'key-' + c.dataset.key;
+    var f = c.querySelector('[id^="reply-"]'); return f ? f.id : c.outerHTML; };
+  var seen = new Set();
+  document.querySelectorAll('.feedpost').forEach(function (c) { seen.add(idOf(c)); });
+  var watch = new IntersectionObserver(function(entries){
+    if (!entries[0].isIntersecting || asking) return;
+    var link = more.querySelector('a');
+    if (!link) return;
+    asking = true;
+    link.textContent = 'Loading older posts…';
+    fetch(link.href, {credentials: 'same-origin'})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var next = doc.getElementById('more');
+        var from = next ? next.parentNode : doc.querySelector('main');
+        var cards = from ? from.querySelectorAll(':scope > .feedpost') : [];
+        cards.forEach(function (c) {
+          if (seen.has(idOf(c))) return;           // the order moved under us: shown already
+          seen.add(idOf(c));
+          more.parentNode.insertBefore(document.importNode(c, true), more);
+          // Its comments too: the thread is the element AFTER the card, and
+          // taking the cards alone left every older post's "N comments" with
+          // nothing to open (2026-09-27: "if I scroll down far enough
+          // on a feed comments quit opening").
+          var thread = c.nextElementSibling;
+          if (thread && thread.id && thread.id.indexOf('thread-') === 0)
+            more.parentNode.insertBefore(document.importNode(thread, true), more);
+        });
+        document.body.dataset.reading = '1';
+        if (next && next.querySelector('a')) {
+          link.href = next.querySelector('a').href;
+          link.textContent = 'Older posts';
+          asking = false;
+        } else {
+          watch.disconnect();
+          more.remove();
+        }
+      })
+      .catch(function () {
+        // Leave the plain link: pressing it still works, the old way.
+        link.textContent = 'Older posts';
+        watch.disconnect();
+      });
+  }, {rootMargin: '300px'});
+  watch.observe(more);
+  // A page whose cards are all hidden (Friends, or a blocked author) leaves
+  // this marker in view, and an observer only calls back on a change -- so it
+  // is looked at again after every page, which keeps fetching while it shows.
+  document.addEventListener('arcade:feedshown', function () {
+    if (!more.isConnected || asking) return;
+    watch.unobserve(more); watch.observe(more);
+  });
+})();
+</script>
+<script type="module" nonce="{{ csp_nonce }}">
+/* Who is shown (2026-09-25). Blocked people are hidden everywhere on
+   the feed, their replies too; on Friends, only posts by the people in your
+   address book are left. Both lists are this browser's (base.html,
+   messaging.js), so the node never learns either one. */
+const FRIENDS = {{ 'true' if sort == 'friends' and not whose else 'false' }};
+let book = null;
+if (FRIENDS) {
+  {% if public %}
+  try {
+    const mail = await import("/messaging.js");
+    book = new Set((await mail.book()).map((e) => String(e.address).toLowerCase()));
+  } catch (e) { book = new Set(); }
+  {% else %}
+  book = new Set({{ (friends or [])|tojson }}.map((a) => a.toLowerCase()));
+  {% endif %}
+}
+function sift() {
+  let shown = 0;
+  for (const card of document.querySelectorAll(".feedpost[data-author]")) {
+    const who = card.dataset.author.toLowerCase();
+    let hide = window.arcadeBlocked && window.arcadeBlocked.has(who);
+    if (!hide && FRIENDS && !card.classList.contains("reply")) hide = !book.has(who);
+    card.hidden = hide;
+    if (!hide && !card.classList.contains("reply")) shown++;
+  }
+  // The count under a post is counted on the server and cannot know about a
+  // block, which lives in this browser. So a thread whose replies are all from
+  // somebody the reader blocked opened onto nothing at all -- "2 comments", a
+  // press, and an empty box, because the cards are there and hidden
+  // (a tester, 2026-09-27, the other half of S22's report). This loop is
+  // the only place that knows which cards it just hid, so the count is
+  // corrected here and says what the div holds NOW.
+  //
+  // Both data- attributes travel with it, not just the text: foldComments
+  // reads the label from them, so writing only textContent loses the note on
+  // the first press and puts the lie back.
+  for (const thread of document.querySelectorAll("div[id^='thread-']")) {
+    const direct = [...thread.children].filter((el) => el.classList
+      && el.classList.contains("feedpost"));
+    if (!direct.length) continue;
+    const left = direct.filter((el) => !el.hidden).length;
+    const gone = direct.length - left;
+    const button = document.getElementById("fold-" + thread.id.slice(7));
+    if (!button) continue;
+    const said = left + " comment" + (left === 1 ? "" : "s")
+      + (gone ? " (" + gone + " hidden)" : "");
+    button.dataset.shut = said;
+    button.dataset.open = "Hide " + said;
+    button.textContent = thread.hidden ? said : "Hide " + said;
+  }
+  const none = document.getElementById("no-friends");
+  if (none && FRIENDS) {
+    const more = document.getElementById("more");
+    none.hidden = shown > 0 || (!!more && book.size > 0);
+    const words = book.size
+      ? "<p>Nobody in your address book has posted yet.</p>"
+      : "<p>Your address book is empty.</p><p class=\"muted\">Friends shows posts by "
+        + "the people in it. <a href=\"{{ '/me/contacts' if public else '/contacts' }}\">Add "
+        + "somebody by their @tag</a>.</p>";
+    // Only when it changes: this page watches itself for new cards.
+    if (none.dataset.words !== words) { none.dataset.words = words; none.innerHTML = words; }
+  }
+  document.dispatchEvent(new CustomEvent("arcade:feedshown"));
+}
+sift();
+document.addEventListener("arcade:blocked", sift);
+document.addEventListener("arcade:changed", sift);
+// Cards arrive later too: the next page, and the in-place refresh on a block.
+let queued = false;
+new MutationObserver((changes) => {
+  if (queued || !changes.some((c) => [...c.addedNodes].some((n) => n.nodeType === 1
+      && (n.matches(".feedpost") || n.querySelector(".feedpost"))))) return;
+  queued = true;
+  requestAnimationFrame(() => { queued = false; sift(); });
+}).observe(document.querySelector("main") || document.body, {childList: true, subtree: true});
+</script>
+{% if (public and mine and mine.tag) or not public %}
+{# @-names as you type (2026-09-28): only the names in THIS person's
+   own address book, which lives in their browser (messaging.js book()), so
+   the node never sees the list and never suggests a stranger. Works in the
+   post box and every reply box, including ones that arrive by scrolling. #}
+<style>
+  /* In the page, right under the field it belongs to -- not floating (the operator,
+     2026-09-28: fixed positioning flipped it above the field over the post
+     being answered, and on a phone it drifted when the keyboard moved things). */
+  #atnames{display:block;position:relative;z-index:5;margin:4px 0 0;max-width:280px;max-height:220px;
+    overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 6px 24px rgba(0,0,0,.18);padding:4px 0;text-align:left}
+  #atnames[hidden]{display:none}
+  #atnames div{padding:8px 12px;cursor:pointer;font-size:.92rem}
+  #atnames div.on,#atnames div:hover{background:var(--code-bg, rgba(127,127,127,.12))}
+</style>
+<script type="module" nonce="{{ csp_nonce }}">
+let names = null;
+async function book() {
+  if (names) return names;
+  try {
+    // The operator's names come from the node's own address book (2026-10-19).
+    const mail = await import({{ ('/messaging.js' if public else '/node-mail.js')|tojson }});
+    names = [...new Set((await mail.book()).map((e) => String(e.tag || "").toLowerCase())
+                                           .filter(Boolean))].sort();
+  } catch (e) { names = []; }
+  return names;
+}
+const menu = document.createElement("div");
+menu.id = "atnames"; menu.hidden = true; menu.setAttribute("role", "listbox");
+document.body.appendChild(menu);
+let field = null, at = -1, pick = 0;
+const composer = (el) => el && (el.id === "say" || el.id === "account-say" ||
+  (el.name === "text" && el.tagName === "INPUT" && el.form && /^reply-/.test(el.form.id)));
+function close() { menu.hidden = true; field = null; at = -1; }
+function typed(el) {
+  const upto = el.value.slice(0, el.selectionStart);
+  const m = upto.match(/(^|\s)@([a-z0-9_]{0,30})$/i);
+  return m ? {start: upto.length - m[2].length - 1, text: m[2].toLowerCase()} : null;
+}
+function choose(tag) {
+  const el = field, end = el.selectionStart;
+  el.value = el.value.slice(0, at) + "@" + tag + " " + el.value.slice(end);
+  const caret = at + tag.length + 2;
+  el.setSelectionRange(caret, caret); el.focus();
+  el.dispatchEvent(new Event("input", {bubbles: true}));
+  close();
+}
+function draw(list) {
+  menu.innerHTML = "";
+  list.forEach((tag, i) => {
+    const row = document.createElement("div");
+    row.textContent = "@" + tag; row.className = i === pick ? "on" : "";
+    row.setAttribute("role", "option");
+    row.addEventListener("mousedown", (e) => { e.preventDefault(); choose(tag); });
+    menu.appendChild(row);
+  });
+  if (menu.previousElementSibling !== field) field.after(menu);
+  menu.hidden = false;
+  // Behind the keyboard? Bring it up, without jumping the page otherwise.
+  try { menu.scrollIntoView({block: "nearest"}); } catch (e) {}
+}
+async function look(el) {
+  const t = typed(el);
+  if (!t) return close();
+  const all = await book();
+  const list = all.filter((n) => n.startsWith(t.text))
+    .concat(all.filter((n) => !n.startsWith(t.text) && n.includes(t.text))).slice(0, 8);
+  if (!list.length || (list.length === 1 && list[0] === t.text)) return close();
+  field = el; at = t.start; pick = Math.min(pick, list.length - 1);
+  draw(list);
+}
+document.addEventListener("input", (e) => { if (composer(e.target)) { pick = 0; look(e.target); } });
+document.addEventListener("keydown", (e) => {
+  if (menu.hidden || e.target !== field) return;
+  const rows = menu.children;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    pick = (pick + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length;
+    [...rows].forEach((r, i) => r.className = i === pick ? "on" : "");
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    e.preventDefault(); e.stopImmediatePropagation();   // pick a name, do not post
+    choose(rows[pick].textContent.slice(1));
+  } else if (e.key === "Escape") { close(); }
+}, true);
+document.addEventListener("focusout", (e) => { if (e.target === field) setTimeout(close, 120); });
+</script>
+{% endif %}
+{% if focus %}
+<script nonce="{{ csp_nonce }}">
+/* A link to one comment (a notification's): its post is on the page; open every
+   thread down to the comment, and bring it into view, marked (2026-09-28:
+   "it should load the comment as well as the post"). */
+(function(){
+  var card = document.querySelector('.feedpost[data-key="{{ focus }}"]');
+  if (!card) return;
+  for (var el = card.parentElement; el; el = el.parentElement) {
+    if (el.id && el.id.indexOf("thread-") === 0) {
+      el.hidden = false;
+      var fold = document.getElementById("fold-" + el.id.slice(7));
+      if (fold && fold.dataset.open) fold.textContent = fold.dataset.open;
+      try { arcadeOpenThreads.add(el.id); } catch (e) {}   // stays open through a refresh
+    }
+  }
+  card.classList.add("focused");
+  setTimeout(function(){ card.scrollIntoView({block: "center"}); }, 150);
+})();
+</script>
+<style>.feedpost.focused{box-shadow:0 0 0 2px var(--accent);animation:focusfade 3s ease-out 1}
+@keyframes focusfade{0%{background:color-mix(in srgb,var(--accent) 22%,var(--panel))}100%{background:var(--panel)}}</style>
+{% endif %}
+{% if not public %}
+{# The operator's tip form posts to the node (tip_send); this only fills its token list from the node's wallet. #}
+<script type="module" nonce="{{ csp_nonce }}">import {tipPicker} from "/wallet.js"; tipPicker(document, "/node/wallet/tokens");</script>
+{% endif %}
+{% endblock %}

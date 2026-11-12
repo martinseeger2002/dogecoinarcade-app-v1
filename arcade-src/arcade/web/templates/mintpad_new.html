@@ -1,0 +1,427 @@
+{% extends "base.html" %}
+{% import "_chain_line.html" as cl with context %}
+{% block title %}New mintpad · {{ brand.name }}{% endblock %}
+{% block body %}
+{# The mintpad wizard (2026-09-26: "should be really easy ... you would just
+   select from one of your collections"). An account's mintpad is its own collection
+   put up for sale piece by piece at one price: one listing per piece, each signed
+   here in the tab with the account's own key (the node can sell nothing for it),
+   held by this node for a month, and bought as a random piece at /mintpad/<you>/<set>.
+   Listing costs nothing -- signatures, not transactions; the one fee is a split, if
+   the account needs more coins to stand the listings on (two each). #}
+<h1>New mintpad</h1>
+{{ cl.line(chain, "/mintpad/new") }}
+{% if not node_trades() %}
+{# Node-facilitated trades off (the default, 2026-10-13): a collection mintpad sells by
+   waiting listings, which this node would have to hold for the seller. #}
+<div class="panel">
+  <p style="margin-top:0"><strong>Mintpads need the node to hold your listings, and this
+    arcade trades only while both people are here.</strong> A mintpad sells your pieces
+    while you are away, so its operator would have to switch on node-facilitated trades.</p>
+  <p class="muted" style="margin-bottom:0">You can still make a token, an NFT or a whole
+    collection from <a href="/create">Creator</a>, and sell pieces by answering offers live.</p>
+</div>
+{% elif chain.params.swaps_from is none %}
+{# Mainnet (2026-10-09): a mintpad sells by listings, and this node reads listings
+   on testnet only (Params.swaps_from is unset on mainnet), so a mainnet mintpad would
+   take signatures nobody could ever buy with. Said, not half-built. #}
+<div class="panel">
+  <p style="margin-top:0"><strong>Launchpads are Pepecoin test only for now.</strong> A launchpad sells
+    your pieces through listings, and this node only reads listings on Pepecoin test, so on Pepecoin main
+    nobody could buy from one.</p>
+  <p class="muted" style="margin-bottom:0">You can still make a token, an NFT or a whole collection
+    on Pepecoin main from <a href="/create">Creator</a>, and sell pieces one at a time once listings open there.</p>
+</div>
+{% else %}
+<p class="sub" id="mp-intro">Sell one of your collections piece by piece at one price
+  (buyers get a random piece; listing is free, your signature rather than a transaction,
+  and it stays open for 30 days), or one of your tokens a few at a time.</p>
+
+<div class="msg info" id="mp-locked" hidden>Your wallet is locked: press Unlock at the
+  top of the page, and your collections appear here. The listings are signed with your
+  key, in this tab.</div>
+
+<div class="panel" id="mp-pick" hidden>
+  <h3 style="margin-top:0">1. Which collection?</h3>
+  <div id="mp-sets" class="mpsets"></div>
+  <p class="muted" id="mp-none" hidden>You have not made a collection yet, or you no
+    longer hold any of its pieces. <a href="/nfts">Inscribe one</a> first.</p>
+  {# Or a token (2026-09-27: "we need token mint pads as well"). #}
+  <h3 style="margin:22px 0 8px">Or one of your tokens</h3>
+  <div id="mp-tokens" class="mpsets"></div>
+  <p class="muted" id="mp-notokens" hidden>You hold no tokens here. <a href="/tokens">Make one</a>.</p>
+</div>
+
+<div class="panel" id="mp-tok" hidden>
+  <h3 style="margin-top:0" id="tp-which">Sell your token</h3>
+  <p class="muted" style="margin-top:0">One sell order on the token's book holds the whole
+    amount; the mintpad sells it a few at a time, and buyers take straight from your
+    order, so you don't need to be online.</p>
+  <div class="tpgrid">
+    <label>How many in total<input id="tp-total" type="text" inputmode="decimal" autocomplete="off" placeholder="10000"></label>
+    <label>How many per mint<input id="tp-lot" type="text" inputmode="decimal" autocomplete="off" placeholder="100"></label>
+    <label>Price per mint, in {{ chain.label|lower }} coins<input id="tp-price" type="text" inputmode="decimal" autocomplete="off" placeholder="1"></label>
+  </div>
+  <h3 style="margin:18px 0 8px">Look</h3>
+  <div class="mplooks" role="radiogroup" aria-label="How your token mintpad looks">
+    <label class="mplook"><input type="radio" name="tlook" value="counter" checked>
+      <span class="mpprev" aria-hidden="true"><i></i><b></b></span>
+      <strong>Counter</strong><span class="muted">The token's icon, what is left, and Mint</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="vending">
+      <span class="mpprev mpprev-arcade" aria-hidden="true"><i></i><b></b></span>
+      <strong>Vending machine</strong><span class="muted">A glowing machine counting down what is left</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="progress">
+      <span class="mpprev mpprev-gallery" aria-hidden="true"><i></i><b></b></span>
+      <strong>Supply bar</strong><span class="muted">A bar filling as the supply sells</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="coin">
+      <span class="mpprev mpprev-coin" aria-hidden="true"><i></i><b></b></span>
+      <strong>Coin</strong><span class="muted">A big spinning coin with the token's face</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="ticker">
+      <span class="mpprev mpprev-ticker" aria-hidden="true"><i></i><b></b></span>
+      <strong>Ticker</strong><span class="muted">A market tape scrolling the price and what is left</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="neon">
+      <span class="mpprev mpprev-neon" aria-hidden="true"><i></i><b></b></span>
+      <strong>Neon</strong><span class="muted">Glowing pink and cyan on black</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="terminal">
+      <span class="mpprev mpprev-terminal" aria-hidden="true"><i></i><b></b></span>
+      <strong>Terminal</strong><span class="muted">Green-screen console</span></label>
+    <label class="mplook"><input type="radio" name="tlook" value="minimal">
+      <span class="mpprev mpprev-minimal" aria-hidden="true"><i></i><b></b></span>
+      <strong>Minimal</strong><span class="muted">Clean white card</span></label>
+  </div>
+  <label for="tp-blurb" style="display:block;margin-top:12px">A line for the page (optional)</label>
+  <input id="tp-blurb" type="text" maxlength="300" autocomplete="off" placeholder="what buyers should know" style="width:100%">
+  <p class="msg err" id="tp-trouble" hidden></p>
+  <div class="row" style="gap:8px;margin-top:12px">
+    <button type="button" class="ghost" id="tp-back">Back</button>
+    <button type="button" id="tp-go">Open the token mintpad</button>
+  </div>
+</div>
+
+<div class="panel" id="mp-price" hidden>
+  <h3 style="margin-top:0">2. Price</h3>
+  <p id="mp-which" class="muted" style="margin-top:0"></p>
+  <label for="mp-amount">Price per piece, in {{ chain.label|lower }} coins</label>
+  <input id="mp-amount" name="price" type="text" inputmode="decimal" autocomplete="off" placeholder="5">
+  <label class="muted" style="display:block;margin-top:8px;font-size:.86rem">Paid in
+    <input id="mp-token" type="text" inputmode="numeric" autocomplete="off"
+           placeholder="coins, or a token's number" style="width:190px"></label>
+  <h3 style="margin:18px 0 8px">Look</h3>
+  <div class="mplooks" role="radiogroup" aria-label="How your mintpad looks">
+    {% for key, words in templates.items() %}
+    <label class="mplook">
+      <input type="radio" name="look" value="{{ key }}" {{ 'checked' if loop.first }}>
+      <span class="mpprev mpprev-{{ key }}" aria-hidden="true"><i></i><b></b></span>
+      <strong>{{ words.split(':')[0] }}</strong>
+      <span class="muted">{{ words.split(':', 1)[1] }}</span>
+    </label>
+    {% endfor %}
+  </div>
+  <label for="mp-blurb" style="display:block;margin-top:12px">A line for the page (optional)</label>
+  <input id="mp-blurb" name="blurb" type="text" maxlength="300" autocomplete="off"
+         placeholder="what buyers should know">
+  <p class="msg err" id="mp-trouble" hidden></p>
+  <div class="row" style="gap:8px;margin-top:12px">
+    <button type="button" class="ghost" id="mp-back">Back</button>
+    <button type="button" id="mp-go">Put them up for sale</button>
+  </div>
+</div>
+
+<div class="panel" id="mp-doing" hidden>
+  <h3 style="margin-top:0" id="mp-title">Putting them up&hellip;</h3>
+  <div class="mpbar"><div id="mp-fill"></div></div>
+  <p id="mp-says" class="muted"></p>
+  <a class="btn" id="mp-see" hidden href="#">See your mintpad</a>
+</div>
+
+<style>
+.mpsets{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.mpset{display:flex;flex-direction:column;gap:6px;text-align:left;cursor:pointer;font:inherit;
+  color:inherit;padding:10px;margin:0}
+.mpset img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--code)}
+.tpgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.tpgrid label{display:flex;flex-direction:column;gap:4px;font-size:.88rem}
+.mpbar{height:10px;border-radius:6px;background:var(--code);overflow:hidden;margin:6px 0}
+#mp-fill{height:100%;width:0;background:var(--accent,#c9a227);transition:width .3s}
+#mp-amount,#mp-blurb{width:100%;box-sizing:border-box}
+.mplooks{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.mplook{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid var(--line);
+  border-radius:12px;cursor:pointer;font-size:.86rem}
+.mplook:has(input:checked){border-color:var(--accent,#c9a227);box-shadow:0 0 0 2px var(--accent,#c9a227)}
+.mplook input{position:absolute;opacity:0;pointer-events:none}
+.mpprev{position:relative;display:block;height:70px;border-radius:8px;overflow:hidden;background:var(--code)}
+.mpprev i{position:absolute;left:50%;top:14px;width:26px;height:26px;margin-left:-13px;border-radius:6px;background:#c9a227}
+.mpprev b{position:absolute;left:50%;bottom:10px;width:46px;height:9px;margin-left:-23px;border-radius:5px;background:var(--fg)}
+.mpprev-wall{background:repeating-linear-gradient(90deg,#8a7f6a 0 12px,#6f6552 12px 14px),#8a7f6a}
+.mpprev-gallery i{left:10px;right:10px;width:auto;margin:0;height:22px;
+  background:repeating-linear-gradient(90deg,#c9a227 0 22px,transparent 22px 26px)}
+.mpprev-arcade{background:#120f1c;box-shadow:inset 0 0 0 3px #c9a227}.mpprev-arcade b{background:#e0282e}
+.mpprev-lottery{background:radial-gradient(#3a2b5c,#07060c)}
+.mpprev-lottery i{box-shadow:0 0 0 2px #ffc83d,0 0 12px #ffc83d;background:#43e8ff}
+.mpprev-lottery b{background:linear-gradient(90deg,#ffc83d,#ff5fa2)}
+.mpprev-neon{background:#0b0418;box-shadow:inset 0 0 0 2px #ff2bd6,inset 0 0 14px #ff2bd6}
+.mpprev-neon i{box-shadow:0 0 10px #22e1ff;background:#22e1ff}.mpprev-neon b{background:#ff2bd6;box-shadow:0 0 8px #ff2bd6}
+.mpprev-polaroid{background:#efe6d6}.mpprev-polaroid i{background:#fff;border:3px solid #fff;border-bottom-width:8px;
+  box-shadow:0 2px 6px #0003;transform:rotate(-4deg);background-clip:content-box;background-color:#c9a227}
+.mpprev-polaroid b{background:#2b2620}
+.mpprev-terminal{background:#000;box-shadow:inset 0 0 0 1px #39ff6a}.mpprev-terminal i{background:#39ff6a;border-radius:0}
+.mpprev-terminal b{background:#000;border:1px solid #39ff6a;border-radius:0}
+.mpprev-minimal{background:#fff;box-shadow:inset 0 0 0 1px #e7e5df}.mpprev-minimal i{background:#ccc;border-radius:2px}
+.mpprev-minimal b{background:#111}
+.mpprev-coin i{width:34px;height:34px;margin-left:-17px;top:10px;border-radius:50%;background:#d9a520;box-shadow:0 0 0 3px #f5c542}
+.mpprev-coin b{background:#f5c542}
+.mpprev-ticker{background:linear-gradient(#000 0 14px,var(--code) 14px)}.mpprev-ticker i{top:24px}
+.mpprev-ticker b{background:#7dffb0}
+</style>
+
+<script type="module" nonce="{{ csp_nonce }}">
+import * as wallet from "/wallet.js";
+const $ = (id) => document.getElementById(id);
+const CHAIN = {network: "{{ chain.network }}",
+               version: {{ chain.params.pubkeyhash_version }}};
+const keys = await wallet.opened(CHAIN);
+let sets = [], chosen = null, me = "";
+
+function show(which) {
+  for (const id of ["mp-pick", "mp-price", "mp-doing", "mp-tok"]) $(id).hidden = id !== which;
+}
+
+if (!keys) {
+  $("mp-locked").hidden = false;
+} else {
+  const said = await (await fetch("/account/nfts")).json();
+  const here = (said.chains || []).find((c) => c.network === CHAIN.network) || {};
+  me = here.address || "";
+  const by = new Map();
+  for (const p of here.pieces || []) {
+    if (!p.collection || p.creator !== me) continue;   // your own collections only
+    if (!by.has(p.collection)) by.set(p.collection, []);
+    by.get(p.collection).push(p);
+  }
+  sets = [...by.entries()].map(([name, pieces]) => ({name, pieces}));
+  const box = $("mp-sets");
+  for (const set of sets) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "panel mpset";
+    const first = set.pieces.slice().sort((a, x) => (a.edition || 0) - (x.edition || 0))[0];
+    const img = document.createElement("img");
+    img.alt = ""; img.loading = "lazy";
+    if (String(first.content_type || "").startsWith("image/")) img.src = "/content/" + first.txid;
+    const t = document.createElement("strong"); t.textContent = set.name;
+    const n = document.createElement("span"); n.className = "muted";
+    n.textContent = `${set.pieces.length} you hold`;
+    b.append(img, t, n);
+    b.onclick = () => pick(set);
+    box.appendChild(b);
+  }
+  $("mp-none").hidden = sets.length > 0;
+  show("mp-pick");
+}
+
+async function pick(set) {
+  chosen = set;
+  const up = await (await fetch(`/r/mintpad/${encodeURIComponent(me)}/${encodeURIComponent(set.name)}`)).json();
+  const listed = new Set(up.listed || []);
+  chosen.todo = set.pieces.filter((p) => !listed.has(p.txid));
+  $("mp-which").textContent = `${set.name}: ${chosen.todo.length} to put up`
+    + (listed.size ? `, ${listed.size} already on your mintpad` : "") + ".";
+  $("mp-go").textContent = chosen.todo.length ? "Put them up for sale" : "Save the look";
+  show("mp-price");
+}
+$("mp-back").onclick = () => show("mp-pick");
+
+async function saveLook() {
+  const look = (document.querySelector('input[name="look"]:checked') || {}).value || "spotlight";
+  const r = await fetch("/account/mintpad", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({collection: chosen.name, template: look,
+                          blurb: $("mp-blurb").value}),
+  });
+  if (!r.ok) throw new Error((await r.json()).detail || "the look could not be saved");
+}
+
+$("mp-go").onclick = async () => {
+  const amount = $("mp-amount").value.trim();
+  $("mp-trouble").hidden = true;
+  if (!chosen.todo.length) {
+    // Already all up: only the look changes.
+    try {
+      await saveLook();
+      location.href = `/mintpad/${encodeURIComponent(me)}/${encodeURIComponent(chosen.name)}`;
+    } catch (e) { $("mp-trouble").textContent = String(e.message || e); $("mp-trouble").hidden = false; }
+    return;
+  }
+  if (!(Number(amount) > 0)) {
+    $("mp-trouble").textContent = "A price above zero, please.";
+    $("mp-trouble").hidden = false;
+    return;
+  }
+  const todo = chosen.todo;
+  const ok = await arcadeAsk("Open this mintpad?",
+    `${todo.length} pieces of ${chosen.name} go up at ${amount} coins each, bought as a `
+    + "random piece. Each one is a listing you sign here: no fee to list. If your coins "
+    + "need splitting first (each listing stands on two), that is one small transaction.",
+    "Open it");
+  if (!ok) return;
+  try { await saveLook(); } catch (e) { /* the default look, then */ }
+  show("mp-doing");
+  const say = (t) => { $("mp-says").textContent = t; };
+  const bar = (n) => { $("mp-fill").style.width = Math.round(100 * n / todo.length) + "%"; };
+  let done = 0, split = false, waited = 0;
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (const p of todo) {
+    for (let tries = 0; tries < 40; tries++) {
+      try {
+        const leg = await wallet.offerListing(p.txid, amount, CHAIN.network,
+                                              Number(($("mp-token").value || "").replace(/^#/, "")) || 0);
+        await wallet.list(keys, leg, {days: 30});
+        done += 1; bar(done);
+        say(`${done} of ${todo.length} up.`);
+        break;
+      } catch (e) {
+        const why = String(e.message || e);
+        const short = /coin to spend|Split it first|needs two of them/i.test(why);
+        if (short && !split) {
+          // Two coins per listing: make them in one transaction, then carry on.
+          say("Making coins to list on: one small transaction…");
+          try {
+            const offer = await wallet.offerSplit(Math.min(60, 2 * (todo.length - done)),
+                                                  CHAIN.network);
+            await wallet.checked(offer, keys);
+            await wallet.confirm(keys, offer);
+          } catch (err) { /* coins still confirming from an earlier split: wait below */ }
+          split = true;
+          continue;
+        }
+        if (short && waited < 30) {
+          // The split's coins are still confirming (a tester, 2026-09-27: a
+          // retry right after a closed tab stopped here with the raw message).
+          waited += 1;
+          say(`${done} of ${todo.length} up. Your coins are confirming. This continues `
+              + "by itself, usually within a minute or two. Keep this page open.");
+          await pause(20000);
+          continue;
+        }
+        $("mp-title").textContent = done ? "Partly up" : "Not up yet";
+        say(`${done} of ${todo.length} are up. Stopped at #${p.number}: ${why} `
+            + "Open this page again later to put up the rest; nothing is listed twice.");
+        $("mp-see").hidden = !done;
+        $("mp-see").href = `/mintpad/${encodeURIComponent(me)}/${encodeURIComponent(chosen.name)}`;
+        return;
+      }
+    }
+  }
+  $("mp-title").textContent = "Your mintpad is open";
+  say(`All ${todo.length} are up at ${amount} coins each, for 30 days.`);
+  $("mp-see").hidden = false;
+  $("mp-see").href = `/mintpad/${encodeURIComponent(me)}/${encodeURIComponent(chosen.name)}`;
+};
+
+/* -- a token mintpad (2026-09-27) -------------------------------------- */
+let tokenChosen = null;
+async function drawTokens() {
+  if (!keys) return;
+  let held = [];
+  try {
+    const said = await (await fetch("/account/tokens")).json();
+    held = (((said.chains || []).find((c) => c.network === CHAIN.network) || {}).tokens || [])
+      .filter((t) => Number(t.balance) > 0);
+  } catch (e) {}
+  const box = $("mp-tokens");
+  for (const t of held) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "panel mpset";
+    const name = document.createElement("strong"); name.textContent = t.name;
+    const n = document.createElement("span"); n.className = "muted"; n.textContent = `${t.display} you hold`;
+    b.append(name, n);
+    b.onclick = () => { tokenChosen = t; $("tp-which").textContent = `Sell ${t.name}`;
+                        $("mp-intro").textContent = `Sell ${t.name} a few at a time from a mintpad. `
+                          + "It takes two small transactions: one sell order on the token's book for "
+                          + "the whole amount, and the mintpad page. Buyers take straight from your "
+                          + "order, even while you're away.";
+                        $("tp-total").value = ""; $("tp-trouble").hidden = true; show("mp-tok"); };
+    box.appendChild(b);
+  }
+  $("mp-notokens").hidden = held.length > 0;
+}
+drawTokens();
+$("tp-back").onclick = () => {
+  $("mp-intro").textContent = "Sell one of your collections piece by piece at one price "
+    + "(buyers get a random piece; listing is free, your signature rather than a transaction, "
+    + "and it stays open for 30 days), or one of your tokens a few at a time.";
+  show("mp-pick");
+};
+
+// Exact arithmetic: the book takes a price per WHOLE token and refuses one that
+// does not come out in whole satoshis, so it is worked out in integers here.
+function unitsOf(text, divisible) {
+  const t = String(text || "").trim();
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  if (!divisible) return t.includes(".") ? null : BigInt(t);
+  const [w, f = ""] = t.split(".");
+  if (f.length > 8) return null;
+  return BigInt(w) * 100000000n + BigInt((f + "00000000").slice(0, 8));
+}
+const coinText = (sats) => { const w = sats / 100000000n, f = sats % 100000000n;
+  return f ? `${w}.${String(f).padStart(8, "0").replace(/0+$/, "")}` : String(w); };
+
+$("tp-go").onclick = async () => {
+  const t = tokenChosen, trouble = (m) => { $("tp-trouble").textContent = m; $("tp-trouble").hidden = !m; };
+  trouble("");
+  if (!t) return;
+  const div = !!t.divisible;
+  const total = unitsOf($("tp-total").value, div), lot = unitsOf($("tp-lot").value, div);
+  const lotPrice = unitsOf($("tp-price").value, true);
+  if (!total || !lot || !lotPrice || total <= 0n || lot <= 0n || lotPrice <= 0n)
+    return trouble("A total, an amount per mint and a price, all above zero.");
+  if (lot > total) return trouble("Per mint can't be more than the total.");
+  if (lotPrice < 1000000n) return trouble("A mint has to cost at least 0.01 coins: the network won't carry less to one address.");
+  // coins per WHOLE token, in sats: lotPrice * (one whole token) / lot
+  const whole = div ? 100000000n : 1n;
+  if ((lotPrice * whole) % lot) return trouble("That price doesn't divide evenly between the tokens in a mint. Try a round number per mint, like 10, 100 or 1000.");
+  const each = lotPrice * whole / lot;
+  if ((total * each) % whole) return trouble("The total doesn't come out in whole satoshis at that price. Make the total a whole number of mints.");
+  const look = (document.querySelector('input[name="tlook"]:checked') || {}).value || "counter";
+  try {
+    const order = await fetch("/account/order", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({property_id: t.property_id, side: "ask", amount: $("tp-total").value.trim(),
+                            price: coinText(each), chain: CHAIN.network})});
+    const offer = await order.json();
+    if (!order.ok) throw new Error(offer.detail || "the sell order could not be made");
+    const shown = await wallet.checked(offer, keys);
+    const mints = total / lot;
+    if (!(await arcadeAsk(`Open a ${t.name} mintpad?`,
+        `${$("tp-total").value.trim()} ${t.name} go on the book as one sell order, sold ${$("tp-lot").value.trim()} `
+        + `at a time for ${$("tp-price").value.trim()} ${Number($("tp-price").value) === 1 ? "coin" : "coins"} each (${mints} mints). Then the mintpad page `
+        + `is put on the chain. Two small transactions, network fee about ${shown.coinsOf(shown.fee)} each. `
+        + "Buyers take straight from your order, even while you're away.", "Open it"))) return;
+    show("mp-doing");
+    $("mp-title").textContent = "Opening your token mintpad…";
+    $("mp-says").textContent = "Putting the sell order on the book…";
+    await wallet.confirm(keys, offer);
+    $("mp-says").textContent = "Putting the mintpad page on the chain…";
+    const pad = await fetch("/account/tokenpad/inscribe", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({property_id: t.property_id, lot: $("tp-lot").value.trim(),
+                            total: $("tp-total").value.trim(), look,
+                            blurb: $("tp-blurb").value, chain: CHAIN.network})});
+    const page = await pad.json();
+    if (!pad.ok) throw new Error(page.detail || "the mintpad page could not be inscribed");
+    await wallet.checked(page, keys);
+    const out = await wallet.confirm(keys, page);
+    $("mp-fill").style.width = "100%";
+    $("mp-title").textContent = "Your token mintpad is on its way";
+    $("mp-says").textContent = "It opens for buyers when both blocks land, usually within a few minutes. "
+      + "Share it to the feed from its page.";
+    $("mp-see").hidden = false;
+    $("mp-see").href = `/inscriptions/${out.txid}/view`;
+    $("mp-see").textContent = "See your token mintpad";
+  } catch (e) {
+    show("mp-tok");
+    trouble(String(e.message || e));
+  }
+};
+</script>
+{% endif %}
+{% endblock %}

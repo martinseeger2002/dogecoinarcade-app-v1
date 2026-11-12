@@ -1,0 +1,855 @@
+{% extends "base.html" %}
+{% block title %}#{{ row.number }} · {{ brand.name }}{% endblock %}
+{% block body %}
+{% import "_share_nft.html" as share %}
+<div class="row" style="align-items:baseline">
+  <a class="back-link" href="/inscriptions">&#8592; Inscriptions</a>
+  <h1 style="margin:0">#{{ "{:,}".format(row.number) }}</h1>
+  <span style="margin-left:auto">{{ share.button(row.txid,
+    (wall_text(row.collection) ~ ' #' ~ row.edition) if row.collection else ('#' ~ row.number),
+    row.content_type, 'Share to feed') }}</span>
+</div>
+<p class="sub">{{ row.content_type }} &middot;
+  {{ "{:,}".format(row.content_len) }} bytes &middot;
+  {{ row.chunks }} transaction{{ '' if row.chunks == 1 else 's' }}</p>
+
+{% if not row.held %}
+  <div class="msg info">This node did not keep the content of this one. It
+    describes it &mdash; {{ "{:,}".format(row.content_len) }} bytes hashing to
+    <code class="mono" style="font-size:.8rem">{{ row.sha256[:24] }}…</code>
+    &mdash; and the bytes are still on the chain.</div>
+{% elif row.content_type.startswith('image/') %}
+  {# A picture is shown as a picture, sized to itself. It used to go into the
+     page frame below, which is a fixed min(70vh, 620px) tall with a white
+     ground, so a square JPEG at phone width sat on a white strip ~140px deep
+     (seen filming the tutorial, 2026-09-25). An <img> runs no code -- not even
+     an SVG's -- so it needs no sandbox; tap opens the viewer, with its zoom. #}
+  <div class="inscription-picture">
+    <img src="/content/{{ row.txid }}" alt="inscription {{ row.number }}"
+         data-view="/content/{{ row.txid }}" data-view-name="#{{ row.number }}"
+         data-view-save="/content/{{ row.txid }}?download=1">
+  </div>
+  <script nonce="{{ csp_nonce }}">
+  // Tap opens the viewer (the script policy, 2026-11-09: a listener, not an inline onclick). On the document, so a
+  // picture the page's in-place refresh puts back still opens.
+  document.addEventListener('click', function (e) {
+    var img = e.target.closest && e.target.closest('.inscription-picture img[data-view]');
+    if (img) arcadeOpenImage(img.dataset.view, img.dataset.viewName, img.dataset.viewSave);
+  });
+  </script>
+{% elif renders %}
+  {# Sandboxed, and deliberately not `allow-same-origin`: with it, inscribed
+     code would share this wallet's origin and could read every page in it.
+     Without it the frame gets an opaque origin -- no cookies, no reach into
+     this page, and it can only load what CORS lets it. #}
+  {% if pad_facts %}
+  {# Drawn by the node, above the frame, because a token mintpad is the author's
+     own HTML: price, lot and "sold out" are inside their prose otherwise, and two
+     pads say those three things in two layouts that nothing can compare
+     (a tester). These are this node's orders, counted -- not what the page
+     claims, and nothing was pressed to find out. #}
+  <p style="margin:0 0 8px"><span class="pill ok">mintpad</span>
+    <strong>{{ pad_facts.lot }} {{ pad_facts.name }}</strong>
+    {% if pad_facts.price %}for <strong>{{ pad_facts.price }} {{ pad_facts.coin }}</strong>{% endif %}
+    a mint &mdash;
+    {% if pad_facts.mints %}<strong>{{ "{:,}".format(pad_facts.mints) }}</strong>
+      mint{{ '' if pad_facts.mints == 1 else 's' }} left{% else %}<strong>sold out</strong>
+      &mdash; no lot of it left on the book{% endif %}.
+    <span class="muted">Counted by this node from its orders, not from what this
+      page says.</span></p>
+  {% endif %}
+  <div class="panel" style="padding:0;overflow:hidden">
+    <iframe class="inscription-frame" src="{{ pages }}/content/{{ row.txid }}{% if ticket %}?v={{ ticket }}{% endif %}"
+            sandbox="allow-scripts allow-pointer-lock"
+            referrerpolicy="no-referrer" loading="lazy"
+            title="inscription {{ row.number }}"></iframe>
+  </div>
+  <p style="margin:8px 0 0"><a class="fulllink" href="/inscriptions/{{ row.txid }}/full">&#x2922; Full screen</a></p>
+  <p class="muted" style="margin-top:8px">
+    Running in a sandbox: it has no cookies, cannot reach this page, and cannot
+    load anything from outside this machine.
+    {# What it can ask belongs to the reader. On a public instance there is no
+       node wallet behind this page at all, so "it can ask this wallet to send,
+       and you approve it below" is a promise this page cannot keep -- and the
+       thing it does keep is the account's own signature, asked and shown a
+       different way. § "An account buys from a shop in the browser". #}
+    {% if public %}It can ask this account to sign something; what it asks is
+    shown to you before anything is signed, and it cannot reach this node's
+    wallet, its files, or its other pages.{% else %}It can ask this wallet to
+    send something; if it does, the request opens here in front of it, and
+    nothing goes out until you approve it.{% endif %}</p>
+  {# The approval machinery belongs on the operator's side of the door. It
+     polls `/approvals/waiting`, which is the queue of things asked of THIS
+     node's wallet, and the door shuts that route on a public instance -- so a
+     stranger looking at an interactive inscription polled a 404 every three
+     seconds for as long as the tab was open, with the failure eaten by the
+     `.catch(function(){})` at the end of the chain. Nothing appeared, nothing
+     spent, so nothing said anything. It just never stopped. #}
+  {% if not public %}
+  <div class="msg info" id="asked" hidden></div>
+  {# The pop-up is a frame of this wallet's own approval page, held by THIS
+     page -- outside the sandbox, where the inscription cannot reach it, see
+     it, or press anything in it. It shows the transaction as built, and the
+     yes or no is the same form as on /approvals. #}
+  <dialog id="ask" class="ask">
+    <iframe id="ask-frame" title="approve or refuse" src="about:blank"></iframe>
+    <div class="ask-bar">
+      <span id="ask-note" class="muted"></span>
+      <button type="button" class="ghost small" id="ask-close">Close</button>
+    </div>
+  </dialog>
+  {% endif %}
+  <script nonce="{{ csp_nonce }}">
+  {% if not public %}
+  // The page in the frame can file a request at any moment; the person looking
+  // at it should see that without reloading. Polled while this page is open:
+  // a new request opens the pop-up, and the pop-up closes itself once it is
+  // decided. Closed by hand, it stays closed for that request -- the notice
+  // below still says what is waiting and how to get back to it.
+  (function(){
+    var box = document.getElementById('asked'), dialog = document.getElementById('ask'),
+        frame = document.getElementById('ask-frame'), note = document.getElementById('ask-note'),
+        seen = {}, showing = null, closer = null, first = true;
+    // Every character that means something in markup, quotes included (2026-11-09, security review): a label is what
+    // the asking page called itself, and an id sits in an attribute.
+    function esc(t){ return String(t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+    function open(id){
+      showing = id; seen[id] = true; note.textContent = '';
+      frame.src = '/approvals/' + encodeURIComponent(id) + '?embed=1';
+      if (!dialog.open) dialog.showModal();
+    }
+    function close(){
+      if (closer) { clearTimeout(closer); closer = null; }
+      if (dialog.open) dialog.close();
+      frame.src = 'about:blank'; showing = null;
+    }
+    document.getElementById('ask-close').onclick = close;
+    dialog.addEventListener('cancel', function(e){ e.preventDefault(); close(); });
+    window.addEventListener('message', function(e){
+      if (e.origin !== location.origin || e.source !== frame.contentWindow) return;
+      var m = e.data || {};
+      if (m.arcade !== 'approval' || m.id !== showing) return;
+      note.textContent = m.status === 'sent' ? 'Sent.' : 'Refused, nothing went out.';
+      closer = setTimeout(close, 2500);
+    });
+    function look(){
+      fetch('/approvals/waiting').then(function(r){ return r.json(); }).then(function(j){
+        if (!j.waiting) { box.hidden = true; return; }
+        var lines = j.requests.map(function(q){
+          return '<li>' + esc(q.summary) +
+            (q.label ? ' <span class="muted">— asked by “' + esc(q.label) + '”</span>' : '') +
+            ' <a href="#" data-ask="' + esc(q.id) + '">look</a></li>';
+        }).join('');
+        box.innerHTML = '<strong>This wallet has been asked to send:</strong><ul style="margin:6px 0 8px">' +
+          lines + '</ul><a class="btn small" href="/approvals">All approvals</a>';
+        box.hidden = false;
+        box.querySelectorAll('a[data-ask]').forEach(function(a){
+          a.onclick = function(){ open(a.getAttribute('data-ask')); return false; };
+        });
+        if (first) {
+          // What was already waiting when this page opened was asked by
+          // something else, earlier: listed above with a link, not opened
+          // over a page that never asked. A request a few seconds old is this
+          // page asking as it loaded, and is the one that pops up.
+          j.requests.forEach(function(q){ if (q.age > 15) seen[q.id] = true; });
+          first = false;
+        }
+        if (showing) return;
+        for (var i = 0; i < j.requests.length; i++) {
+          if (!seen[j.requests[i].id]) { open(j.requests[i].id); break; }
+        }
+      }).catch(function(){});
+    }
+    look(); setInterval(look, 3000);
+  })();
+  {% endif %}
+
+  {% include "_page_doors.js.html" %}
+  </script>
+{% else %}
+  <div class="msg info">Nothing here renders {{ row.content_type }} in a page.
+    <a href="/content/{{ row.txid }}?download=1">Save it</a> and open it with
+    something that does.</div>
+{% endif %}
+
+{% if advice %}
+<div class="msg info">
+  <strong>This wallet cannot buy from here yet.</strong> {{ advice }}.
+  <a href="/wallet">Open the wallet</a> and split the address; one transaction
+  and one block, and then every purchase goes at the speed of the chain's
+  memory pool rather than a block a step.
+</div>
+{% endif %}
+
+<h2>What it is</h2>
+<div class="panel">
+  <table>
+    <tr><td class="muted" style="width:120px">Owner</td>
+        <td>{{ row.owner|who }}</td></tr>
+    <tr><td class="muted">Creator</td>
+        <td>{{ row.creator|who }}</td></tr>
+    <tr><td class="muted">Inscribed</td>
+        <td>block {{ "{:,}".format(row.block_height) }}</td></tr>
+    <tr><td class="muted">Id</td>
+        <td class="mono" style="word-break:break-all">{{ row.txid }}</td></tr>
+    <tr><td class="muted">SHA-256</td>
+        <td class="mono" style="word-break:break-all">{{ row.sha256 }}</td></tr>
+  </table>
+  <div class="row" style="margin-top:12px">
+    <a class="btn ghost small" href="/content/{{ row.txid }}">Content</a>
+    <a class="btn ghost small" href="/r/inscription/{{ row.txid }}">JSON</a>
+    <a class="btn ghost small" href="/r/metadata/{{ row.txid }}">Metadata</a>
+    {% if not chain.is_mainnet %}
+    {# this piece for Pepecoin on mainnet, through lock scripts (2026-10-15; the node-held
+       book of 2026-10-06 before that) #}
+    <a class="btn ghost small" href="/exchange/x/nft/{{ row.txid }}"
+       title="Swap it for Pepecoin main PEP through lock scripts: nobody holds either side">For Pepecoin main PEP {{ net_badge(true) }}</a>
+    {% endif %}
+    {% if mine %}
+      {% if sale and sale.kind == 'ask' %}
+        <a class="btn ghost small" href="/exchange/sell/{{ row.txid }}">For sale &mdash; {{ sale.price }}</a>
+      {% elif sale %}
+        <a class="btn ghost small" href="/inscriptions/{{ sale.shop }}/view">Its listing &mdash; {{ sale.price }}</a>
+      {% else %}
+        <a class="btn ghost small" href="/exchange/sell/{{ row.txid }}">Sell</a>
+      {% endif %}
+      <a class="btn small" href="/inscriptions/{{ row.txid }}/send">Send</a>
+    {% endif %}
+  </div>
+</div>
+
+{# Each game's own state for this piece (arcade/gamestate.py): a condition, a
+   charge, a count -- written only by that game, and it travels with the piece,
+   so what a buyer sees here is what they get. Drawn from /r/state, labelled the
+   way the game asked; nothing at all when no game has written any. #}
+<div id="game-state" hidden>
+  <h2>In games</h2>
+  <div class="panel" id="game-state-list"></div>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function(){
+  fetch('/r/state/{{ row.txid }}', {cache: 'no-store'}).then(function(r){ return r.json(); })
+    .then(function(j){
+      var games = (j && j.games) || [];
+      if (!games.length) return;
+      var list = document.getElementById('game-state-list');
+      games.forEach(function(g){
+        var line = document.createElement('div');
+        line.style.margin = '4px 0';
+        var name = document.createElement('strong');
+        name.textContent = (g.name || g.family) + ': ';
+        line.append(name);
+        var said = [];
+        Object.keys(g.state || {}).forEach(function(k){
+          var label = (g.show && typeof g.show[k] === 'string') ? g.show[k] : k;
+          said.push(label + ' ' + JSON.stringify(g.state[k]).replace(/^"|"$/g, ''));
+        });
+        line.append(document.createTextNode(said.join(' · ')));
+        list.append(line);
+      });
+      document.getElementById('game-state').hidden = false;
+    }).catch(function(){});
+})();
+</script>
+
+{% if viewer == 'account' and mine_account %}
+{# Yours: the one "Sell" (2026-09-26) lives with the rest of your pieces. #}
+<div class="panel row" style="align-items:center;gap:10px">
+  {% if listed and listed.theirs %}
+    <div style="flex:1 1 200px"><span class="pill ok">for sale</span>
+      <strong>{{ listed.price_text }}</strong>
+      <span class="muted" style="font-size:.82rem">&middot; anybody can buy it, open for {{ listed.left }}</span></div>
+    <a class="btn ghost small" href="/me/nfts">Change the price or cancel</a>
+  {% else %}
+    <div style="flex:1 1 200px" class="muted">Yours. Put it up for sale at your price;
+      anybody can buy it even while you're away.</div>
+    <a class="btn small" href="/me/nfts">Sell</a>
+  {% endif %}
+</div>
+<h2>Offered for it</h2>
+<div class="panel">
+  {% if not asks %}
+    <p class="muted" style="margin:0">Nobody has offered for this one, and it is
+      yours. An offer is made by whoever wants the piece, from this page; what
+      you can do from here is answer one when it arrives.</p>
+  {% else %}
+    <table>
+      <tr><th>Offered</th><th>By</th><th style="text-align:right"></th></tr>
+      {% for a in asks %}
+      <tr>
+        <td><strong>{{ a.price }}</strong>
+          <div class="muted" style="font-size:.8rem">
+            {%- if a.pending %}in the mempool{% else %}their offer{% endif %}</div></td>
+        <td class="mono" style="font-size:.8rem;word-break:break-all">
+          {{ a.buyer|who }}</td>
+        <td style="text-align:right;white-space:nowrap">
+          {% if swap_waiting %}
+            <span class="muted">a trade of this piece is waiting for its block</span>
+          {% elif a.accepted %}
+          <span class="muted">You accepted this{% if a.until %} on {{ a.until }}{% endif %}. It completes
+            when {{ a.buyer|who }} next opens their wallet.</span>
+          <div><button type="button" class="ghost small" data-takeback
+                  data-piece="{{ row.txid }}" data-buyer="{{ a.buyer|who_text }}"
+                  style="margin-top:4px">Take it back</button></div>
+          {% elif a.held_for %}
+            <span class="muted">you accepted another buyer's offer on this piece</span>
+          {% else %}
+            <button type="button" class="small" data-accept
+                    {% if a.presigned %}data-presigned="1"{% endif %}
+                    data-offer="{{ a.txid }}" data-piece="{{ row.txid }}"
+                    data-give="{{ a.give }}"
+                    data-price="{{ a.price }}"
+                    data-buyer="{{ a.buyer|who_text }}">Accept</button>
+            <button type="button" class="ghost small" data-refuse
+                    data-offer="{{ a.txid }}" data-piece="{{ row.txid }}"
+                    data-give="{{ a.give }}"
+                    data-price="{{ a.price }}"
+                    data-buyer="{{ a.buyer|who_text }}">Refuse</button>
+          {% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  <p class="msg" id="answer-news" hidden></p>
+  {% if asks %}
+  {# Said as the card says it (a tester, 2026-09-28): an offer made today is
+     pre-signed, so Accept is the trade itself. #}
+  <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+    {%- if asks | selectattr('presigned') | list %}Accepting completes the trade at once: the
+    buyer already signed their half, so one transaction moves this piece to them and the
+    price to you.{% else %}Accepting signs this piece at the price in the offer and sends
+    the buyer the answer; their wallet signs the payment, and nothing moves unless both
+    halves do.{% endif %}</p>
+  <script type="module" nonce="{{ csp_nonce }}">
+  /* The piece page from the side that holds the piece. On the other side of
+     this page an offer is one transaction and one signature; here an answer
+     is two signatures over a leg and one over the letter that carries it, and
+     `wallet.answerOffer` runs all three. The node refuses an answer whose
+     bytes do not say the offer that was made, so the price on this row is the
+     price the signatures stand over.
+  */
+  import * as wallet from "/wallet.js";
+
+  const news = document.getElementById("answer-news");
+  const CHAIN = {network: "{{ chain.network }}",
+                 version: {{ chain.params.pubkeyhash_version }}};
+  const opening = wallet.opened(CHAIN);
+  const say = (text, ok) => {
+    news.textContent = text;
+    news.hidden = !text;
+    news.className = "msg " + (ok ? "ok" : "err");
+  };
+
+  for (const button of document.querySelectorAll("[data-offer]")) {
+    button.onclick = async () => {
+      const refuse = button.hasAttribute("data-refuse");
+      const who = button.dataset.buyer || "whoever offered";
+      const gave = button.dataset.give || "this piece";
+      const paid = button.dataset.price || "the price in the offer";
+      const ok = await arcadeAsk(
+        refuse ? "Refuse this offer?"
+               : (button.dataset.presigned ? `Sell ${gave} for ${paid}?` : "Answer this offer?"),
+        refuse
+          ? `Refuse ${who}'s offer of ${paid} for ${gave}? The offer stays on the `
+            + "chain until their transaction is spent, so nothing here stops them "
+            + "asking again."
+          : button.dataset.presigned
+            ? `${who} already signed their half, so the trade happens now: one `
+              + `transaction moves ${gave} to them and ${paid} to you.`
+            : `Give ${gave}, get ${paid}. Your key signs this piece at that price; `
+              + "their wallet signs the payment, and one transaction moves both or "
+              + "neither.",
+        refuse ? "Refuse" : "Answer it");
+      if (!ok) return;
+      if (refuse) {
+          // Gone from both lists at once (2026-09-28); the buyer's own
+          // node is told afterwards, and that note failing does not undo it.
+          button.disabled = true;
+          const r = await fetch("/account/offer/decline", {method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({offer: button.dataset.offer, piece: button.dataset.piece,
+                                  chain: CHAIN.network})});
+          const said = await r.json();
+          if (!r.ok) { button.disabled = false; say(said.detail || "that offer cannot be declined", false); return; }
+          const rowEl = button.closest(".offerrow, tr");
+          if (rowEl) rowEl.remove();
+          say("Declined.", true);
+          (async () => {
+            try {
+              const held = await opening;
+              if (held) await wallet.answerOffer(held, {offer: button.dataset.offer,
+                piece: button.dataset.piece, refuse: true, chain: CHAIN.network});
+            } catch (e) { /* the decline stands; the note is a courtesy */ }
+          })();
+          return;
+        }
+      for (const other of document.querySelectorAll("[data-offer]")) {
+        other.disabled = true;
+      }
+      try {
+        const held = (await opening) || await arcadeKeys(CHAIN);
+        const out = await wallet.answerOffer(held, {
+          offer: button.dataset.offer, piece: button.dataset.piece,
+          refuse, chain: CHAIN.network});
+        say(out.refused ? "Refused, and the offer stands. Nothing was spent."
+            : out.completed ? `${out.says} It's theirs when the block lands (`
+                              + String(out.txid).slice(0, 16) + "…)."
+                        : "Answered in " + String(out.txid).slice(0, 16)
+                          + "… The piece is held for them for a day, until their "
+                          + "wallet signs; all this account spent is the fee of "
+                          + "one message.", true);
+      } catch (error) {
+        say(String(error.message || error), false);
+      } finally {
+        for (const other of document.querySelectorAll("[data-offer]")) {
+          other.disabled = false;
+        }
+      }
+    };
+  }
+  </script>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if not listed and sale and sale.kind == 'ask' and sale.seller == row.owner
+      and viewer == 'account' and not mine_account %}
+{# A price the holder put on the chain (an ask). It reserves nothing and nobody
+   can finish it without the holder's signature, so what a buyer can do is offer
+   that price; the holder completes it when they accept (a tester, 2026-09-26:
+   the piece page did not say it was for sale at all). #}
+<h2 id="for-sale">Asking price</h2>
+<div class="panel">
+  <div class="row" style="align-items:center;gap:12px">
+    <div style="flex:1 1 200px">
+      <strong style="font-size:1.25rem">asking {{ sale.price }}</strong>
+      <div class="muted" style="font-size:.82rem">by {{ row.owner|who }} &middot; make an offer
+        {%- if sale.pending %} &middot; waiting for its block{% endif %}</div>
+    </div>
+    <button type="button" id="offer-the-price" data-amount="{{ '%.8f'|format((sale.sats or 0) / 100000000) if sale.sats else '' }}"
+      {{ 'disabled' if not sale.sats }}>Offer {{ sale.price }}</button>
+  </div>
+  <p class="muted" style="font-size:.82rem;margin:8px 0 0">The holder named this price.
+    Offer it and the piece is yours when they accept; they are told about it.</p>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var b = document.getElementById('offer-the-price');
+  if (!b) return;
+  b.onclick = function () {
+    var box = document.getElementById('offer-amount');
+    var kind = document.getElementById('offer-kind');
+    if (!box) return;
+    box.value = String(parseFloat(b.dataset.amount));
+    if (kind) kind.value = 'coins';
+    document.getElementById('make-offer').scrollIntoView({behavior: 'smooth', block: 'start'});
+    box.focus();
+  };
+})();
+</script>
+{% endif %}
+
+{% if listed and not listed.theirs %}
+<h2 id="for-sale">For sale</h2>
+<div class="panel" id="buy-panel">
+  <div class="row" style="align-items:center;gap:12px">
+    <div style="flex:1 1 200px">
+      <strong style="font-size:1.25rem">{{ listed.price_text }}</strong>
+      <div class="muted" style="font-size:.82rem">listed by
+        {% if listed.tag %}<strong>@{{ listed.tag }}</strong>{% else %}<span class="mono">{{ listed.seller[:12] }}…</span>{% endif %}
+        &middot; open for {{ listed.left }}</div>
+    </div>
+    {% if viewer == 'account' %}
+    <button type="button" id="buy-it"
+      {{ 'disabled' if not listed.token and coins * 100000000 < listed.sats }}>Buy it for {{ listed.price_text }}</button>
+    {% else %}
+    <a class="btn" href="/me">Sign in to buy it</a>
+    {% endif %}
+  </div>
+  {% if viewer == 'account' %}
+  <p class="msg err" id="buy-trouble" hidden></p>
+  <p class="msg ok" id="buy-news" hidden></p>
+  <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+    {%- if not listed.token and coins * 100000000 < listed.sats %}This account holds
+      {{ "%.4f"|format(coins) }} {{ chain.label|lower }} coins, which is less
+      than the price.
+    {%- else %}One transaction: the seller already signed the piece over at this
+      price, and your key signs the coins in this tab. Both move in the same
+      block or neither does.{% endif %}</p>
+  <script type="module" nonce="{{ csp_nonce }}">
+  /* Filling somebody's listing. The seller's half is in the node's book;
+     `wallet.offerBuy` asks for the transaction around it and `wallet.buy`
+     checks it with `coins.verifyOffer` before this key signs anything, so the
+     price in the confirmation is read out of the bytes rather than off this
+     page. */
+  import * as wallet from "/wallet.js";
+
+  const $ = (id) => document.getElementById(id);
+  const say = (t) => { $("buy-trouble").textContent = t;
+                       $("buy-trouble").hidden = !t; };
+  const news = (t) => { $("buy-news").textContent = t;
+                        $("buy-news").hidden = !t; };
+  const CHAIN = {network: "{{ chain.network }}",
+                 version: {{ chain.params.pubkeyhash_version }}};
+  const LISTING = {{ listed.id|tojson }};
+  const RECEIPT = "arcade.bought." + CHAIN.network + ".{{ row.txid }}";
+  const opening = wallet.opened(CHAIN);
+
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(RECEIPT) || "null");
+    if (kept && kept.says && Date.now() - Number(kept.at || 0) < 3600e3) {
+      news(kept.says);
+      $("buy-it").disabled = true;
+    } else if (kept) sessionStorage.removeItem(RECEIPT);
+  } catch (e) { /* no receipt, then */ }
+
+  $("buy-it").onclick = async () => {
+    const button = $("buy-it");
+    say(""); news("");
+    button.disabled = true;
+    // Pressed shows at once; the node's answer can take a second or two.
+    button.textContent = "Buying…";
+    try {
+      const held = (await opening) || await arcadeKeys(CHAIN);
+      const offer = await wallet.offerBuy(LISTING, CHAIN.network);
+      const shown = await wallet.checked(offer, held);
+      // Said as the trade, by name (a tester, 2026-09-26: the old wording listed
+      // raw outputs, two of them to the seller's address -- the price, and the
+      // seller's own coin passing back to them -- which read like a scam).
+      const coins = String(Number(offer.price) / 1e8);
+      const seller = offer.seller_tag ? "@" + offer.seller_tag : "the seller";
+      const piece = {{ ((row.collection ~ ' #' ~ row.edition) if row.collection else ('#' ~ row.number))|tojson }};
+      if (!(await arcadeAsk(`Buy ${piece} for ${coins} coins?`,
+            `${coins} coins go to ${seller}, the network fee is `
+            + `${shown.coinsOf(shown.fee)}, and the rest comes back to you. The piece `
+            + "and the coins move in one transaction, checked in this browser.",
+            `Buy it for ${coins} coins`))) {
+        button.disabled = false;
+        button.textContent = "Buy it for {{ listed.price_text }}";
+        return;
+      }
+      const out = await wallet.buy(held, offer);
+      const says = `Bought in ${String(out.txid).slice(0, 16)}… It is yours `
+        + "from the block it lands in.";
+      news(says);
+      button.textContent = "Bought";
+      try { sessionStorage.setItem(RECEIPT, JSON.stringify({says, at: Date.now()})); }
+      catch (e) { /* the sentence is on the page for this load */ }
+    } catch (e) {
+      say(String(e.message || e));
+      button.disabled = false;
+      button.textContent = "Buy it for {{ listed.price_text }}";
+    }
+  };
+  </script>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if my_offers %}
+<h2>Your offer</h2>
+<div class="panel">
+  <table>
+    {% for o in my_offers %}
+    <tr><td><strong>{{ o.price }}</strong>
+          <div class="muted" style="font-size:.8rem">
+            {%- if o.pending %}in the mempool{% else %}block {{ "{:,}".format(o.block_height) }}{% endif %}</div></td>
+        {% if o.bid_status %}
+        {# Pre-signed (2026-09-27): nothing left for this browser to do. #}
+        <td style="text-align:right;white-space:nowrap">
+          {% if o.bid_status == 'open' %}
+            <span class="muted">completes the moment they accept</span>
+            <button type="button" class="ghost small" data-withdraw="{{ o.txid }}">Withdraw</button>
+          {% elif o.bid_status == 'filled' %}<span class="pill ok">accepted &mdash; it's yours</span>
+          {% elif o.bid_status == 'withdrawn' %}<span class="muted">withdrawn</span>
+          {% elif o.bid_status == 'stale' %}<span class="muted">its coins were spent; it can't complete</span>
+          {% else %}<span class="muted">waiting for the holder</span>{% endif %}</td></tr>
+        {% else %}
+        <td style="text-align:right;white-space:nowrap" data-answer-for="{{ o.txid }}"
+            data-piece="{{ row.txid }}" data-price="{{ o.price }}" data-number="{{ row.number }}"
+            {% if swap_waiting %}data-busy="1"{% endif %}>
+          <span class="muted">waiting for the holder</span></td></tr>
+        {% endif %}
+    {% endfor %}
+  </table>
+  <p class="msg" id="fill-news" hidden></p>
+  {% include "_offer_complete.html" %}
+  <script type="module" nonce="{{ csp_nonce }}">
+  // Withdraw a pre-signed offer: spend the coins it was signed over, back to you.
+  import * as wallet from "/wallet.js";
+  const CHAIN = {network: "{{ chain.network }}", version: {{ chain.params.pubkeyhash_version }}};
+  for (const b of document.querySelectorAll("[data-withdraw]")) {
+    b.onclick = async () => {
+      const news = document.getElementById("fill-news");
+      const say = (t, ok) => { news.textContent = t; news.hidden = !t;
+                               news.className = "msg " + (ok ? "ok" : "err"); };
+      b.disabled = true;
+      try {
+        const held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN);
+        const offer = await wallet.withdrawOffer(held, b.dataset.withdraw);
+        const shown = await wallet.checked(offer, held);
+        if (!(await arcadeAsk("Withdraw this offer?",
+            "Nobody can accept it after this. It spends the coins it was set aside "
+            + `on back to you: one small transaction, ${shown.coinsOf(shown.fee)} in fees.`,
+            "Withdraw"))) { b.disabled = false; return; }
+        await wallet.confirm(held, offer);
+        b.replaceWith(document.createTextNode("withdrawn"));
+        say("Withdrawn. Its coins are yours to spend again when the block lands.", true);
+      } catch (e) { b.disabled = false; say(String(e.message || e), false); }
+    };
+  }
+  </script>
+</div>
+{% endif %}
+
+{# Mainnet PEP for a testnet piece, through the cross-chain book: the buyer's PEP
+   is held by this node until the holder sells into the bid (2026-10-09). #}
+{% if xchain_open and not chain.is_mainnet %}
+{% set xbest = x_bids[0].pep if x_bids else None %}
+{% if mine or mine_account %}
+{% if x_bids %}
+<div class="panel" id="mainnet-bids" style="border-color:var(--accent)">
+  <h3 style="margin:0 0 6px">Offers in mainnet PEP {{ net_badge(true) }}</h3>
+  <p style="margin:0 0 10px">The best is <strong>{{ "%.8f"|format(xbest)|trim('0')|trim('.') }} PEP</strong>
+    (real coins){% if x_bids|length > 1 %}, from {{ x_bids|length }} offers{% endif %}. This node holds
+    the buyer's PEP; sell into it and the PEP is paid to your mainnet address when your piece arrives.</p>
+  <a class="btn" href="/exchange/x/nft/{{ row.txid }}?held=1&amp;side=sell&amp;price={{ "%.8f"|format(xbest)|trim('0')|trim('.') }}#x-form">Sell it for {{ "%.8f"|format(xbest)|trim('0')|trim('.') }} PEP</a>
+</div>
+{% endif %}
+{% endif %}
+{% endif %}
+
+{% if not mine and not mine_account %}
+<h2 id="make-offer">Make an offer</h2>
+{% if not chain.is_mainnet %}
+<div class="panel" style="margin-bottom:12px">
+  <h3 style="margin:0 0 6px">Offer real PEP {{ net_badge(true) }} for this testnet piece</h3>
+  <p class="muted" style="margin:0 0 10px;font-size:.88rem">Settled through lock scripts on both chains:
+    your PEP is locked so only the piece's holder can claim it, and only by handing you the piece; if they
+    never do, it comes back to you by itself.</p>
+  <a class="btn" href="/exchange/x/nft/{{ row.txid }}?side=buy#x-form">Offer Pepecoin main PEP</a>
+</div>
+<h3 style="margin:14px 0 6px">Or offer PEP TEST {{ net_badge(false) }}</h3>
+{% endif %}
+<div class="panel">
+  {% if offer_error %}<div class="msg err">{{ offer_error }}</div>{% endif %}
+  {% if viewer == 'account' %}
+    <p class="muted" style="margin:0 0 10px">Offer for it whether or not it is
+      for sale. The offer is one transaction, paid for out of this
+      account&rsquo;s own coins and signed in this tab &mdash; this node never
+      holds the key that spends it. It reserves nothing: the piece stays where
+      it is until whoever holds it says yes from their own node, and if nobody
+      does, all that was spent is the fee.</p>
+    <p class="msg err" id="offer-trouble" hidden></p>
+    <p class="msg ok" id="offer-news" hidden></p>
+    <div class="row" style="gap:8px">
+      <div style="flex:0 0 120px">
+        <input autocomplete="off" id="offer-amount" inputmode="decimal"
+               placeholder="amount"></div>
+      <div style="flex:0 0 150px">
+        <select autocomplete="off" id="offer-kind">
+          <option value="coins">{{ chain.label }} coins &mdash;
+            {{ "%.4f"|format(coins) }}</option>
+          {% if tokens %}
+          <option value="token">a token</option>
+          {% endif %}
+        </select></div>
+      {% if tokens %}
+      <div style="flex:1 1 180px" id="offer-token-wrap" hidden>
+        <select autocomplete="off" id="offer-token">
+          {% for t in tokens %}
+          <option value="{{ t.property_id }}">{{ t.name }} &mdash; {{ t.display }}</option>
+          {% endfor %}
+        </select></div>
+      {% endif %}
+      <button type="button" id="offer-it"
+        {{ 'disabled' if not tokens and not coins }}>Make offer</button>
+    </div>
+    <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+      {%- if tokens or coins %}Only what this account holds can be offered
+        &mdash; {{ "%.4f"|format(coins) }} {{ chain.label|lower }} coins
+      {%- if tokens %} and {{ tokens|length }}
+        token{{ '' if tokens|length == 1 else 's' }}{% endif %}.
+    {%- else %}This account holds nothing on {{ chain.label|lower }} to offer
+      with.{% endif %}</p>
+    <script type="module" nonce="{{ csp_nonce }}">
+    /* An offer, from the account's side of it.
+
+       Nothing is spent until `wallet.checked` has read this node's
+       transaction and worked the fee out of its own bytes: `offer.fee` is
+       this node's number, and a confirmation that repeats it proves nothing.
+
+       The sentence outlives the tab for a while, kept in sessionStorage
+       rather than only in the news row: `/account/sign` bumps the generation
+       as the offer is broadcast, so base.html's poller reloads this page over
+       it within a poll of it going out. The same hold the inscribe boxes
+       describe. An hour, because nothing here can tell the tab the offer
+       landed, and a receipt that haunts a piece page for ever is worse than
+       one that goes quiet while its block is still on its way.
+    */
+    import * as wallet from "/wallet.js";
+
+    const $ = (id) => document.getElementById(id);
+    const say = (t) => { $("offer-trouble").textContent = t;
+                         $("offer-trouble").hidden = !t;
+                         if (t) $("offer-news").hidden = true; };
+    const news = (t) => { $("offer-news").textContent = t;
+                          $("offer-news").hidden = !t;
+                          if (t) $("offer-trouble").hidden = true; };
+    const CHAIN = {network: "{{ chain.network }}",
+                   version: {{ chain.params.pubkeyhash_version }}};
+    const PIECE = "{{ row.txid }}";
+    const RECEIPT = "arcade.offered." + CHAIN.network + "." + PIECE;
+
+    // Started, not waited for: a handler that awaits the key before it is
+    // wired has a second or two in which a press does nothing and says
+    // nothing at all.
+    const opening = wallet.opened(CHAIN);
+    let keys = null;
+    opening.then((found) => { keys = found; });
+    const take = async () => keys || (keys = await opening);
+
+    try {
+      const kept = JSON.parse(sessionStorage.getItem(RECEIPT) || "null");
+      if (kept && kept.says && Date.now() - Number(kept.at || 0) < 3600e3)
+        news(kept.says);
+      else if (kept) sessionStorage.removeItem(RECEIPT);
+    } catch (e) { /* a receipt this tab cannot read is no receipt */ }
+
+    $("offer-kind").onchange = (event) => {
+      const wrap = $("offer-token-wrap");
+      if (wrap) wrap.hidden = event.target.value !== "token";
+    };
+
+    $("offer-it").onclick = async () => {
+      say(""); news("");
+      $("offer-it").disabled = true;
+      try {
+        const held = (await take()) || await arcadeKeys(CHAIN);
+        const asked = await fetch("/account/offer", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            piece: PIECE, amount: $("offer-amount").value.trim(),
+            kind: $("offer-kind").value,
+            property_id: $("offer-token") ? $("offer-token").value : "",
+            chain: CHAIN.network}),
+        });
+        const offer = await asked.json();
+        if (!asked.ok) throw new Error(offer.detail || "that cannot be offered");
+        const shown = await wallet.checked(offer, held);
+        // The in-page card, as everywhere else (filming, 2026-09-26: the
+        // browser's own dialog read as a lowercase run-on).
+        const what = String(shown.what || "Make this offer");
+        // A pre-signed offer (2026-09-27): the trade completes the moment
+        // the holder accepts, whether or not this browser is open.
+        const presigned = !!offer.presigned;
+        if (!(await arcadeAsk("Make this offer?",
+          what.charAt(0).toUpperCase() + what.slice(1) + `. It costs `
+          + `${shown.coinsOf(shown.fee)} in fees. `
+          + (presigned
+             ? "If the holder accepts, the trade happens at once, even while you're "
+               + "offline. The price is set aside in your wallet for this offer until "
+               + "then; withdraw it any time to get it back."
+             : "It reserves nothing: the piece stays where it is until whoever holds "
+               + "it says yes, and you finish the trade after."), "Send offer"))) {
+          $("offer-it").disabled = false;
+          return;
+        }
+        const out = await wallet.confirm(held, offer);
+        if (presigned) {
+          // The price this page asked for, in sats, and the holder it shows:
+          // what the browser holds the signed half to.
+          const typed = $("offer-kind").value === "coins"
+            ? BigInt(Math.round(parseFloat($("offer-amount").value.trim()) * 1e8)) : 0n;
+          await wallet.signBid(held, offer, out,
+                               {piece: PIECE, seller: {{ row.owner|tojson }}, sats: typed});
+        }
+        const says = `Offered in ${out.txid.slice(0, 16)}… `
+          + (presigned ? "When the holder accepts, the piece is yours at once."
+                       : "It stands from the block it lands in, and whoever holds "
+                         + "this piece sees it in their own Exchange.");
+        news(says);
+        try { sessionStorage.setItem(RECEIPT, JSON.stringify({says,
+                                                              at: Date.now()})); }
+        catch (e) { /* the sentence is in the row for this load at least */ }
+      } catch (e) {
+        say(String(e.message || e));
+      } finally {
+        $("offer-it").disabled = false;
+      }
+    };
+    </script>
+  {% elif viewer == 'nobody' %}
+    <p class="muted" style="margin:0">Sign in to offer for it. An offer travels
+      to whoever holds the piece as a message on the chain, and it is paid for
+      by the wallet that signs it &mdash; which this page is not holding.</p>
+  {% else %}
+  <p class="muted" style="margin:0 0 10px">Offer for it whether or not it is for
+    sale. The offer travels to whoever holds it as a message on the chain; if
+    they accept, one transaction moves the NFT and your payment together, and
+    nothing moves if it fails.</p>
+  <form method="post" action="/exchange/offer" class="row" style="gap:8px">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="inscription" value="{{ row.txid }}">
+    <div style="flex:0 0 120px">
+      <input autocomplete="off" name="amount" inputmode="decimal" placeholder="amount"
+             value="{{ offer_amount or '' }}"></div>
+    <div style="flex:0 0 150px">
+      <select autocomplete="off" name="kind" id="offer-kind">
+        <option value="coins">{{ chain.label }} coins &mdash; {{ "%.4f"|format(coins) }}</option>
+        {% if tokens %}
+        <option value="token" {{ 'selected' if offer_kind == 'token' }}>a token</option>
+        {% endif %}
+      </select></div>
+    {% if tokens %}
+    <div style="flex:1 1 180px" id="offer-token-wrap"
+         {{ '' if offer_kind == 'token' else 'hidden' }}>
+      <select autocomplete="off" name="property_id">
+        {% for t in tokens %}
+        <option value="{{ t.property_id }}">{{ t.name }} &mdash; {{ t.display }}</option>
+        {% endfor %}
+      </select></div>
+    {% endif %}
+    <button type="submit" class="small" {{ 'disabled' if not tokens and not coins }}>Make offer</button>
+  </form>
+  <p class="muted" style="font-size:.82rem;margin:8px 0 0">
+    {%- if tokens or coins %}Only what this wallet holds can be offered
+      &mdash; {{ "%.4f"|format(coins) }} {{ chain.label|lower }} coins
+      {%- if tokens %} and {{ tokens|length }}
+        token{{ '' if tokens|length == 1 else 's' }}{% endif %}.
+    {%- else %}This wallet holds nothing on {{ chain.label|lower }} to offer with.{% endif %}</p>
+  <script nonce="{{ csp_nonce }}">
+  function offerToken(sel){
+    document.getElementById('offer-token-wrap').hidden = sel.value !== 'token';
+  }
+  // On the document, not the select, so a form the page's in-place refresh puts back still answers.
+  document.addEventListener('change', function (e) {
+    if (e.target.matches && e.target.matches('select#offer-kind[name=kind]')) offerToken(e.target);
+  });
+  </script>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if row.json %}
+<h2>Its JSON</h2>
+<div class="panel"><pre style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere">{{ row.json }}</pre></div>
+{% endif %}
+
+<style>
+  .ask{border:0;border-radius:12px;padding:0;width:min(96vw,640px);max-width:96vw;
+    background:var(--panel,#fff);box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden}
+  .ask::backdrop{background:rgba(0,0,0,.55)}
+  .ask iframe{display:block;width:100%;height:min(78vh,720px);border:0}
+  .ask-bar{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    border-top:1px solid var(--line,#ddd)}
+  .ask-bar button{margin-left:auto}
+  .inscription-frame{display:block;width:100%;height:min(70vh,620px);border:0;
+    background:#fff}
+  .back-link{font-weight:600}
+  .inscription-picture{display:flex;justify-content:center;margin-bottom:12px}
+  .inscription-picture img{display:block;max-width:100%;max-height:min(70vh,620px);
+    width:auto;height:auto;border-radius:12px;cursor:zoom-in;
+    image-rendering:auto}
+</style>
+{% endblock %}

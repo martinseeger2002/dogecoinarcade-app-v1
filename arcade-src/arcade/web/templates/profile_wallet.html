@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}@{{ wall_text(tag, 'someone') }}'s wallet · {{ brand.name }}{% endblock %}
+{% block body %}
+
+<div class="row" style="align-items:center;gap:12px">
+  {% if profile.pfp %}
+    <img src="/content/{{ profile.pfp }}" alt="" loading="lazy"
+         style="width:56px;height:56px;border-radius:50%;object-fit:cover">
+  {% endif %}
+  <div>
+    <h1 style="margin:0">{{ wall('@' ~ tag ~ "'s wallet") }}</h1>
+    <a class="muted" style="font-size:.86rem" href="/u/{{ tag }}">&larr; their feed</a>
+  </div>
+</div>
+
+{% if not address %}
+<div class="panel empty" style="margin-top:16px">
+  <p>Nobody holds <strong>{{ wall('@' ~ tag) }}</strong> on this chain.</p>
+  <p class="muted">A tag exists here once its claim is in a block this node
+    has read.</p>
+</div>
+{% else %}
+
+<p class="sub" style="margin-top:14px">What they hold, read from the chain.
+  Nothing here is private &mdash; a chain is public, and this page only looks
+  up what anybody could.</p>
+
+<style>
+.pw-tokens{display:flex;flex-direction:column;margin-top:6px;border-top:1px solid var(--line)}
+.pw-token{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line);text-decoration:none}
+.pw-token .pw-name{text-align:left;min-width:0;overflow-wrap:anywhere}
+.pw-ords{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.pw-ord{display:flex;flex-direction:column;gap:6px}
+.pw-token .pw-amt{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+</style>
+{# Every coin they hold, one row each, the name left and the balance right like the tokens (2026-10-15). #}
+{% if coins %}
+<div class="panel" style="margin-bottom:16px">
+  <h2 style="margin:0">Coins</h2>
+  <div class="pw-tokens">
+    {% for c in coins %}
+    <div class="pw-token">
+      <span class="pw-name">{{ net_badge(c.chain.network) }} {{ c.coin }}</span>
+      <span class="pw-amt">{% if c.balance is not none %}{{ "{:,.2f}".format(c.balance) }}
+        {%- elif not c.address %}no address published{% else %}not readable here yet{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% for held in holdings %}
+<div class="panel" style="margin-bottom:16px">
+  <div class="row" style="align-items:baseline">
+    <h2 style="margin:0">{{ held.chain.label }}</h2>
+    <code class="mono muted" style="font-size:.76rem;margin-left:auto;word-break:break-all"
+      >{{ held.address }}</code>
+  </div>
+
+  <table style="margin-top:10px">
+    <tr><td class="muted" style="width:120px">Tokens</td>
+        <td>{% if not held.tokens %}<span class="muted">none</span>{% endif %}</td></tr>
+  </table>
+  {# One token per row, down the left, each a link to its own page on its own chain (2026-10-15). #}
+  {% if held.tokens %}
+  <div class="pw-tokens">
+    {% for row in held.tokens %}
+    <a class="pw-token" href="/tokens/{{ row['property_id'] }}?chain={{ held.chain.network }}">
+      <span class="pw-name">{% if row['name'] %}{{ wall(row['name']) }}{% else %}#{{ row['property_id'] }}{% endif %}</span>
+      <span class="pw-amt">{{ row['display'] }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Their Doginals (Dogecoin) and ord inscriptions (PEP mainnet), read from the chain by this node, each with a way to
+     make an offer (2026-10-15: "We should be able to see doginals in others wallets. To make offers"). #}
+  {% if held.ords %}
+  <h3 style="margin:14px 0 8px;font-size:.95rem">{{ 'Doginals' if held.chain.is_doge else 'Ord inscriptions' }}</h3>
+  <div class="pw-ords">
+    {% for o in held.ords %}
+    <div class="pw-ord" data-ord="{{ o.id }}">
+      <iframe src="/content/{{ o.id }}" title="{{ o.id }}" loading="lazy" sandbox="allow-scripts"
+              style="border:0;width:100%;aspect-ratio:1;display:block;pointer-events:none;border-radius:8px"></iframe>
+      <div class="mono muted" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ o.id }}">{{ o.id }}</div>
+      {% if o.market %}<a class="btn small" href="{{ o.market }}">Make an offer</a>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if held.groups %}
+  {#- By collection, a page at a time (2026-10-17). A collection opens in place; More fetches the next sixty. #}
+  <h3 style="margin:14px 0 8px;font-size:.95rem">NFTs</h3>
+  <div class="pw-colls">
+    {% for g in held.groups %}
+    <details class="pw-coll" data-collection="{{ g.collection }}" data-chain="{{ held.chain.network }}">
+      <summary>
+        <span class="pw-cover">{% for c in g.cover[:4] %}{% if c.content_type.startswith('image/') %}<img src="/content/{{ c.txid }}" alt="" loading="lazy">{% else %}<span></span>{% endif %}{% endfor %}</span>
+        <span class="pw-name"><b>{{ g.collection or 'Not in a collection' }}</b>
+          <small class="muted">{{ g.count }} piece{{ '' if g.count == 1 else 's' }}</small></span>
+      </summary>
+      <div class="pw-grid"></div>
+      <button type="button" class="ghost small pw-more" hidden>More</button>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="panel empty">
+  <p>{{ wall('@' ~ tag) }} has published no address on any chain this node follows.</p>
+  <p class="muted">Publishing a tag puts both addresses on the chain; until
+    somebody does that, there is nothing here to look up.</p>
+</div>
+{% endfor %}
+{% endif %}
+<style>
+.pw-colls{display:grid;gap:8px}
+.pw-coll{border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.pw-coll summary{display:flex;gap:10px;align-items:center;cursor:pointer;list-style:none}
+.pw-coll summary::-webkit-details-marker{display:none}
+.pw-cover{display:grid;grid-template-columns:1fr 1fr;width:48px;height:48px;gap:2px;border-radius:8px;overflow:hidden;background:var(--code);flex:none}
+.pw-cover img{width:100%;height:100%;object-fit:cover}
+.pw-name{display:flex;flex-direction:column}
+.pw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px;margin-top:10px}
+.pw-grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block}
+.pw-more{margin-top:8px}
+</style>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var tag = {{ tag|tojson }};
+  function load(d) {
+    var grid = d.querySelector(".pw-grid"), more = d.querySelector(".pw-more");
+    var offset = Number(d.dataset.offset || 0);
+    fetch("/u/" + encodeURIComponent(tag) + "/pieces?collection=" + encodeURIComponent(d.dataset.collection)
+          + "&chain=" + encodeURIComponent(d.dataset.chain) + "&offset=" + offset)
+      .then(function (r) { return r.json(); })
+      .then(function (said) {
+        (said.pieces || []).forEach(function (p) {
+          var a = document.createElement("a"); a.href = "/inscriptions/" + p.txid + "/view";
+          a.title = p.edition != null ? "#" + p.edition : "#" + p.number;
+          if (String(p.content_type || "").indexOf("image/") === 0) {
+            var i = document.createElement("img"); i.src = "/content/" + p.txid; i.loading = "lazy"; i.alt = ""; a.append(i);
+          } else { a.className = "ghost btn small"; a.textContent = "#" + p.number; }
+          grid.append(a);
+        });
+        d.dataset.offset = offset + (said.pieces || []).length;
+        more.hidden = !said.more;
+      });
+  }
+  document.querySelectorAll(".pw-coll").forEach(function (d) {
+    d.addEventListener("toggle", function () { if (d.open && !d.dataset.offset) load(d); });
+    d.querySelector(".pw-more").addEventListener("click", function () { load(d); });
+  });
+})();
+</script>
+{% endblock %}
