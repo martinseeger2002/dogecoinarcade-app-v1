@@ -10,8 +10,9 @@ The viewer (_page_doors) asks these routes on its page's behalf, exactly as it a
     POST /realtime/hub/attach|detach, GET /realtime/hub?id=
                                           many rooms on one stream (kept here, fed by V1.0's streams)
     GET  /realtime/nodes                  ways in a browser may use: this site
-    GET  /realtime/ice                    STUN, and a relay for a signed-in player: the arcade nodes' own media relays
-                                          (node-relays.json), else the operator's Cloudflare TURN key
+    GET  /realtime/ice                    STUN, and a relay for a signed-in player: Arcade V1.0's media relays
+                                          (realtime.ice: its own, or borrowed from linked arcades), else the original
+                                          arcades' relays in node-relays.json, else the operator's Cloudflare TURN key
 
 A signed-in account joins as its own address only: the address comes from its session, never from the request.
 """
@@ -27,6 +28,8 @@ import time
 
 import httpx
 from fastapi import Request
+
+from .v1 import V1Error
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 PUBLIC_STUN = "stun:stun.cloudflare.com:3478"
@@ -279,6 +282,18 @@ def register(app, st, chains):
         relay_kept[account.pubkey] = (time.time(), servers)
         return servers
 
+    def v1_relays(request: Request) -> list[dict]:
+        """Logins on Arcade V1.0's media relays for a signed-in player (realtime.ice: this site's V1.0's own relay,
+        or relays it borrows from linked arcades). Empty on a V1.0 without the relay."""
+        account = app.state.signed_in(request)
+        if account is None:
+            return []
+        try:
+            got = v1.cmd("realtime.ice", _timeout=8.0, tag=f"site:{account.pubkey}") or {}
+        except V1Error:
+            return []
+        return [x for x in got.get("iceServers") or [] if isinstance(x, dict) and x.get("urls") and x.get("username")]
+
     def node_relays(request: Request) -> list[dict]:
         """Logins on the arcade nodes' own media relays, for a signed-in player, in any app (the operator 2026-11-12:
         node relays rather than Cloudflare TURN). Each login lasts TURN_TTL and names the player only by a hash."""
@@ -306,7 +321,8 @@ def register(app, st, chains):
     @app.get("/realtime/ice")
     def ice(request: Request):
         servers = [{"urls": PUBLIC_STUN}] if st.setting("realtime_public_stun", True) is not False else []
-        # The nodes' own relays first; the operator's Cloudflare TURN only when no node relay is set up.
-        relay = node_relays(request) or relay_for(request, request.query_params.get("app", ""))
+        # The arcades' own relays first (V1.0's, then the original arcades' listed here); the operator's Cloudflare TURN
+        # only when there is no arcade relay.
+        relay = v1_relays(request) or node_relays(request) or relay_for(request, request.query_params.get("app", ""))
         servers.extend(relay)
         return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)}, headers=CORS)
