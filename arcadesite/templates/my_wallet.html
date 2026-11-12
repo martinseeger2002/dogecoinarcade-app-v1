@@ -766,7 +766,12 @@ function passwordField(body, why) {
   const label = el("label", "l", "Your password"); label.htmlFor = "imp-pass";
   const box = el("input", "wide"); box.id = "imp-pass"; box.type = "password"; box.autocomplete = "current-password";
   const note = el("div", "wl-note", why);
-  const holder = el("div"); holder.append(label, box, note);
+  // The account's name for the browser's password manager, out of sight (2026-11-12: iPhone filled the username into
+  // the wallet's Name box, the text box before the password): it fills this one instead.
+  const user = el("input"); user.type = "text"; user.autocomplete = "username"; user.value = said.name || "";
+  user.readOnly = true; user.tabIndex = -1; user.setAttribute("aria-hidden", "true");
+  user.style.cssText = "position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden";
+  const holder = el("div"); holder.append(user, label, box, note);
   holder.hidden = wallet.importsKeyHere(acct());
   body.append(holder);
   return {holder, box, show() { holder.hidden = false; box.focus(); }};
