@@ -293,9 +293,6 @@ body.fullscreen #arc-bot { display: none !important; }
   var byKey = {};
   TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, badge: t.badge, glyph: glyphOf(t.href)}; });
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', img: STORE_ICON};
-  // The robot helper is an app on the home screen (2026-10-25: "The robot helper should be another app when in
-  // the home screen"); its face is the robot's own (_helper.html).
-  byKey.helper = {key: 'helper', kind: 'helper', name: 'Helper'};
   APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
 
   var $ = function (id) { return document.getElementById(id); };
@@ -345,7 +342,7 @@ body.fullscreen #arc-bot { display: none !important; }
   function newId() { return 'f' + Math.random().toString(36).slice(2, 9); }
   function seed(starred) {
     return [TABS.filter(function (t) { return !outOfGrid(t.key); }).map(function (t) { return t.key; })
-      .concat(['store', 'helper']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
+      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
   }
   // Older saves are one flat list (one page). Tabs a later release adds join the last page; the App Store is always there.
   function complete(said, savedDock) {
@@ -371,7 +368,6 @@ body.fullscreen #arc-bot { display: none !important; }
     if (!out.length) out = [[]];
     TABS.forEach(function (t) { if (!outOfGrid(t.key) && !seen[t.key]) out[out.length - 1].push(t.key); });
     if (!seen.store && !outOfGrid('store')) out[out.length - 1].push('store');
-    if (!seen.helper && !outOfGrid('helper')) out[out.length - 1].push('helper');
     return out;
   }
   function persist() {
