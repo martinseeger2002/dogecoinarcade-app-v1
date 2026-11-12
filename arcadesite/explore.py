@@ -236,21 +236,25 @@ def register(app, st, chains):
     def api_tick(net: str = "doge", tick: str = ""):
         """One DRC-20 / PRC-20 tick as a minter needs it (2026-11-12): its supply, how much is minted, the most one mint
         may take, its decimals (all in base units, as strings), and who deployed it."""
+        def open_bad(detail: str, code: int = 400) -> JSONResponse:
+            return JSONResponse({"detail": detail}, status_code=code, headers={"Access-Control-Allow-Origin": "*"})
         if not known_net(net):
-            return bad("this arcade does not read that chain", 404)
+            return open_bad("this arcade does not read that chain", 404)
         t = (tick or "").strip()
         if not t or len(t) > 32:
-            return bad("ask for a tick")
+            return open_bad("ask for a tick")
         try:
             tok = ask("explorer.token", net, tick=t)
         except V1Error as e:
-            return bad(str(e), 404)
+            return open_bad(str(e), 404)
         if not tok.get("tick"):
-            return bad(f"no tick {t} on that chain", 404)
+            return open_bad(f"no tick {t} on that chain", 404)
+        # Read by apps too, from their sandboxed frames (an opaque origin): public, so any origin may read it.
         return JSONResponse({"tick": tok.get("tick"), "shown": tok.get("shown") or tok.get("tick"), "supply": str(tok.get("supply") or "0"),
                              "minted": str(tok.get("minted") or "0"), "lim": str(tok.get("lim") or tok.get("supply") or "0"),
                              "dec": int(tok.get("dec") if tok.get("dec") is not None else 18), "deployer": tok.get("deployer"),
-                             "height": tok.get("h"), "holders": tok.get("holders"), "from": _from(tok)})
+                             "height": tok.get("h"), "holders": tok.get("holders"), "from": _from(tok)},
+                            headers={"Access-Control-Allow-Origin": "*"})
 
     @app.get("/explore/api/ticks")
     def api_ticks(net: str = "doge", q: str = ""):
