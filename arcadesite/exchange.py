@@ -1810,6 +1810,18 @@ def register(app, st, chains):
         return JSONResponse({"chain": one.network, "pieces": pieces, "coins": coins},
                             headers={"Cache-Control": "no-store"})
 
+    def listed_coins(network: str, address: str) -> set:
+        """The coins an address's open listings stand on (a Doginal send refuses them: ordsend.py)."""
+        held = set()
+        for r in listings.open_listings(network, limit=1000, claims=True):
+            if r["owner"] == address:
+                for c in (r["input"], r["coin"]):
+                    if c:
+                        held.add((str(c["txid"]), int(c["vout"])))
+        return held
+
+    app.state.listed_coins = listed_coins
+
     def ask_payload(row: dict, take) -> bytes:
         from arcade.encoding import EncodingError, encode_class_c
         body = inscriptionlib.Swap(give=inscriptionlib.Leg(inscriptionlib.LEG_INSCRIPTION,

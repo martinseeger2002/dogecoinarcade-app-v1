@@ -86,11 +86,11 @@ class _TemplateState:
 
 def ord_wallet() -> dict:
     """The Wallet's ord chains (the original's ord_chains.wallet_table): which chains show Doginals and what they are
-    called. Shown here from V1.0's ord indexes (doginals.py); sending, listing and swapping them are not on this site
-    yet, so those are off (the page shows them view-only)."""
+    called. Shown here from V1.0's ord indexes (doginals.py); sent one at a time (ordsend.py, 2026-11-12); listing and
+    swapping them are not on this site yet, so those are off."""
     from arcade import ord_chains as ordchainslib
     from .doginals import ORD_CHAINS
-    return {n: {**v, "send": False, "list": False, "swap": False,
+    return {n: {**v, "send": True, "list": False, "swap": False,
                 "version": NETWORKS[n].pubkeyhash_version if n in NETWORKS else None}
             for n, v in ordchainslib.wallet_table().items() if n in ORD_CHAINS}
 

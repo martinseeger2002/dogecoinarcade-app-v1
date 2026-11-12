@@ -1598,6 +1598,11 @@ function openSend(prefill = "", piece = null) {
     if (!w.status || w.status.state !== "ready") { toast(`${w.name}'s coins are still being read back`); return; }
     Object.assign(what, {from: w.address, imported: w, balance: w.status.spendable || 0});
   }
+  // Its inscriptions (2026-11-12): signed with its own key, the fee from its own coins (ordsend.py).
+  if (w && what.kind === "doginal") {
+    if (!w.status || w.status.state !== "ready") { toast(`${w.name}'s coins are still being read back`); return; }
+    Object.assign(what, {from: w.address, imported: w});
+  }
   // Its tokens (2026-11-12): only the ones picked on its own Tokens tab; the fees come from its own coins.
   if (what.kind === "token20" && what.from) {
     if (!w || w.address !== what.from) { toast("Pick that wallet again to send its tokens"); return; }
@@ -1605,6 +1610,9 @@ function openSend(prefill = "", piece = null) {
   }
   step1(s, {to: prefill, amount: piece ? "1" : "", what});
 }
+
+/** Bytes as hex (an imported wallet's public key, sent beside its send). */
+const hexOf = (b) => b ? [...b].map((x) => x.toString(16).padStart(2, "0")).join("") : "";
 
 /** The offer for what is being sent, from the node. */
 async function offerFor(what, to, amount, network) {
@@ -1631,7 +1639,8 @@ async function offerFor(what, to, amount, network) {
     // this Doginal before it will: the one time the server asks, because a send needs it.
     const g = what.doginal;
     const asked = await fetch("/account/doginal/send", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({txid: g.txid, vout: g.vout, inscription: g.id, to, chain: network})});
+      body: JSON.stringify({txid: g.txid, vout: g.vout, inscription: g.id, to, chain: network,
+                            ...(what.imported ? {from: what.from, pubkey: hexOf(what.importedKeys && what.importedKeys.pubkey)} : {})})});
     const offer = await asked.json();
     if (!asked.ok) throw new Error(offer.detail || "that inscription cannot be sent");
     return offer;
@@ -2657,7 +2666,8 @@ async function dgUnlist(listing) {
 // The card: everything about one, its content link, and Send and List.
 async function openDgCard(g, wantPrice = false) {
   const net = dg.net, [W, C] = ORD_WORDS[net], can = ORD[net];
-  const owned = !pickedNow() && can.send;
+  // Sent from this account's wallet or an imported one (2026-11-12, ordsend.py); listed from this account's only.
+  const owned = can.send, mine = !pickedNow();
   document.querySelector(".dg-shade")?.remove();
   const shade = el("div", "dg-shade"), modal = el("div", "dg-modal");
   modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true");
@@ -2729,7 +2739,7 @@ async function openDgCard(g, wantPrice = false) {
     row("Inscribed", `block ${Number(ins.height).toLocaleString()}${got.made ? " · " + new Date(got.made * 1000).toLocaleDateString() : ""}`);
     if (ins.output) row("On coin", `${short(ins.output.split(":")[0])}:${ins.output.split(":")[1]} · offset ${ins.offset ?? 0}`
                         + (g.value != null ? ` · ${coinsOf(g.value)} ${C}` : ""), true);
-    if (ins.owner) row("Owner", ins.owner + (owned ? " (you)" : ""), true);
+    if (ins.owner) row("Owner", ins.owner + (owned && mine ? " (you)" : ""), true);
     parts.push(dl);
     const links = el("div", "dg-links");
     const open = el("a", "", "Open content ↗"); open.href = got.content || `/content/${g.id}`; open.target = "_blank"; open.rel = "noopener";
@@ -2756,7 +2766,7 @@ async function openDgCard(g, wantPrice = false) {
       const send = el("button", "dg-send", "Send"); send.type = "button";
       send.onclick = () => { close(); openSend("", g); };
       acts.append(send);
-      if (can.list && LISTS) {
+      if (can.list && LISTS && mine) {
         const box = el("span", "dg-pricebox");
         const price = el("input"); price.inputMode = "decimal"; price.placeholder = "Price";
         price.setAttribute("aria-label", `Price in ${C}`);
@@ -2779,7 +2789,7 @@ async function openDgCard(g, wantPrice = false) {
       }
     }
     parts.push(acts);
-    if (!listing && can.list && LISTS) parts.push(el("p", "wl-note", "List puts it on the NFT Exchange at your price. It stays held until it sells or you unlist it."));
+    if (!listing && can.list && LISTS && mine) parts.push(el("p", "wl-note", "List puts it on the NFT Exchange at your price. It stays held until it sells or you unlist it."));
   }
   body.replaceChildren(...parts);
 }
@@ -2879,15 +2889,12 @@ async function drawDoginals() {
       + `${dg.view.order === "new" ? "newest" : "earliest"} first.` : "");
   // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
   // top of their asset"): the send's fee. `spendable` already leaves the Doginals out. A listing costs the seller nothing.
-  const free = Number(c.spendable || 0);
-  const sendShort = !w && free < Number(c.doginal_send_need || 0);
+  const free = w ? Number((w.status || {}).spendable || 0) : Number(c.spendable || 0);
+  const sendShort = free < Number(c.doginal_send_need || 0);
   const notes = [];
   if (viewOnly && counts.all) {
     notes.push(el("p", "wl-note", `Your ${W}s, read from the chain. Sending and listing a ${W} from the `
       + "arcade is not ready yet: they stay safe here, and an ordinary send never spends one."));
-  } else if (w && counts.all) {
-    notes.push(el("p", "wl-note", `These are ${w.name}'s. Sending or listing a ${W} from an imported wallet is not `
-      + "ready yet: choose your arcade wallet above to send one of its own."));
   } else if (counts.all && sendShort) {
     notes.push(el("p", "wl-note dg-need", `To send a ${W} you need some ${C} besides it for the network fee: about `
       + `${coinsOf(c.doginal_send_need)} ${C}. This wallet has ${coinsOf(free)} ${C} to spend.`));
@@ -2955,9 +2962,9 @@ async function drawDoginals() {
       card.append(el("div", "dg-num", n !== null ? `#${n.toLocaleString()}` : "#…"));
       card.append(el("div", "dg-coll" + (k ? "" : " none"),
                      k ? (k.item || k.name) : (n !== null && d.done ? "No collection" : "")));
-      if (viewOnly || w) {
+      if (viewOnly) {
         // shown only (above)
-      } else if (isListed(g)) {
+      } else if (!w && isListed(g)) {
         const un = el("button", "wl-piecesend ghost", "Unlist"); un.type = "button";
         un.setAttribute("aria-label", `Unlist ${W} ${g.id}`);
         un.onclick = () => openDgCard(g);
@@ -2969,7 +2976,7 @@ async function drawDoginals() {
         send.onclick = () => openSend("", g);
         if (sendShort) { send.disabled = true; send.title = `Needs ${C} besides the ${W} for the network fee`; }
         row.append(send);
-        if (can.list && LISTS) {
+        if (can.list && LISTS && !w) {
           const list = el("button", "wl-piecesend ghost", "List"); list.type = "button";
           list.setAttribute("aria-label", `List ${W} ${g.id}`);
           list.onclick = () => openDgCard(g, true);
