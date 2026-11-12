@@ -941,7 +941,7 @@ html[data-skin="dogefeedx"], html[data-skin="dogefeedx"] body {
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', href: '/apps', img: STORE_ICON};
   byKey.display = {key: 'display', kind: 'display', name: UB ? 'Background' : 'Display Properties',
                    glyph: ['#008080', '#fff', 'M3 4h18v12H3zM8 20h8M12 16v4M6 13l4-4 3 3 2-2 3 3']};
-  APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
+  APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.icon || a.cover, app: a}; });   // its icon, else its card picture
   // A wallet shortcut for every coin: the Wallet opened on that coin (my_wallet.html, ?coin=).
   var WALLET = (TABS.filter(function (t) { return t.href === '/me/wallet' || t.href === '/wallet'; })[0] || {}).href || '/wallet';
   COINS.forEach(function (c) {
