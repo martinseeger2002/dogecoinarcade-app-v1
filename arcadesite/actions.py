@@ -46,7 +46,7 @@ def class_c_or_b(chain, address: str, raw: bytes, coin_pubkey: bytes = b"", wrap
     if not coin_pubkey:
         raise fundinglib.FundingError("this account has not told the node its public key, so a Class B payload "
                                       "cannot be built. Sign in again.")
-    outputs = [(sendermod.OUTPUT_VALUE, txbuild.p2pkh_script(chain.params.marker))]
+    outputs = [(sendermod.OUTPUT_VALUE, txbuild.p2pkh_script(chain.params.marker, getattr(chain, "params", None)))]
     for grp in encode_class_b(address, coin_pubkey, payload):
         outputs.append((sendermod.OUTPUT_VALUE, txbuild.multisig_script(list(grp.keys), grp.required)))
     return outputs
@@ -317,7 +317,7 @@ def register(app, st, chains):
                 if not where:
                     raise ValueError(f"there is nowhere to send it: whoever wrote that has not published a "
                                      f"{chain.label} address")
-                outputs.append((amount, txbuild.p2pkh_script(where)))
+                outputs.append((amount, txbuild.p2pkh_script(where, getattr(chain, "params", None))))
                 paid = amount
             unsigned = build(account, chain, address, outputs, feedlib.NAMES.get(kind, "a reaction"))
             quota(account, "react", len(note))

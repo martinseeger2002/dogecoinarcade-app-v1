@@ -92,7 +92,7 @@ def build_reveal(params, commit: dict, pushes: list[bytes], redeem: bytes, addre
     signs over `redeem` (coins.js `noteKey` checks it is its own key's); the node puts the envelope in front of the
     signature (funding.assemble, `envelope`)."""
     value = int(commit["value"])
-    outputs = list(outputs) if outputs else [(POSTAGE, p2pkh_script(address))]
+    outputs = list(outputs) if outputs else [(POSTAGE, p2pkh_script(address, params))]
     if value <= sum(v for v, _ in outputs):
         raise FundingError("the commit coin does not cover the note's coin")
     given = [{"txid": str(commit["txid"]), "vout": int(commit["vout"]), "value": value,

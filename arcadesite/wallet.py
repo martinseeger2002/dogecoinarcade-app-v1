@@ -325,7 +325,40 @@ def register(app, st, chains):
             if version != 0:
                 raise ValueError("that is not a native SegWit address for this chain")
             return bytes([0x00, len(program)]) + program
-        return txbuild.p2pkh_script(to)
+        return txbuild.p2pkh_script(to, one.params)
+
+    @app.post("/account/address")
+    def account_address(request: Request, payload: Any = Body(None)):
+        """File this account's address on one chain (the original's route; wallet_js tellTheNode asks it for every
+        listed chain the account has no address on yet, so a coin added later gets the account's address the next time
+        the wallet opens). Checked, never derived here: the chain's own version byte, never another account's, and a
+        first claim proved by that address's own key (wallet_js claimProof). V1.0 indexes every address, so nothing is
+        watched here."""
+        from arcade import wallet_imports
+        account = signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        address = str(said.get("address", "")).strip()
+        try:
+            one = chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        complaint = chains.check_address(address, one)
+        if complaint:
+            return JSONResponse({"detail": complaint}, status_code=400)
+        if chains.address_held_by_another(account.pubkey, one, address):
+            return JSONResponse({"detail": "that address is another account's on this arcade"}, status_code=409)
+        coin = str(said.get("coin_pubkey", "")).strip().lower()
+        if address != chains.account_address(account.pubkey, one):
+            try:
+                wallet_imports.check_proof(one.params, account.pubkey, one.network, address, coin, "p2pkh",
+                                           str(said.get("address_signature") or ""))
+            except wallet_imports.ImportRefused as exc:
+                return JSONResponse({"detail": f"that address was not proved to be this account's: {exc}"},
+                                    status_code=400)
+        st.set_setting(chains.address_key(account.pubkey, one), address)
+        if coin:
+            st.set_setting(chains.coinkey_key(account.pubkey, one), coin)
+        return JSONResponse({"address": address, "chain": one.network})
 
     @app.post("/account/send")
     def account_send(request: Request, payload: Any = Body(None)):

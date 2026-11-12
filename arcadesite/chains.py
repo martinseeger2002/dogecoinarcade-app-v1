@@ -18,7 +18,8 @@ from .addresses import _check_address
 from .v1 import V1, V1Error, chain_key
 
 #: The original's order of chains in a wallet (its Params order), by original network name.
-ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "ltctest", "dgbtest")
+ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest")
+# Bitcoin (config.BITCOIN) is defined but not listed yet (the operator, 2026-11-12: "no Bitcoin yet").
 
 
 @dataclass(frozen=True)

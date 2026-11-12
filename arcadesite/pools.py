@@ -641,7 +641,7 @@ def register(app, st, chains):
                  if named is None else swaplib.describe_leg(swaplib.leg_json(named.give, index)))
         if lot:
             piece = lot_words(chain, lot)
-            outputs = list(outputs) + [(fees.DUST_LIMIT, txbuild.p2pkh_script(address))]
+            outputs = list(outputs) + [(fees.DUST_LIMIT, txbuild.p2pkh_script(address, getattr(chain, "params", None)))]
         take = named.take if named is not None else None
         if take is not None and take.kind == inscriptionlib.LEG_TOKEN:
             left = index.balance(address, take.property_id) - index.pending_out(address, take.property_id)
@@ -896,8 +896,8 @@ def register(app, st, chains):
             outputs = [(int(round(float(o["value"]) * COIN)), bytes.fromhex(o["scriptPubKey"]["hex"])) for o in vout]
             if outputs[:len(leg.outputs)] != list(leg.outputs):
                 raise refereelib.RefereeError("that claim does not pay the pool what the lot asks")
-            mine = txbuild.p2pkh_script(claimer)
-            back = txbuild.p2pkh_script(pool["pool"])
+            mine = txbuild.p2pkh_script(claimer, getattr(chain, "params", None))
+            back = txbuild.p2pkh_script(pool["pool"], getattr(chain, "params", None))
             rest = outputs[len(leg.outputs):]
             if (not rest or rest[-1][1] != mine
                     or any(script not in (mine, back) for _, script in rest)):
@@ -1250,7 +1250,7 @@ def register(app, st, chains):
                     f"{format_amount(max(0, free), prop['divisible'])} free")
             naming = encode_class_c(P.SimpleSend(property_id=prop["property_id"], amount=units * count).encode())
             outputs = ([(0, txbuild.op_return_script(naming))]
-                       + [(SPLIT_EACH, txbuild.p2pkh_script(pool["address"]))] * (2 * count))
+                       + [(SPLIT_EACH, txbuild.p2pkh_script(pool["address"], getattr(chain, "params", None)))] * (2 * count))
             unsigned = fundinglib.build(
                 CoinDB(v1, chain), chain.params, main, outputs, rate=fees.MIN_FEE_PER_KB,
                 what=(f"move {format_amount(units * count, prop['divisible'])} "
@@ -1286,7 +1286,7 @@ def register(app, st, chains):
             raise ValueError("a pool needs the sha256 of its phrase")
         bound = bound_of(chain, main, said)
         count = len(pieces)
-        outputs = [(SPLIT_EACH, txbuild.p2pkh_script(pool["address"]))] * (2 * count)
+        outputs = [(SPLIT_EACH, txbuild.p2pkh_script(pool["address"], getattr(chain, "params", None)))] * (2 * count)
         unsigned = fundinglib.build(CoinDB(v1, chain), chain.params, main, outputs, rate=fees.MIN_FEE_PER_KB,
                                     what=f"move {2 * count} coins into a prize pool of {count} pieces")
         quota(account, "send")
@@ -1317,7 +1317,7 @@ def register(app, st, chains):
                 tx = rpc.call("getrawtransaction", fund, 1)
             outs = tx.get("vout") or []
             count = int(pool["count"])
-            script = txbuild.p2pkh_script(pool["address"]).hex()
+            script = txbuild.p2pkh_script(pool["address"], getattr(chain, "params", None)).hex()
             for vout in range(1, 1 + 2 * count):
                 out = outs[vout] if vout < len(outs) else {}
                 if (str((out.get("scriptPubKey") or {}).get("hex") or "") != script
@@ -1355,7 +1355,7 @@ def register(app, st, chains):
             tx = rpc.call("getrawtransaction", fund, 1)
         outs = tx.get("vout") or []
         count = int(pool["count"])
-        script = txbuild.p2pkh_script(pool["address"]).hex()
+        script = txbuild.p2pkh_script(pool["address"], getattr(chain, "params", None)).hex()
         for vout in range(0, 2 * count):
             out = outs[vout] if vout < len(outs) else {}
             if (str((out.get("scriptPubKey") or {}).get("hex") or "") != script
@@ -1519,7 +1519,7 @@ def register(app, st, chains):
         listing["id"] = ""
         if pays:
             foreign, outputs = listingslib.leg_terms(listing)
-            outputs = list(outputs) + [(fees.DUST_LIMIT, txbuild.p2pkh_script(address))]
+            outputs = list(outputs) + [(fees.DUST_LIMIT, txbuild.p2pkh_script(address, getattr(chain, "params", None)))]
             raw = txbuild.build_raw_tx([(c["txid"], int(c["vout"])) for c in foreign], outputs)
             what = f"claim {piece_called(chain, listing)}, its fee paid by the pool"
             unsigned = fundinglib.Unsigned(raw=raw, inputs=[dict(c) for c in foreign], outputs=outputs,

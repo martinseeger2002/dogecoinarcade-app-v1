@@ -1128,7 +1128,7 @@ def register(app, st, chains):
             filling = standing.get(str(said.get("standing") or ""))
             if filling and (filling["account"] != account.pubkey or filling["property_id"] != row["sale_property"]):
                 filling = None
-            outputs = [(need, txbuild.p2pkh_script(row["address"]))] + class_c_or_b(
+            outputs = [(need, txbuild.p2pkh_script(row["address"], getattr(chain, "params", None)))] + class_c_or_b(
                 chain, address, message.encode(), coin_pubkey(account.pubkey, chain), wrap=False)
             shown = format_amount(units, prop["divisible"])
             what = f"buy {shown} {prop['name']} for {format_amount(need, True)} coins"

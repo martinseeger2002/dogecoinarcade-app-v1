@@ -66,7 +66,7 @@ def build_send(v1, chain, address: str, coin: dict, to: str, what: str) -> fundi
     """The inscribed coin first, whole to `to`; clean coins pay the fee; change last (creator.note_send's shape)."""
     params = chain.params
     db = CoinDB(v1, chain)
-    paid = [(int(coin["value"]), txbuild.p2pkh_script(to))]
+    paid = [(int(coin["value"]), txbuild.p2pkh_script(to, getattr(chain, "params", None)))]
     keep_out = {(coin["txid"], int(coin["vout"]))}
     rate = fees.rate_for(params, fees.MIN_FEE_PER_KB)
     net = getattr(params, "name", None)
@@ -82,12 +82,12 @@ def build_send(v1, chain, address: str, coin: dict, to: str, what: str) -> fundi
     change = sum(c["value"] for c in fees_in) - fee
     outputs = list(paid)
     if change >= fees.dust_limit(params):
-        outputs.append((change, txbuild.p2pkh_script(address)))
+        outputs.append((change, txbuild.p2pkh_script(address, getattr(chain, "params", None))))
     else:
         fee += max(0, change)
         change = 0
     raw = fundinglib.build_raw_tx([(c["txid"], c["vout"]) for c in chosen], outputs)
-    script = txbuild.p2pkh_script(address)
+    script = txbuild.p2pkh_script(address, getattr(chain, "params", None))
     hashes = [fundinglib.sighash(chosen, outputs, n, script).hex() for n in range(len(chosen))]
     return fundinglib.Unsigned(raw=raw, inputs=chosen, outputs=outputs, sighashes=hashes, fee=fee,
                                change=change, what=what)
@@ -130,7 +130,7 @@ def register(app, st, chains):
                     key = bytes.fromhex(str(said.get("pubkey") or ""))
                 except ValueError:
                     key = b""
-                if len(key) != 33 or txbuild.p2pkh_script(frm) != b"\x76\xa9\x14" + hash160(key) + b"\x88\xac":
+                if len(key) != 33 or txbuild.p2pkh_script(frm, getattr(chain, "params", None)) != b"\x76\xa9\x14" + hash160(key) + b"\x88\xac":
                     raise ValueError("that is not the key of that wallet's address")
                 address = frm
             if not address:
