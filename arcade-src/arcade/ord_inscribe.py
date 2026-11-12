@@ -200,7 +200,7 @@ def plan(net: str, params, content_type: str, content: bytes, pubkey: bytes, to:
     values, paid = [0] * n, [0] * n
     after = POSTAGE                                  # what the output of the reveal being priced holds
     for i in range(n - 1, -1, -1):
-        out = p2sh(locks[i + 1]) if i + 1 < n else p2pkh_script(to)
+        out = p2sh(locks[i + 1]) if i + 1 < n else p2pkh_script(to, params)
         fee = fees.fee_for(_reveal_size(bs[i], locks[i], out), 1, rate)
         if soft:
             fee += fees.soft_dust_fee([(after, out)])

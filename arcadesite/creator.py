@@ -302,7 +302,7 @@ def register(app, st, chains):
         sats = max(share, floor)
         said = {"address": to, "value": sats, "permille": max(0, permille), "minimum": floor,
                 "at_minimum": share < floor}
-        return [(sats, txbuild.p2pkh_script(to))], said
+        return [(sats, txbuild.p2pkh_script(to, getattr(chain, "params", None)))], said
 
     # ---------------------------------------------------------------- pages
     @app.get("/create/chain")
@@ -518,7 +518,7 @@ def register(app, st, chains):
                                  "operator_fee": fee_said, **unsigned.as_json()})
         manifest, at, chunk_len, contents = how_it_is_split(plan)
         piece = inscribelib.piece_size(plan)
-        unsigned = build(chain, address, [(piece, txbuild.p2pkh_script(address))] * plan.chunks + fee_out,
+        unsigned = build(chain, address, [(piece, txbuild.p2pkh_script(address, getattr(chain, "params", None)))] * plan.chunks + fee_out,
                          f"split into {plan.chunks:,} outputs, to inscribe {label} in {plan.chunks:,} transactions")
         quota(account, "inscribe", len(content), count=charge)
         job = parts_book.create(
@@ -540,7 +540,7 @@ def register(app, st, chains):
             return JSONResponse(said)
         fee_out, fee_said = operator_fee(chain, address,
                                          int(round((float(row["fee"] or 0) + float(row["dust"] or 0)) * COIN)))
-        unsigned = build(chain, address, [(int(row["piece"]), txbuild.p2pkh_script(address))] * int(row["chunks"])
+        unsigned = build(chain, address, [(int(row["piece"]), txbuild.p2pkh_script(address, getattr(chain, "params", None)))] * int(row["chunks"])
                          + fee_out, f"split into {int(row['chunks']):,} outputs, to inscribe {row['name']} in "
                                     f"{int(row['chunks']):,} transactions")
         offer = offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
@@ -1356,7 +1356,7 @@ def register(app, st, chains):
         without the original's inscription guard, which is V1.0's held_back here."""
         params = chain.params
         db = CoinDB(v1, chain)
-        first = txbuild.p2pkh_script(to)
+        first = txbuild.p2pkh_script(to, getattr(chain, "params", None))
         paid = [(int(coin["value"]), first)]
         keep_out = {(coin["txid"], int(coin["vout"]))}
         rate = fees.rate_for(params, fees.MIN_FEE_PER_KB)
@@ -1371,12 +1371,12 @@ def register(app, st, chains):
         change = sum(c["value"] for c in fees_in) - fee
         outputs = list(paid)
         if change >= fees.dust_limit(params):
-            outputs.append((change, txbuild.p2pkh_script(address)))
+            outputs.append((change, txbuild.p2pkh_script(address, getattr(chain, "params", None))))
         else:
             fee += max(0, change)
             change = 0
         raw = fundinglib.build_raw_tx([(c["txid"], c["vout"]) for c in chosen], outputs)
-        script = txbuild.p2pkh_script(address)
+        script = txbuild.p2pkh_script(address, getattr(chain, "params", None))
         hashes = [fundinglib.sighash(chosen, outputs, n, script).hex() for n in range(len(chosen))]
         return fundinglib.Unsigned(raw=raw, inputs=chosen, outputs=outputs, sighashes=hashes, fee=fee,
                                    change=change, what=what)
@@ -1464,7 +1464,7 @@ def register(app, st, chains):
                 t20_pending.setdefault((r["chain"], r["address"]), []).append(
                     {"tick": r["tick"].lower(), "units": u, "run": r, "at": time.time()})
             offer = offers.add(account.pubkey, chain.network, unsigned, unsigned.what, done=committed)
-            send_fee = fundinglib.price(2, [(t20.POSTAGE, txbuild.p2pkh_script(to))],
+            send_fee = fundinglib.price(2, [(t20.POSTAGE, txbuild.p2pkh_script(to, getattr(chain, "params", None)))],
                                         fees.rate_for(chain.params, fees.MIN_FEE_PER_KB), change=True,
                                         params=chain.params)
             return JSONResponse({"send": sid, "step": "commit", "of": 3, "offer": offer.id, "note": run["note"],
@@ -1879,7 +1879,7 @@ def register(app, st, chains):
                 ord_update(r, lambda run: (run.__setitem__("txids", [txid]), run.__setitem__("commit_vout", v)))
             offer = offers.add(account.pubkey, chain.network, unsigned, unsigned.what, done=committed)
             c = oi.costs(p)
-            mine = txbuild.p2pkh_script(address)
+            mine = txbuild.p2pkh_script(address, getattr(chain, "params", None))
             change_vout = next((n for n, (_v, s) in enumerate(unsigned.outputs) if s == mine), None)
             return JSONResponse({"run": rid, "step": 0, "of": p.reveals + 1, "offer": offer.id, "chain": chain.network,
                                  "label": oi.rules_of(chain.network).label, "next_lock": p.locks[0].hex(),
@@ -1910,7 +1910,7 @@ def register(app, st, chains):
                 raise ValueError(f"from 2 to {ORD_LANES_MOST} lanes")
             if each < max(fees.dust_limit(chain.params), oi.POSTAGE * 2):
                 raise ValueError("each lane needs at least enough for one ord")
-            unsigned = build(chain, address, [(each, txbuild.p2pkh_script(address))] * lanes,
+            unsigned = build(chain, address, [(each, txbuild.p2pkh_script(address, getattr(chain, "params", None)))] * lanes,
                              f"split into {lanes} coins of your own, one per lane of a collection")
             quota(account, "send")
             offer = offers.add(account.pubkey, chain.network, unsigned, unsigned.what)

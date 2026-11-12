@@ -301,12 +301,12 @@ def pay_out(coin: dict, to: str, fee: int | None = None,
     for cut, payee_address in _operators(operator):
         if cut < dust_of(params):
             raise HtlcError("an operator fee under the dust line would not relay")
-        outputs.append((cut, p2pkh_script(payee_address)))
+        outputs.append((cut, p2pkh_script(payee_address, params)))
         value -= cut
     if value < dust_of(params):
         raise HtlcError("the lock holds too little to pay for its own spend")
     return ([{"txid": coin["txid"], "vout": int(coin["vout"])}],
-            outputs + [(value, p2pkh_script(to))])
+            outputs + [(value, p2pkh_script(to, params))])
 
 
 def move_out(coin: dict, lock_address: str, data: bytes, to: str,
@@ -326,7 +326,7 @@ def move_out(coin: dict, lock_address: str, data: bytes, to: str,
             # More than the reserve in the lock (its operator fee, on a refund): all of it to `to`, not back into the
             # lock, where nobody would ever spend it.
             return ([{"txid": coin["txid"], "vout": int(coin["vout"])}],
-                    [(0, op_return_script(data)), (value - int(fee), p2pkh_script(to))])
+                    [(0, op_return_script(data)), (value - int(fee), p2pkh_script(to, params))])
         return E.move_out(coin, lock_address, data, to, fee=fee)
     pays = _operators(operator)
     rest = int(coin["value"]) - int(fee) - sum(v for v, _a in pays)
@@ -335,8 +335,8 @@ def move_out(coin: dict, lock_address: str, data: bytes, to: str,
     if rest < dust_of(params):
         raise HtlcError("that lock holds too little coin to move its token or NFT out and pay the operator fee")
     outputs = [(0, op_return_script(data))]
-    outputs += [(v, p2pkh_script(a)) for v, a in pays]
-    outputs.append((rest, p2pkh_script(to)))
+    outputs += [(v, p2pkh_script(a, params)) for v, a in pays]
+    outputs.append((rest, p2pkh_script(to, params)))
     return ([{"txid": coin["txid"], "vout": int(coin["vout"])}], outputs)
 
 

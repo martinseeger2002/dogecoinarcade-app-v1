@@ -840,6 +840,30 @@ JUNKCOIN = dataclasses.replace(
     cltv_enforced=False,
 )
 
+# Shibacoin (2026-11-12, the same ask). Dogecoin's code (1 coin/kB rules, as Arcade V1.0's fee_policy "shic"), merge-
+# mined (chain id 0x4A). Versions 63 ("S...") and 22, WIF 158. Its key-hash byte 63 is DigiByte's script-hash byte:
+# txbuild.AMBIGUOUS_VERSIONS, so every script for it is built with the chain named (p2pkh_script(address, params)).
+SHIC_MAINNET_FLOOR = 953_000
+SHIBACOIN = dataclasses.replace(
+    DOGECOIN,
+    name="shic",
+    rpc_port=33863,
+    p2p_port=33864,
+    activation_height=SHIC_MAINNET_FLOOR,
+    messaging_start_height=SHIC_MAINNET_FLOOR,
+    pubkeyhash_version=63,
+    scripthash_version=22,
+    other_pubkeyhash_version=None,
+    coin="SHIC",
+    label="Shibacoin",
+    genesis="ff271edcc83f7d71e7a4e4b0a43b386a188e1470a28671cdbdc47e900118ac7f",
+    auxpow_chain_id=0x4A,
+    addon=True, node_dir=".shibacoin", node_conf="shibacoin.conf",
+    letter="S", family="SHIC", net_word="shibacoin", real_coins=True,
+    trust_progress=False,
+    cltv_enforced=False,
+)
+
 # Bitcoin (2026-11-12, the same ask). Versions 0 ("1...") and 5 ("3..."), WIF 128; keys on BIP44 coin type 0 as Arcade
 # V1.0's wallet derives them (coins.js COIN_TYPE), so the same twelve words give the same address in both. Arcade V1.0's
 # price (fee_policy default: 20,000 sat/kB, dust 1,000). Legacy addresses only here. No arcade tokens (class_b False).
@@ -867,7 +891,7 @@ BITCOIN = dataclasses.replace(
 
 NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN, LITECOIN, LITECOIN_TESTNET,
                                 BELLSCOIN, LUCKYCOIN, KOTIA, WOJAKCOIN, DIGIBYTE, DIGIBYTE_TESTNET, FLOPCOIN,
-                                JUNKCOIN, BITCOIN)}
+                                JUNKCOIN, BITCOIN, SHIBACOIN)}
 
 def unpayable_versions(params: "Params") -> frozenset:
     """The version bytes of `params`' own script-hash addresses that another known chain uses for a key hash.
@@ -880,7 +904,10 @@ def unpayable_versions(params: "Params") -> frozenset:
     if name not in NETWORKS or version is None:
         return frozenset()
     key_hashes = {p.pubkeyhash_version for p in NETWORKS.values() if p.name != name}
-    return frozenset({version} & key_hashes)
+    # A byte txbuild reads by the chain named (AMBIGUOUS_VERSIONS: DigiByte's script hash is Shibacoin's key hash) is
+    # payable: a script for it is built only with the chain given, and refused without it (2026-11-12).
+    from .txbuild import AMBIGUOUS_VERSIONS
+    return frozenset(({version} & key_hashes) - AMBIGUOUS_VERSIONS)
 
 
 def require_cltv(params: "Params") -> None:
@@ -1051,6 +1078,7 @@ CHAIN_NAMES = {
     "dgbtest": "test",
     "flop": "main",                 # and Flopcoin
     "jkc": "main",                  # and Junkcoin
+    "shic": "main",                 # and Shibacoin
     "btc": "main",                  # and Bitcoin
 }
 

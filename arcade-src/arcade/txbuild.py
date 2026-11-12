@@ -47,25 +47,50 @@ def push(data: bytes) -> bytes:
 SCRIPTHASH_VERSIONS = frozenset({22, 196, 50, 5, 58, 63, 45, 140})
 
 
-def p2pkh_script(address: str) -> bytes:
-    """The script that pays `address`. A script-hash address gets
+#: Version bytes that are one chain's key hash and another's script hash, so the byte alone cannot say which script
+#: pays it (2026-11-12): 63 is DigiByte's P2SH ("S...") and Shibacoin's P2PKH ("S..." too). An address with one of
+#: these is paid only when the chain it is paid on is named (`params`); without it, refused rather than guessed.
+AMBIGUOUS_VERSIONS = frozenset({63})
+
+
+def _scripthash(version: int, address: str, params=None) -> bool:
+    if params is not None:
+        if version == getattr(params, "pubkeyhash_version", None):
+            return False
+        if version == getattr(params, "scripthash_version", None):
+            return True
+    elif version in AMBIGUOUS_VERSIONS:
+        raise ValueError(f"address {address!r} is a DigiByte script address or a Shibacoin address: the chain it is "
+                         f"paid on must be named. Nothing was built.")
+    return version in SCRIPTHASH_VERSIONS
+
+
+def p2pkh_script(address: str, params=None) -> bytes:
+    """The script that pays `address` (on the chain `params` describes, when given). A script-hash address gets
     OP_HASH160 <20> OP_EQUAL (2026-09-29: refereed prize pools live at one).
     Before that date every address got the pubkey-hash script, so coins sent to
     a script-hash address -- which `_check_address` accepts -- would have gone
-    to a key nobody holds."""
+    to a key nobody holds. On a chain named by `params`, its own key-hash byte is a key hash and its own script-hash
+    byte a script hash; any other byte reads as before. A byte two chains read differently (AMBIGUOUS_VERSIONS)
+    needs `params`."""
     version, h160 = b58check_decode(address)
     if len(h160) != 20:
         raise ValueError(f"address {address!r} does not contain a 20-byte hash")
-    if version in SCRIPTHASH_VERSIONS:
+    if _scripthash(version, address, params):
         return b"\xa9" + push(h160) + b"\x87"
     return b"\x76\xa9" + push(h160) + b"\x88\xac"
 
 
-def is_scripthash(address: str) -> bool:
+def is_scripthash(address: str, params=None) -> bool:
+    """Whether `address` is a script hash (on the chain `params` describes, when given). Without `params`, a byte two
+    chains read differently (AMBIGUOUS_VERSIONS) reads as a script hash, as it did before Shibacoin."""
     try:
-        return b58check_decode(address)[0] in SCRIPTHASH_VERSIONS
+        version = b58check_decode(address)[0]
     except Exception:                                    # noqa: BLE001
         return False
+    if params is None:
+        return version in SCRIPTHASH_VERSIONS
+    return _scripthash(version, address, params)
 
 
 def op_return_script(data: bytes) -> bytes:

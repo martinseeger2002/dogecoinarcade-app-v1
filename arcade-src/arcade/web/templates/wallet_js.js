@@ -930,7 +930,7 @@ export async function llmTopupSign(mine, {seller = "", here = false, network, tx
 //: names are config.py NETWORKS (`real_coins`; tests/test_mainnet_review_names.py holds them to it). A name this file
 //: does not know is mainnet too: asked about, never waved through. The test chains also sign with the m/44'/1' key
 //: (coins.COIN_TYPE), which holds no mainnet coin, so a node calling a mainnet chain "test" gets a signature for nothing.
-export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc"]);
+export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc", "shic"]);
 export const TESTNETS = new Set(["test", "regtest", "ltctest", "dgbtest"]);
 export function isMainnet(network) {
   return !TESTNETS.has(String(network || ""));
@@ -3491,11 +3491,11 @@ export const TRADE = {
 //: The real-coin chains (config.py `real_coins`): their legs are mainnet tier (trade.Leg.tier).
 //: Each chain's coin as a leg says it (config.py `coin`).
 const COIN_WORD = {doge: "DOGE", main: "PEP", ltc: "LTC", ltctest: "LTC TEST", bel: "BEL", lky: "LKY", kot: "KOT", wjk: "WJK",
-                   dgb: "DGB", flop: "FLOP", jkc: "JKC", btc: "BTC"};
-const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc"]);
+                   dgb: "DGB", flop: "FLOP", jkc: "JKC", btc: "BTC", shic: "SHIC"};
+const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc", "shic"]);
 //: Chains whose consensus never enforces CHECKLOCKTIMEVERIFY (config.Params.cltv_enforced): a swap lock there refunds
 //: at any moment, so the side that locked could take it back after the other side claimed. No lock is made on them.
-const NO_CLTV = new Set(["wjk", "jkc"]);
+const NO_CLTV = new Set(["wjk", "jkc", "shic"]);
 //: Chains where no lock is made for another reason (config.require_p2sh_payable, config.require_untimed): Bellscoin's
 //: script addresses share Dogecoin's "D" byte, and Kotia's lock claims and refunds would lack its transaction time.
 const NO_LOCK = new Set(["bel", "kot"]);

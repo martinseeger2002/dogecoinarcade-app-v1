@@ -488,13 +488,13 @@ def build_one(params: Params, address: str, coin: dict,
         # Back to the sender, as always: a Class B payload's obfuscation is
         # seeded with the largest input, and a piece whose change wandered off
         # would be read as somebody else's and never indexed.
-        outputs.append((change, p2pkh_script(address)))
+        outputs.append((change, p2pkh_script(address, params)))
     else:
         fee += max(0, change)
         change = 0
 
     raw = build_raw_tx([(txid, vout)], outputs)
-    script = p2pkh_script(address)
+    script = p2pkh_script(address, params)
     return Unsigned(raw=raw, inputs=[given], outputs=outputs,
                     sighashes=[sighash([given], outputs, 0, script).hex()],
                     fee=fee, change=change, what=what)
@@ -533,9 +533,9 @@ def build_sweep(db, params: Params, address: str, coins: list[dict], rate: int,
     change = total - fee
     if change < least:
         raise FundingError("this account does not hold enough to pay the fee")
-    outputs = [(change, p2pkh_script(address))]
+    outputs = [(change, p2pkh_script(address, params))]
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in given], outputs)
-    script = p2pkh_script(address)
+    script = p2pkh_script(address, params)
     return Unsigned(raw=raw, inputs=given, outputs=outputs,
                     sighashes=[sighash(given, outputs, n, script).hex()
                                for n in range(len(given))],
@@ -596,7 +596,7 @@ def build_bid(db, params: Params, buyer: str, seller: str, payload: bytes,
     """
     untimed(params, "bid")
     payload_script = op_return_script(payload)
-    seller_out = (int(price_sats) + EXACT_SELLER_COIN, p2pkh_script(seller))
+    seller_out = (int(price_sats) + EXACT_SELLER_COIN, p2pkh_script(seller, params))
     outputs = [(0, payload_script), seller_out]
     spend = int(price_sats)
     fee = price(2, outputs, rate, change=True)
@@ -616,13 +616,13 @@ def build_bid(db, params: Params, buyer: str, seller: str, payload: bytes,
             f"{total / 100_000_000:.8f} free")
     outs = list(outputs)
     if change >= fees.DUST_LIMIT:
-        outs.append((change, p2pkh_script(buyer)))
+        outs.append((change, p2pkh_script(buyer, params)))
     else:
         fee += change
         change = 0
     inputs = [dict(c, address=buyer) for c in chosen]
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in inputs], outs)
-    script = p2pkh_script(buyer)
+    script = p2pkh_script(buyer, params)
     return Unsigned(raw=raw, inputs=inputs, outputs=outs,
                     sighashes=[sighash(inputs, outs, n, script,
                                        sighash_type=ALL_ANYONECANPAY).hex()
@@ -760,14 +760,14 @@ def build_partial(db, params: Params, address: str, foreign: list,
     change = total - spend - fee
     outputs = list(payload_outputs)
     if change >= max(dust, fees.DUST_LIMIT):
-        outputs.append((change, p2pkh_script(address)))
+        outputs.append((change, p2pkh_script(address, params)))
     else:
         fee += max(0, change)
         change = 0
 
     every = given + chosen
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in every], outputs)
-    script = p2pkh_script(address)
+    script = p2pkh_script(address, params)
     hashes = [sighash(every, outputs, len(given) + n, script).hex()
               for n in range(len(chosen))]
     return Unsigned(raw=raw, inputs=every, outputs=outputs, sighashes=hashes,
@@ -1088,7 +1088,7 @@ def build_leg(params: Params, address: str, piece: dict, coins: int,
             f"({fee} sats) plus keeping what is being sold ({held} sats), so "
             f"there is no output this seller could sign")
 
-    script = p2pkh_script(address)
+    script = p2pkh_script(address, params)
     outputs = ([(0, payload_script)] if payload else []) + [(paid, script)]
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in inputs], outputs)
     # A leg at a script-hash address (a refereed prize pool, 2026-09-29) signs
@@ -1112,7 +1112,7 @@ def build_doginal_send(db, params: Params, address: str, coin: dict, inscription
     exactly this inscription at offset 0 -- a coin with two inscriptions, or one sitting further in, would need an
     alignment output first, and sending it plainly could hand the wrong piece away or burn it to fees."""
     untimed(params, "doginal send")
-    return _doginal_first(db, address, coin, inscription, p2pkh_script(to), [], rate, exclude, extra,
+    return _doginal_first(db, address, coin, inscription, p2pkh_script(to, params), [], rate, exclude, extra,
                           what=f"send Doginal {inscription} to {to}", params=params)
 
 
@@ -1133,7 +1133,7 @@ def build_note_send(db, params: Params, address: str, note_coin: dict, to: str, 
     built a moment ago, not yet in any block, so no index has read it -- as input 0, whole to `to` as output 0, as a
     Doginal is sent; clean coins pay the fee; change last."""
     untimed(params, "note send")
-    return _doginal_first(db, address, note_coin, "", p2pkh_script(to), [], rate, exclude, extra, what=what,
+    return _doginal_first(db, address, note_coin, "", p2pkh_script(to, params), [], rate, exclude, extra, what=what,
                           vouched=True, params=params)
 
 
@@ -1171,12 +1171,12 @@ def _doginal_first(db, address: str, coin: dict, inscription: str, first: bytes,
     change = sum(c["value"] for c in fees_in) - owed - fee
     outputs = list(paid)
     if change >= fees.dust_limit(params):
-        outputs.append((change, p2pkh_script(address)))
+        outputs.append((change, p2pkh_script(address, params)))
     else:
         fee += max(0, change)
         change = 0
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in chosen], outputs)
-    script = p2pkh_script(address)
+    script = p2pkh_script(address, params)
     hashes = [sighash(chosen, outputs, n, script).hex() for n in range(len(chosen))]
     return Unsigned(raw=raw, inputs=chosen, outputs=outputs, sighashes=hashes, fee=fee, change=change, what=what)
 
@@ -1334,8 +1334,8 @@ def spend_for(address: str, params: Params, keyhash: bytes | None = None) -> dic
             return {"kind": "p2wpkh",
                     "script_code": witness_scriptcode(program),
                     "change_script": _p2wpkh_script(program)}
-    return {"kind": "p2pkh", "script_code": p2pkh_script(address),
-            "change_script": p2pkh_script(address)}
+    return {"kind": "p2pkh", "script_code": p2pkh_script(address, params),
+            "change_script": p2pkh_script(address, params)}
 
 
 def _assemble_witness(unsigned: "Unsigned", signatures: list[str], pubkey: bytes) -> str:
