@@ -1051,9 +1051,11 @@ function drawHead() {
   UNIT = asset ? asset.name : coinOf(c);
   const w = pickedNow();
   if (w) pick.hidden = true;
-  $("bal").textContent = w ? (w.status && w.status.state === "ready" ? coinsOf(w.status.spendable) : "—")
-    : asset && asset.dd ? (asset.balance == null ? "—" : dollars(asset.balance))
+  // A token picked on the card comes first, an imported wallet's too (2026-11-12: nerd picked on an imported wallet
+  // showed that wallet's DOGE under the name nerd).
+  $("bal").textContent = asset && asset.dd ? (asset.balance == null ? "—" : dollars(asset.balance))
     : asset ? (asset.token20 ? units20(asset.balance, asset.decimals) : tokenAmt(asset.balance, asset))
+    : w ? (w.status && w.status.state === "ready" ? coinsOf(w.status.spendable) : "—")
     : k ? (here.balance == null ? "—" : coinsOf(here.balance)) : coinsOf(c.spendable ?? c.balance);
   // A token's name is a link to its own page, on its own chain (2026-10-15).
   if (asset && (asset.token20 || asset.dd)) $("unit").textContent = UNIT;
@@ -1135,7 +1137,10 @@ function drawHead() {
       : `Unlock your wallet to see your ${k.label} address.`;
     loadKind(c, k).catch(() => {});
   }
-  if (w) {
+  if (w && asset) {
+    // The token's own line stays (what it is, what is on transfer notes, Back), said as this wallet's.
+    sub.prepend(`${w.name}'s `);
+  } else if (w) {
     const held = bits.filter(([, text]) => / held (in|on) |protected until checked/.test(text));
     bits.length = 0;
     bits.push(...held);
