@@ -1405,6 +1405,17 @@ def register(app, st, chains):
             if chain is None:
                 raise ValueError("DRC-20 is on Dogecoin and PRC-20 on Pepecoin main")
             address = chains.account_address(account.pubkey, chain)
+            # From one of the account's imported wallets (2026-11-12): its address holds the tokens, its key (sent as
+            # `pubkey`, checked against it below) signs the commit, the note and the send in the browser.
+            frm = str(said.get("from") or "").strip()
+            if frm and frm != address:
+                from .imported import entry as imported_entry
+                e = imported_entry(st, chain.network, account.pubkey, frm)
+                if e is None:
+                    raise ValueError("that address is not one of this account's imported wallets")
+                if str(e.get("k") or "p2pkh") != "p2pkh":
+                    raise ValueError("tokens are sent from an imported wallet's ordinary (legacy) address only")
+                address = frm
             if not address:
                 raise ValueError(f"this account has no {chain.label} address yet")
             to, to_tag = app.state.payee(said.get("to", ""), chain)
@@ -1412,7 +1423,7 @@ def register(app, st, chains):
             if complaint:
                 raise ValueError(complaint)
             if to == address:
-                raise ValueError("that is this account's own address")
+                raise ValueError("that is this wallet's own address")
             walked = ord_walked(chain)
             tip = int(v1.core(chain.network, "getblockcount") or 0)
             if not tip or walked < tip - INDEX_READY_LAG:

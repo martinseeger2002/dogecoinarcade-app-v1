@@ -1588,6 +1588,11 @@ function openSend(prefill = "", piece = null) {
     if (!w.status || w.status.state !== "ready") { toast(`${w.name}'s coins are still being read back`); return; }
     Object.assign(what, {from: w.address, imported: w, balance: w.status.spendable || 0});
   }
+  // Its tokens (2026-11-12): only the ones picked on its own Tokens tab; the fees come from its own coins.
+  if (what.kind === "token20" && what.from) {
+    if (!w || w.address !== what.from) { toast("Pick that wallet again to send its tokens"); return; }
+    Object.assign(what, {imported: w});
+  }
   step1(s, {to: prefill, amount: piece ? "1" : "", what});
 }
 
@@ -1599,6 +1604,17 @@ async function offerFor(what, to, amount, network) {
     return ddAsk("/account/digidollar/send", {chain: network, pubkey: await ddKey(network), to, amount});
   }
   // A DRC-20 / PRC-20 send (2026-10-22): the node checks the balance and offers the first of its three transactions.
+  if (what.kind === "token20" && what.imported) {
+    // From an imported wallet: its address and its key (the note's script is that key's, so only it reveals the note).
+    const pk = what.importedKeys && what.importedKeys.pubkey;
+    if (!pk) throw new Error("Open your imported wallets first (their password), then send again.");
+    const r = await fetch("/account/token20/send", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain: network, tick: what.tick, amount, to, from: what.from,
+                            pubkey: [...pk].map((x) => x.toString(16).padStart(2, "0")).join("")})});
+    const said = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(said.detail || `the arcade would not take it (HTTP ${r.status})`);
+    return said;
+  }
   if (what.kind === "token20") return wallet.startToken20(keys, {chain: network, tick: what.tick, amount, to});
   if (what.kind === "doginal") {
     // [Claude 2026-10-15] The node builds it (/account/doginal/send) and reads from the chain itself that the coin holds exactly
@@ -1821,6 +1837,7 @@ async function step1(s, d) {
       // that address type's key signs (the same words, another path)
       d.keys = what.fromKind ? await wallet.asKind(keys, c.network, what.fromKind)
         : what.imported ? await wallet.importedKeys(what.imported, c) : null;
+      if (what.imported) what.importedKeys = d.keys;
       let payTo = typedTo, payTag = "";
       if (what.kind === "dd" && !DD_ADDRESSY.test(typedTo)) {
         const named = await ddAsk(`/lite/api/ddaddress?to=${encodeURIComponent("@" + typedTo.replace(/^@/, ""))}`
@@ -2179,8 +2196,9 @@ async function drawToken20(box, c) {
         : `No ${word} tokens on ${w ? w.name + "'s" : "your"} address.`));
     }
     for (const b of got.balances) {
-      // Sent from this account's own wallet in one press (2026-10-22); an imported wallet's, later.
-      const sendable = !w && !NODE_SIDE;
+      // Sent from this account's own wallet in one press (2026-10-22), and from an imported wallet's ordinary address
+      // (2026-11-12), signed with its own key.
+      const sendable = !NODE_SIDE && (!w || (w.addr_kind || "legacy") === "legacy");
       const row = el(sendable ? "button" : "div", "wl-tok");
       // Sent and not read from the chain yet (2026-10-22): off the balance until the index has the note.
       const onWay = BigInt(String(b.pending_units || "0"));
@@ -2198,7 +2216,7 @@ async function drawToken20(box, c) {
         row.type = "button";
         row.onclick = () => {
           asset = {network: c.network, token20: true, word, tick: b.tick, name: b.tick, decimals: Number(b.decimals || 0),
-                   balance: onHand, noted: String(b.transferable_units || "0")};
+                   balance: onHand, noted: String(b.transferable_units || "0"), from: w ? w.address : ""};
           drawHead(); drawTokens();
           window.scrollTo({top: 0, behavior: "smooth"});
           toast(`${b.tick}: Send is for it now`);
