@@ -1727,12 +1727,14 @@ async function step1(s, d) {
       : (s.startsWith("kotia") || s.startsWith("kot")) ? "kot"
       : (s.startsWith("wojak") || s.startsWith("wjk")) ? "wjk"
       : (s.startsWith("digibyte") || s.startsWith("dgb")) ? "dgb"
-      : (s.startsWith("flop")) ? "flop" : "pep";
+      : (s.startsWith("flop")) ? "flop"
+      : (s.startsWith("junk") || s.startsWith("jkc")) ? "jkc"
+      : (s.startsWith("bitcoin") || s.startsWith("btc")) ? "btc" : "pep";
     const named = {doge: "Dogecoin", ltc: "Litecoin", pep: "Pepecoin", bel: "Bellscoin", lky: "Luckycoin", kot: "Kotia", wjk: "Wojakcoin",
-                   dgb: "DigiByte", flop: "Flopcoin"};
+                   dgb: "DigiByte", flop: "Flopcoin", jkc: "Junkcoin", btc: "Bitcoin"};
     const here = c.network === "doge" ? "doge" : (c.network === "ltc" || c.network === "ltctest") ? "ltc"
       : (c.network === "bel" || c.network === "lky" || c.network === "kot" || c.network === "wjk" || c.network === "dgb"
-         || c.network === "flop")
+         || c.network === "flop" || c.network === "jkc" || c.network === "btc")
         ? c.network : "pep";
     if (got.coin && family(got.coin) !== here)
       toast(`That code asks for ${named[family(got.coin)]}: switch coins at the top first.`);

@@ -813,8 +813,61 @@ FLOPCOIN = dataclasses.replace(
     trust_progress=False,
 )
 
+# Junkcoin (2026-11-12, the operator: the website's Wallet lists every coin Arcade V1.0 has). Junkcoin Core 4.x is Litecoin
+# 0.21's code: versions 16 ("7...") and 5 ("3..."), WIF 144, merge-mined (chain id 0x2020). Prices are Arcade V1.0's
+# (coinsend.rs fee_policy "jkc": its wallet's fallback 200,000 sat/kB, dust 5,460). Legacy addresses only here (its
+# bech32 "jc" is left off, as on Wojakcoin). Lock times not checked, so no swap or escrow lock is made (cltv_enforced).
+JKC_MAINNET_FLOOR = 1_216_000
+JUNKCOIN = dataclasses.replace(
+    LITECOIN,
+    name="jkc",
+    rpc_port=9771,
+    p2p_port=9771,
+    activation_height=JKC_MAINNET_FLOOR,
+    messaging_start_height=JKC_MAINNET_FLOOR,
+    pubkeyhash_version=16,
+    scripthash_version=5,
+    other_pubkeyhash_version=None,
+    coin="JKC",
+    label="Junkcoin",
+    min_fee_per_kb=200_000,
+    soft_dust=False, dust_limit=5_460,
+    genesis="a2effa738145e377e08a61d76179c21703e13e48910b30a2a87f0dfe794b64c6",
+    auxpow_chain_id=0x2020,
+    addon=True, node_dir=".junkcoin", node_conf="junkcoin.conf",
+    letter="J", family="JKC", net_word="junkcoin", real_coins=True, bech32_hrp="", mweb=False,
+    trust_progress=False,
+    cltv_enforced=False,
+)
+
+# Bitcoin (2026-11-12, the same ask). Versions 0 ("1...") and 5 ("3..."), WIF 128; keys on BIP44 coin type 0 as Arcade
+# V1.0's wallet derives them (coins.js COIN_TYPE), so the same twelve words give the same address in both. Arcade V1.0's
+# price (fee_policy default: 20,000 sat/kB, dust 1,000). Legacy addresses only here. No arcade tokens (class_b False).
+BTC_MAINNET_FLOOR = 925_000
+BITCOIN = dataclasses.replace(
+    LITECOIN,
+    name="btc",
+    rpc_port=8332,
+    p2p_port=8333,
+    activation_height=BTC_MAINNET_FLOOR,
+    messaging_start_height=BTC_MAINNET_FLOOR,
+    pubkeyhash_version=0,
+    scripthash_version=5,
+    other_pubkeyhash_version=None,
+    coin="BTC",
+    label="Bitcoin",
+    min_fee_per_kb=20_000,
+    soft_dust=False, dust_limit=1_000,
+    genesis="000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    auxpow_chain_id=None, pow_algo="sha256d", pow_limit_bits=0x1D00FFFF,
+    addon=True, node_dir=".bitcoin", node_conf="bitcoin.conf",
+    letter="B", family="BTC", net_word="bitcoin", real_coins=True, bech32_hrp="", mweb=False,
+    class_b=False,
+)
+
 NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN, LITECOIN, LITECOIN_TESTNET,
-                                BELLSCOIN, LUCKYCOIN, KOTIA, WOJAKCOIN, DIGIBYTE, DIGIBYTE_TESTNET, FLOPCOIN)}
+                                BELLSCOIN, LUCKYCOIN, KOTIA, WOJAKCOIN, DIGIBYTE, DIGIBYTE_TESTNET, FLOPCOIN,
+                                JUNKCOIN, BITCOIN)}
 
 def unpayable_versions(params: "Params") -> frozenset:
     """The version bytes of `params`' own script-hash addresses that another known chain uses for a key hash.
@@ -997,6 +1050,8 @@ CHAIN_NAMES = {
     "dgb": "main",                  # and DigiByte
     "dgbtest": "test",
     "flop": "main",                 # and Flopcoin
+    "jkc": "main",                  # and Junkcoin
+    "btc": "main",                  # and Bitcoin
 }
 
 

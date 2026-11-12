@@ -930,7 +930,7 @@ export async function llmTopupSign(mine, {seller = "", here = false, network, tx
 //: names are config.py NETWORKS (`real_coins`; tests/test_mainnet_review_names.py holds them to it). A name this file
 //: does not know is mainnet too: asked about, never waved through. The test chains also sign with the m/44'/1' key
 //: (coins.COIN_TYPE), which holds no mainnet coin, so a node calling a mainnet chain "test" gets a signature for nothing.
-export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop"]);
+export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc"]);
 export const TESTNETS = new Set(["test", "regtest", "ltctest", "dgbtest"]);
 export function isMainnet(network) {
   return !TESTNETS.has(String(network || ""));
@@ -3491,11 +3491,11 @@ export const TRADE = {
 //: The real-coin chains (config.py `real_coins`): their legs are mainnet tier (trade.Leg.tier).
 //: Each chain's coin as a leg says it (config.py `coin`).
 const COIN_WORD = {doge: "DOGE", main: "PEP", ltc: "LTC", ltctest: "LTC TEST", bel: "BEL", lky: "LKY", kot: "KOT", wjk: "WJK",
-                   dgb: "DGB", flop: "FLOP"};
-const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop"]);
+                   dgb: "DGB", flop: "FLOP", jkc: "JKC", btc: "BTC"};
+const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop", "jkc", "btc"]);
 //: Chains whose consensus never enforces CHECKLOCKTIMEVERIFY (config.Params.cltv_enforced): a swap lock there refunds
 //: at any moment, so the side that locked could take it back after the other side claimed. No lock is made on them.
-const NO_CLTV = new Set(["wjk"]);
+const NO_CLTV = new Set(["wjk", "jkc"]);
 //: Chains where no lock is made for another reason (config.require_p2sh_payable, config.require_untimed): Bellscoin's
 //: script addresses share Dogecoin's "D" byte, and Kotia's lock claims and refunds would lack its transaction time.
 const NO_LOCK = new Set(["bel", "kot"]);
@@ -3980,7 +3980,8 @@ export async function swapFees(give, get, options = {}) {
   // LTC and LTC TEST too (2026-10-18: Litecoin's legs read "PEP TEST").
   const coin = (n) => COIN_WORD[n] || "PEP TEST";
   // Litecoin pays its own rate (htlc.spend_fee, 2026-10-18): about 0.0001 LTC, not the Dogecoin family's 0.01.
-  const sendFee = (n) => n === "ltc" || n === "ltctest" || n === "bel" || n === "kot" || n === "wjk" ? 10_000 : 1_000_000;   // Bellscoin, Kotia, Wojakcoin: Litecoin's shape
+  const sendFee = (n) => n === "btc" ? 20_000 : n === "jkc" ? 200_000   // Bitcoin, Junkcoin: their Params.min_fee_per_kb
+    : n === "ltc" || n === "ltctest" || n === "bel" || n === "kot" || n === "wjk" ? 10_000 : 1_000_000;   // Bellscoin, Kotia, Wojakcoin: Litecoin's shape
   const kindOf = (l) => l.kind || "coin";
   const mine = give.fee_bps == null ? withFee(give, await lockFeeOf(give.network)) : give;
   const net = coin(give.network);
