@@ -287,28 +287,58 @@ def register(app, st, chains):
             return JSONResponse({"step": "placed", "order": s["order"]})
         if s["step"] != "funded":
             return JSONResponse({"step": s["step"], "say": ""})
+        return JSONResponse(place(s, account.pubkey))
+
+    def place(s: dict, pubkey: str) -> dict:
+        """A funded order put on the book once what funds it is in a block: {step, say} or {step: placed, order}.
+        Asked by the placing tab, and by the placer below for an order whose tab was closed."""
         try:
             wait = funded_enough(s)
             if wait:
-                return JSONResponse({"step": "funded", "say": wait})
+                return {"step": "funded", "say": wait}
             gc, wc = chains.by_network(s["give_net"]), chains.by_network(s["get_net"])
-            payout = {gc.key: chains.account_address(account.pubkey, gc), wc.key: chains.account_address(account.pubkey, wc)}
+            payout = {gc.key: chains.account_address(pubkey, gc), wc.key: chains.account_address(pubkey, wc)}
             args = {"give": s["give"], "get": s["get"], "key": {gc.key: s["key"], wc.key: s["key"]}, "payout": payout}
             if s.get("dd") or s.get("dd_get"):
                 from arcade.ddlib import ddtx
                 ch = gc if s.get("dd") else wc
-                my_key = coin_pub_of(account.pubkey, ch)
+                my_key = coin_pub_of(pubkey, ch)
                 args["payout_dd"] = {ch.key: ddtx.dd_address(ch.network, bytes.fromhex(my_key)[1:])}
             if s["fee"] or s.get("token_fee"):
                 fc = chains.by_network(s["fee_net"])
                 args["maker_fee"] = {"bps": s["bps"], "to": {fc.key: s["fee_to"]}}
             o = v1.cmd("swap.place", **args) or {}
         except V1Error as e:
-            return JSONResponse({"step": "funded", "say": str(e)})
-        s.update(order=o.get("id"), step="placed", placed_at=int(time.time()))
-        save(s["question"], account.pubkey, s)
+            return {"step": "funded", "say": str(e)}
+        with PLACING:
+            again = load(s["question"])
+            if again is not None and again.get("step") == "placed":      # the tab and the placer both asked
+                return {"step": "placed", "order": again["order"]}
+            s.update(order=o.get("id"), step="placed", placed_at=int(time.time()))
+            save(s["question"], pubkey, s)
         answered(s["question"], s["order"])
-        return JSONResponse({"step": "placed", "order": s["order"]})
+        return {"step": "placed", "order": s["order"]}
+
+    PLACING = threading.Lock()
+
+    def placer():
+        """Every half minute, the funded orders whose tabs were closed: each placed once its funding is in a block."""
+        while True:
+            time.sleep(30)
+            try:
+                if not st.setting("market_maker", False):
+                    continue
+                with db() as c:
+                    rows = [(r["account"], json.loads(r["data"])) for r in c.execute("SELECT account, data FROM made WHERE step='funded'")]
+                for pubkey, s in rows:
+                    try:
+                        place(s, pubkey)
+                    except Exception as e:                                # one bad order never stops the others
+                        print("sitemaker placer:", s.get("question"), e, flush=True)
+            except Exception as e:
+                print("sitemaker placer:", e, flush=True)
+
+    threading.Thread(target=placer, name="sitemaker-placer", daemon=True).start()
 
     @app.post("/account/swap/make/cancel")
     def make_cancel(request: Request, payload: Any = Body(None)):
