@@ -479,7 +479,7 @@ def register(app, st, chains, template_dir: Path):
             # The orders a visitor can take here, every pair swaptake.py finishes: coins for coins, and an inscription,
             # a token, a DRC-20 / PRC-20 or DigiDollars bought or given for coins, on chains this site keeps wallets on;
             # and the reader's own orders this site placed for them (sitemaker.py), to cancel.
-            keys = {c.key for c in chains.account_chains()}
+            keys = {k for c in chains.account_chains() for k in (c.key, c.network)}   # a leg may name its chain by key (peptest) or network (test)
             kinds = lambda o: ((o.get("give") or {}).get("kind"), (o.get("get") or {}).get("kind"))
             takeable = {("coin", "coin")} | {(k, "coin") for k in ("ord", "token", "token20", "dd")} \
                 | {("coin", k) for k in ("ord", "token", "token20", "dd")}

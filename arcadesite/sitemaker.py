@@ -332,7 +332,11 @@ def register(app, st, chains):
                     rows = [(r["account"], json.loads(r["data"])) for r in c.execute("SELECT account, data FROM made WHERE step='funded'")]
                 for pubkey, s in rows:
                     try:
-                        place(s, pubkey)
+                        r = place(s, pubkey)
+                        if r.get("step") != "placed" and r.get("say") != s.get("said"):   # each new reason once
+                            print("sitemaker placer:", s.get("question"), r.get("say"), flush=True)
+                            s["said"] = r.get("say")
+                            save(s["question"], pubkey, s)
                     except Exception as e:                                # one bad order never stops the others
                         print("sitemaker placer:", s.get("question"), e, flush=True)
             except Exception as e:

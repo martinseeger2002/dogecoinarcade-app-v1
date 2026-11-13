@@ -81,8 +81,9 @@ def register(app, st, chains):
                       (qid, account, json.dumps(data), str(data.get("step") or ""), int(time.time())))
 
     def chain_of(key: str):
-        """The site's chain for V1.0's chain key ("peptest", "doge", ...), only where this site keeps wallets."""
-        return next((c for c in chains.account_chains() if c.key == key), None)
+        """The site's chain for V1.0's chain key ("peptest", "doge", ...) or network name ("test"), only where this
+        site keeps wallets: an order's leg may name its chain either way."""
+        return next((c for c in chains.account_chains() if key in (c.key, c.network)), None)
 
     def coin_pub(pubkey: str, chain) -> str:
         return str(st.setting(chains.coinkey_key(pubkey, chain), "") or "").lower()
