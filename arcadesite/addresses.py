@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from arcade.config import NETWORKS, unpayable_versions
 from arcade.script import b58check_decode, segwit_decode
+from fastapi import HTTPException
 
 
 def _check_address(address: str, *, mainnet: bool, segwit_ok: bool = False) -> str | None:
