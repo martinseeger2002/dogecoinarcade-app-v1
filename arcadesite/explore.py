@@ -1,7 +1,7 @@
 """Explore: every chain's inscriptions, tokens and arcade assets, read from Arcade V1.0's explorer (its own indexes,
 or a mesh arcade's for a chain it borrows), drawn by the original's explore.html with the answers its script reads.
 
-    GET /explore                        the page: a tab per chain V1.0 can answer for
+    GET /explore                        gone: goes to /apps (the Arcade Explorer app took its place, 2026-11-13)
     GET /explore/api/inscription        one inscription, by number or id (+ the newest number)
     GET /explore/api/lookup             the search box: a number, an id, a coin, a tick, an address
     GET /explore/api/typed              inscriptions of one content type, newest first
@@ -19,7 +19,7 @@ import re
 import time
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from arcade import ord_chains as ordchainslib
 
@@ -108,9 +108,12 @@ def register(app, st, chains):
     def known_net(net: str) -> bool:
         return any(c["net"] == net for c in explore_chains())
 
-    @app.get("/explore", response_class=HTMLResponse)
-    def explore_page(request: Request):
-        return app.state.render(request, "explore.html", chains=explore_chains())
+    # The Explore page is gone (2026-11-13, the operator: "Now that we have an explorer app, we can remove the explorer
+    # from the website. Just keep the app"): the Arcade Explorer app on every home screen replaces it, so /explore goes
+    # to the Apps page. The /explore/api/* reads below stay: the desktop's picture and collection pickers use them.
+    @app.get("/explore")
+    def explore_gone():
+        return RedirectResponse("/apps", status_code=303)
 
     @app.get("/explore/api/inscription")
     def api_inscription(net: str = "doge", number: str = "", id: str = ""):

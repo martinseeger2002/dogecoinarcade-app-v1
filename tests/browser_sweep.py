@@ -4,7 +4,7 @@ import json, sys, time
 from collections import defaultdict
 from playwright.sync_api import sync_playwright
 base, shots, creds = sys.argv[1].rstrip("/"), sys.argv[2], json.load(open(sys.argv[3]))
-PUBLIC = ["/feed", "/feed?sort=new", "/apps", "/explore", "/exchange", "/exchange?tab=tokens", "/exchange?tab=market",
+PUBLIC = ["/feed", "/feed?sort=new", "/apps", "/exchange", "/exchange?tab=tokens", "/exchange?tab=market",
           "/tokens", "/nfts", "/collections", "/listings", "/docs", "/affiliates", "/globe", "/instances", "/terms",
           "/u/claude", "/play/ashvale", "/join", "/restore"]
 MINE = ["/me", "/me/wallet", "/me/wallet/tokens", "/me/nfts", "/me/messages", "/me/notifications", "/me/contacts",

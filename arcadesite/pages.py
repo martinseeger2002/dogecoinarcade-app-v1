@@ -36,13 +36,11 @@ ACCOUNT_NAV = [
     ("/me/notifications", "Notifications", None, True),
     ("/feed", "Feed", "testnet", True),
     ("/me/wallet", "Wallet", None, True),
-    ("/explore", "Explore", None, True),
 ]
 PUBLIC_NAV = [
     ("/", "Overview", None, True),
     ("/apps", "Apps", "mainnet", True),
     ("/feed", "Feed", "testnet", True),
-    ("/explore", "Explore", None, True),
 ]
 ASSETS = {"/wallet.js": "wallet_js.js", "/coins.js": "coins.js", "/signin.js": "signin.js",
           "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css",

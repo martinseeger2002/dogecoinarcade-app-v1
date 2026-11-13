@@ -2747,8 +2747,6 @@ async function openDgCard(g, wantPrice = false) {
     const open = el("a", "", "Open content ↗"); open.href = got.content || `/content/${g.id}`; open.target = "_blank"; open.rel = "noopener";
     links.append(open);
     if (k && k.root) { const a = el("a", "", "Collection page"); a.href = `/exchange/ord/${k.root}`; links.append(a); }
-    const ex = el("a", "", "In Explore"); ex.href = `/explore?net=${encodeURIComponent(net)}&id=${encodeURIComponent(g.id)}`;
-    links.append(ex);
     parts.push(links);
   }
   // Send, and one price box with List (2026-11-05, the operator: "There shouldn't be two list options"). A listed one: Unlist.
