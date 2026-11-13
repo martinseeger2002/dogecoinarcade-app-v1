@@ -636,10 +636,19 @@ def register(app, st, chains, template_dir: Path):
     def r_ord_token(net: str, tick: str):
         if not re.fullmatch(r"[a-z]{2,10}", net) or not tick.strip() or len(tick) > 32:
             return _json({"error": "ask /r/ord-token/<doge|main|test>/<tick>"}, 400)
-        try:
-            tok = v1.cmd("explorer.token", chain=chain_key(net), tick=tick.strip()) or {}
-        except V1Error as e:
-            return _json({"error": str(e)}, 404)
+        # Spaces can be part of a tick ("dog " is its own 4-character DRC-20), so the tick as given is asked first,
+        # then trimmed for a stray space typed by hand.
+        tok, err = {}, ""
+        for want in dict.fromkeys((tick.lstrip(), tick.strip())):
+            try:
+                tok = v1.cmd("explorer.token", chain=chain_key(net), tick=want) or {}
+            except V1Error as e:
+                err = str(e)
+                continue
+            if tok.get("tick"):
+                break
+        if not tok.get("tick") and err:
+            return _json({"error": err}, 404)
         if not tok.get("tick"):
             return _json({"error": f"no tick {tick} on that chain"}, 404)
         return Response(json.dumps({"tick": tok.get("tick"), "shown": tok.get("shown") or tok.get("tick"),
