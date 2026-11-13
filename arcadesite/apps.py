@@ -476,11 +476,14 @@ def register(app, st, chains, template_dir: Path):
                 book = v1.cmd("swap.book") or []
             except V1Error:
                 book = []
-            # The orders a visitor can take here: coins for coins, or an inscription for coins (swaptake.py), on chains this
-            # site keeps wallets on; and the reader's own orders this site placed for them (sitemaker.py), to cancel.
+            # The orders a visitor can take here, every pair swaptake.py finishes: coins for coins, and an inscription,
+            # a token, a DRC-20 / PRC-20 or DigiDollars bought or given for coins, on chains this site keeps wallets on;
+            # and the reader's own orders this site placed for them (sitemaker.py), to cancel.
             keys = {c.key for c in chains.account_chains()}
             kinds = lambda o: ((o.get("give") or {}).get("kind"), (o.get("get") or {}).get("kind"))
-            book = [o for o in book if kinds(o) in (("coin", "coin"), ("ord", "coin"))
+            takeable = {("coin", "coin")} | {(k, "coin") for k in ("ord", "token", "token20", "dd")} \
+                | {("coin", k) for k in ("ord", "token", "token20", "dd")}
+            book = [o for o in book if kinds(o) in takeable
                     and (o.get("give") or {}).get("chain") in keys and (o.get("get") or {}).get("chain") in keys]
             reader = app.state.signed_in(request)
             ours = app.state.made_orders(reader.pubkey) if reader is not None and hasattr(app.state, "made_orders") else set()
@@ -636,10 +639,19 @@ def register(app, st, chains, template_dir: Path):
     def r_ord_token(net: str, tick: str):
         if not re.fullmatch(r"[a-z]{2,10}", net) or not tick.strip() or len(tick) > 32:
             return _json({"error": "ask /r/ord-token/<doge|main|test>/<tick>"}, 400)
-        try:
-            tok = v1.cmd("explorer.token", chain=chain_key(net), tick=tick.strip()) or {}
-        except V1Error as e:
-            return _json({"error": str(e)}, 404)
+        # Spaces can be part of a tick ("dog " is its own 4-character DRC-20), so the tick as given is asked first,
+        # then trimmed for a stray space typed by hand.
+        tok, err = {}, ""
+        for want in dict.fromkeys((tick.lstrip(), tick.strip())):
+            try:
+                tok = v1.cmd("explorer.token", chain=chain_key(net), tick=want) or {}
+            except V1Error as e:
+                err = str(e)
+                continue
+            if tok.get("tick"):
+                break
+        if not tok.get("tick") and err:
+            return _json({"error": err}, 404)
         if not tok.get("tick"):
             return _json({"error": f"no tick {tick} on that chain"}, 404)
         return Response(json.dumps({"tick": tok.get("tick"), "shown": tok.get("shown") or tok.get("tick"),
