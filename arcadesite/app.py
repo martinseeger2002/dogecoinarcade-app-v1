@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from . import accountpages, actions, apps, auth, catalog, creator, digidollar, doginals, exchange, pools, explore, feed, imported, llm, marketplace, messages, ordsend, sitemaker, pages, realtime, rings, sidecar, swaptake, tokens, wallet
+from . import accountpages, actions, apps, auth, catalog, creator, digidollar, doginals, exchange, pools, explore, feed, imported, llm, marketplace, messages, ordsend, pets, sitemaker, pages, realtime, rings, sidecar, swaptake, tokens, wallet
 from .chains import Chains
 from .state import SiteState
 from .v1 import V1, V1Error
@@ -57,6 +57,7 @@ def create_app(home: str | os.PathLike) -> FastAPI:
     sidecar.register(app, st, chains)
     imported.register(app, st, chains)
     doginals.register(app, st, chains)
+    pets.register(app, st, chains)          # before apps: its /r/ reads come ahead of the pass-through to V1.0
     import arcade
     template_dir = Path(cfg.get("templates") or Path(arcade.__file__).parent / "web" / "templates")
     pages.register(app, st, chains, template_dir)
