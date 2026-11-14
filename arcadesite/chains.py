@@ -9,6 +9,7 @@ Each chain is the original's Params (arcade.config.NETWORKS) plus V1.0's key for
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from dataclasses import dataclass
 
@@ -17,8 +18,23 @@ from arcade.config import NETWORKS, Params
 from .addresses import _check_address
 from .v1 import V1, V1Error, chain_key
 
+#: The ARCADE testnet (Arcade V1.0's own chain, 2026-11-14, the operator: "add arcade test net to the
+#: app.dogecoinarcade.com"). The original has no such network, so its Params are made here and added to NETWORKS once,
+#: so every lookup by network name finds it: P2PKH 0x53 ("a..."), P2SH 0x57, the chain's fee floor (0.001 ARCADE/kB,
+#: twice that as the fallback, as V1.0's tx.fee says) and its smallest output (0.001 ARCADE). Test coins: an account's
+#: address on it comes from the testnet key (coin type 1), the one its profile already names.
+ARCTEST = dataclasses.replace(
+    NETWORKS["jkc"], name="arctest", rpc_port=0, p2p_port=0, activation_height=0, pubkeyhash_version=0x53,
+    scripthash_version=0x57, other_pubkeyhash_version=None, messaging_start_height=0, min_fee_per_kb=200_000,
+    soft_dust=False, dust_limit=100_000, coin="ARCADE", label="ARCADE testnet",
+    genesis="8891596abcceae069b4f022a34e78387259e168a581d37817f015af097a1d7c8", auxpow_chain_id=None,
+    auxpow_chain_mask=0, pow_algo="", node_dir="", node_conf="", letter="a", family="ARC", net_word="arcade",
+    real_coins=False)
+NETWORKS.setdefault("arctest", ARCTEST)
+
 #: The original's order of chains in a wallet (its Params order), by original network name.
-ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest")
+ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest",
+         "arctest")
 # Bitcoin (config.BITCOIN) is defined but not listed yet (the operator, 2026-11-12: "no Bitcoin yet").
 
 
@@ -37,7 +53,7 @@ class Chain:
 
     @property
     def is_mainnet(self) -> bool:
-        return self.network not in ("test", "regtest", "ltctest", "dgbtest")
+        return self.network not in ("test", "regtest", "ltctest", "dgbtest", "arctest")
 
 
 class Chains:
