@@ -315,6 +315,14 @@ def register(app, st, chains):
         for link in prof.get("linked") or []:
             if str(link.get("chain") or "") in (one.key, one.network):
                 return str(link.get("address") or "")
+        # The ARCADE testnet: every wallet (Arcade V1.0's and this site's) derives its address there from its testnet
+        # key, so a claim's key hash under the chain's version byte is the name's own address on it.
+        if one.network == "arctest":
+            owner = v1.tag_owner(tag)
+            if not owner:
+                raise ValueError(f"@{tag} is not claimed")
+            from arcade.script import b58check_decode, b58check_encode
+            return b58check_encode(one.params.pubkeyhash_version, b58check_decode(owner)[1])
         raise ValueError(f"@{tag} has not published a {one.label} address")
 
     def payee(raw: Any, one: Chain) -> tuple[str, str]:
