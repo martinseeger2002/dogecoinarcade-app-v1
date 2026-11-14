@@ -696,18 +696,70 @@ async function creatorInscribeFile(m, answer, wallet, held, who) {
   answer({ok: true, txid: root, inscription: root, what: `inscribe ${name}`});
   arcadeToast(`Inscribed ${name}: every piece is sent.`);
 }
+// name.claim (Name Claimer): {chain, name}. Checked again here (free, and the name index has read the whole chain),
+// then inscribed as the Names page does: {"p":"dns","op":"reg","name"} as an ord from the account's own address on
+// that chain, with mainnet's full review where it costs real coins. The app hears {progress, sent, pieces}.
+async function creatorClaimName(m, answer, wallet, held, who) {
+  const a = (m.args && typeof m.args === "object") ? m.args : {};
+  const chain = String(a.chain || ""), asked = String(a.name || "").trim().toLowerCase();
+  const got = async (url) => { const r = await fetch(url, {cache: "no-store"}); const j = await r.json().catch(() => ({}));
+                               if (!r.ok) throw new Error(j.detail || "refused"); return j; };
+  const c = ((await got("/account/ord/chains")).chains || []).find((x) => x.chain === chain);
+  if (!c) throw new Error("this arcade does not inscribe names on that chain");
+  const ck = await got(`/account/ord/name?chain=${encodeURIComponent(chain)}&name=${encodeURIComponent(asked)}`);
+  if (!ck.valid || ck.taken || !ck.ready) throw new Error(ck.why || `${ck.name || asked} is taken`);
+  const bytes = new TextEncoder().encode(JSON.stringify({p: "dns", op: "reg", name: ck.name}));
+  let b64 = ""; for (const x of bytes) b64 += String.fromCharCode(x); b64 = btoa(b64);
+  const first = await wallet.startOrd(held, {chain, content: b64, content_type: "text/plain;charset=utf-8", name: ck.name});
+  const k = first.costs, shown = await wallet.checked(first, held);
+  const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+  const keep = (Number(k.postage) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8});
+  const label = `${who} asks to claim ${ck.name} on ${c.label}: ${Number(first.of || 2)} transactions, signed here without `
+    + `asking again. ${keep} ${c.coin} stays yours as the name's own coin: whoever holds it holds the name.`;
+  const ok = c.mainnet
+    ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator: Number(k.operator_fee || 0),
+                                 fee: first.operator_fee || null,
+                                 total: network + Number(k.operator_fee || 0) + Number(k.postage), chain})
+    : await arcadeAsk(`${who} asks to claim ${ck.name}`, `${label} Network fees about `
+                      + `${(network / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} ${c.coin}.`, "Claim it");
+  if (!ok) { answer({error: "Cancelled."}); return; }
+  const id = await wallet.inscribeOrd(held, first, async () => b64, (st) => answer({
+    progress: st.done ? "Both transactions sent." : st.wait ? "Waiting for a block…" : `${st.sent || 0} of ${st.of || 2} sent…`,
+    sent: Number(st.sent || 0), pieces: Number(st.of || 2)}));
+  answer({ok: true, inscription: id, name: ck.name, chain, what: `claim ${ck.name}`});
+  arcadeToast(`Claimed ${ck.name}. It is yours once the block is mined.`);
+}
+// Reads a Creator app may ask without wallet access (nothing is signed): which chains take names, and whether one is
+// free. The V1.0 desktop answers the same two from its own commands.
+const CREATOR_READS = ["name.chains", "name.check"];
+async function creatorRead(m) {
+  const a = (m.args && typeof m.args === "object") ? m.args : {};
+  const got = async (url) => { const r = await fetch(url, {cache: "no-store"}); const j = await r.json().catch(() => ({}));
+                               if (!r.ok) throw new Error(j.detail || "refused"); return j; };
+  if (m.action === "name.chains") {
+    const l = (await got("/account/ord/chains")).chains || [];
+    return {chains: l.filter((c) => (c.endings || []).length).map((c) => ({chain: c.chain, label: c.label, mainnet: !!c.mainnet, endings: c.endings}))};
+  }
+  return got(`/account/ord/name?chain=${encodeURIComponent(String(a.chain || ""))}&name=${encodeURIComponent(String(a.name || ""))}`);
+}
 async function creatorFor(source, m, page = "") {
   const answer = (body) => source.postMessage({arcade: "creator", seq: m.seq, ...body}, "*");
   answer({heard: true});
   if (!ARCADE_ME) { answer({error: "Sign in or join first."}); return; }
-  if (m.action === "inscribe.file") {
+  if (CREATOR_READS.includes(m.action)) {
+    try { answer({ok: true, ...(await creatorRead(m))}); } catch (err) { answer({error: String(err.message || err)}); }
+    return;
+  }
+  if (m.action === "inscribe.file" || m.action === "name.claim") {
     while (minting) await new Promise((r) => setTimeout(r, 200));
     minting = true;
     try {
       const wallet = await import("/wallet.js");
       const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
       if (!held) throw new Error("Unlock your wallet first.");
-      await creatorInscribeFile(m, answer, wallet, held, await arcadeRequester(page));
+      const who = await arcadeRequester(page);
+      if (m.action === "name.claim") await creatorClaimName(m, answer, wallet, held, who);
+      else await creatorInscribeFile(m, answer, wallet, held, who);
     } catch (err) {
       answer({error: String(err.message || err)});
     } finally { minting = false; }
@@ -1200,6 +1252,7 @@ window.addEventListener("message", async (e) => {
   // Every one of these reaches the wallet: a game whose card's Wallet access is off, or a page with no card, is asked
   // first (arcadeGameGate; 2026-10-26, issue #7).
   if (["take", "inscribe", "claim", "mint", "ord", "creator"].includes(m.arcade) && typeof m.seq === "number"
+      && !(m.arcade === "creator" && CREATOR_READS.includes(m.action))
       && !(await arcadeGameGate(pageId))) {
     e.source.postMessage({arcade: m.arcade, seq: m.seq, error: ARCADE_GATE_SAYS}, "*");
     return;
