@@ -616,6 +616,52 @@ async function ordFor(source, m, page = "") {
 //                       json, label, note,
 //                       verify: {judge, seed, inputs, params, referee}}, "*")
 //   answers {arcade: "inscribe", seq, heard} then {ok, txid, result} or {error}
+// A Creator app asks the account to do one of the Creator tab's things (2026-11-13, the operator: the Creator tab's tools
+// as apps, each with its thumbnail and icon). The page names an action from CREATOR_ACTIONS and its fields; this page
+// asks this site for the offer, checks it in this browser against the transaction's own bytes, shows it on the card
+// naming the app as the chain knows it, and signs only on yes. Keys never reach the app. Home chain only.
+//   parent.postMessage({arcade: "creator", seq, action, args}, "*")
+//   answers {arcade: "creator", seq, heard} then {ok, txid, what} or {error}
+const CREATOR_ACTIONS = {
+  "token.create": {path: "/account/token/create", title: "create a token", yes: "Create it",
+                   fields: ["name", "kind", "supply", "units", "data", "category", "subcategory", "url", "icon"]},
+  "token.manage": {path: "/account/token/manage", title: "change a token you issued", yes: "Do it",
+                   fields: ["action", "property_id", "amount", "to", "note"]},
+};
+async function creatorFor(source, m, page = "") {
+  const answer = (body) => source.postMessage({arcade: "creator", seq: m.seq, ...body}, "*");
+  answer({heard: true});
+  if (!ARCADE_ME) { answer({error: "Sign in or join first."}); return; }
+  const act = CREATOR_ACTIONS[String(m.action || "")];
+  if (!act) { answer({error: "that is not something an app can ask the Creator for"}); return; }
+  while (minting) await new Promise((r) => setTimeout(r, 200));
+  minting = true;
+  try {
+    const wallet = await import("/wallet.js");
+    const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+    if (!held) throw new Error("Unlock your wallet first.");
+    const args = (m.args && typeof m.args === "object" && !Array.isArray(m.args)) ? m.args : {};
+    const body = {chain: ARCADE_CHAIN.network};
+    for (const f of act.fields) if (args[f] !== undefined && args[f] !== null) body[f] = String(args[f]).slice(0, 2000);
+    const r = await fetch(act.path, {method: "POST", headers: {"Content-Type": "application/json"},
+                                     body: JSON.stringify(body)});
+    const offer = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(offer.detail || "refused");
+    if (offer.part) throw new Error("that needs more than one transaction");
+    const shown = await wallet.checked(offer, held);
+    const who = await arcadeRequester(page);
+    const what = String(offer.what || act.title);
+    const ok = await arcadeAsk(`${who} asks to ${what}`,
+      `${shown.says.charAt(0).toUpperCase()}${shown.says.slice(1)}. Worked out in this browser from the transaction's `
+      + "own bytes, not from what the app says. It goes on the chain for good." , act.yes);
+    if (!ok) { answer({error: "Cancelled."}); return; }
+    const done = await wallet.confirm(held, offer);
+    answer({ok: true, txid: done.txid || "", what});
+    arcadeToast("Sent. It is on the chain when the block lands.");
+  } catch (err) {
+    answer({error: String(err.message || err)});
+  } finally { minting = false; }
+}
 const INSCRIBE_MOST = 7000;
 async function inscribeFor(source, m, page = "", own = false) {
   const answer = (body) => source.postMessage({arcade: "inscribe", seq: m.seq, ...body}, "*");
@@ -1072,7 +1118,7 @@ window.addEventListener("message", async (e) => {
   const own = !!pageId && !frame.classList.contains("postmedia");
   // Every one of these reaches the wallet: a game whose card's Wallet access is off, or a page with no card, is asked
   // first (arcadeGameGate; 2026-10-26, issue #7).
-  if (["take", "inscribe", "claim", "mint", "ord"].includes(m.arcade) && typeof m.seq === "number"
+  if (["take", "inscribe", "claim", "mint", "ord", "creator"].includes(m.arcade) && typeof m.seq === "number"
       && !(await arcadeGameGate(pageId))) {
     e.source.postMessage({arcade: m.arcade, seq: m.seq, error: ARCADE_GATE_SAYS}, "*");
     return;
@@ -1080,6 +1126,7 @@ window.addEventListener("message", async (e) => {
   if (m.arcade === "take" && typeof m.seq === "number") { takeFor(e.source, m); return; }
   if (m.arcade === "inscribe" && typeof m.seq === "number") { inscribeFor(e.source, m, pageId, own); return; }
   if (m.arcade === "ord" && typeof m.seq === "number") { ordFor(e.source, m, pageId); return; }
+  if (m.arcade === "creator" && typeof m.seq === "number") { creatorFor(e.source, m, pageId); return; }
   // A seed for one run at a refereed pool (2026-09-29): the game plays from it,
   // and sends it back with its moves when it claims. Issued to the wallet that
   // is looking, for that pool, once.
