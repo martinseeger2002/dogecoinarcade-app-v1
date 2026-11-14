@@ -18,6 +18,7 @@ On the pages host only /content/, /r/, /site/ and /ord/ are served (the original
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -457,6 +458,86 @@ def register(app, st, chains, template_dir: Path):
                                    "status": "open"})
         return {"orders": orders, "swaps": [], "listings": [], "offers": []}
 
+    # ---------------------------------------------------------------- the swap book, live for everyone
+    # Martin 2026-11-13: the order book "needs to update for everyone pretty much instantaneously when someone takes or
+    # makes an order". One reader of V1.0's swap.book for the whole site (every second while anybody watches, at once when
+    # this site places, takes or cancels one); /r/market/swaps?since=<version>&wait=25 is held until the book's
+    # version changes, so every open Swap app redraws within a couple of seconds of the change.
+    BOOK: dict = {"v": "", "raw": [], "at": 0.0, "want": 0.0}
+    book_poke = threading.Event()
+
+    def read_book() -> list:
+        raw = v1.cmd("swap.book") or []
+        seen = sorted((str(o.get("node") or ""), str(o.get("id") or ""), str(o.get("status") or ""), str(o.get("taking") or ""),
+                       json.dumps(o.get("give"), sort_keys=True), json.dumps(o.get("get"), sort_keys=True)) for o in raw)
+        BOOK.update(raw=raw, at=time.time(), v=hashlib.sha1(json.dumps(seen).encode()).hexdigest()[:16])
+        return raw
+
+    def shared_book() -> list:
+        """V1.0's swap book, read at most every second for everybody."""
+        if time.time() - BOOK["at"] < 1.0:
+            return list(BOOK["raw"])
+        try:
+            return list(read_book())
+        except V1Error:
+            return list(BOOK["raw"])
+
+    def book_poller():
+        while True:
+            book_poke.wait(timeout=1.0)
+            book_poke.clear()
+            if time.time() - BOOK["want"] > 60:                 # nobody is watching
+                continue
+            try:
+                read_book()
+            except Exception:                               # noqa: BLE001 -- the next pass tries again
+                pass
+
+    app.state.swap_book_poke = book_poke.set
+    threading.Thread(target=book_poller, name="swap-book", daemon=True).start()
+
+    def swaps_answer(request: Request) -> dict:
+        if not st.setting("market_taker", False) and not st.setting("market_maker", False):
+            return {"book": [], "mine": [], "running": [], "me": "", "note": ACROSS, "version": ""}
+        book = shared_book()
+        # The orders a visitor can take here, every pair swaptake.py finishes: coins for coins, and an inscription,
+        # a token, a DRC-20 / PRC-20 or DigiDollars bought or given for coins, on chains this site keeps wallets on;
+        # and the reader's own orders this site placed for them (sitemaker.py), to cancel.
+        keys = {k for c in chains.account_chains() for k in (c.key, c.network)}   # a leg may name its chain by key (peptest) or network (test)
+        kinds = lambda o: ((o.get("give") or {}).get("kind"), (o.get("get") or {}).get("kind"))
+        takeable = {("coin", "coin")} | {(k, "coin") for k in ("ord", "token", "token20", "dd")} \
+            | {("coin", k) for k in ("ord", "token", "token20", "dd")}
+        book = [o for o in book if kinds(o) in takeable
+                and (o.get("give") or {}).get("chain") in keys and (o.get("get") or {}).get("chain") in keys]
+        reader = app.state.signed_in(request)
+        ours = app.state.made_orders(reader.pubkey) if reader is not None and hasattr(app.state, "made_orders") else set()
+        mine = [o for o in book if o.get("id") in ours]
+        if not st.setting("market_taker", False):
+            book = mine
+        return {"book": book, "mine": mine, "running": [], "me": "", "version": BOOK["v"]}
+
+    @app.get("/r/market/swaps")
+    async def r_market_swaps(request: Request):
+        """The swap book; with ?since=<version>&wait=<s> held (up to 25 s) until it differs from that version."""
+        import asyncio
+        from starlette.concurrency import run_in_threadpool
+        since = request.query_params.get("since")
+        try:
+            wait = max(0.0, min(25.0, float(request.query_params.get("wait") or 0)))
+        except ValueError:
+            wait = 0.0
+        if since is not None and wait:
+            BOOK["want"] = time.time()
+            if not BOOK["v"]:
+                book_poke.set()
+            until = time.monotonic() + wait
+            while BOOK["v"] in ("", since) and time.monotonic() < until:
+                if await request.is_disconnected():
+                    return Response(status_code=204)
+                await asyncio.sleep(0.25)
+                BOOK["want"] = time.time()
+        return market_ok(await run_in_threadpool(swaps_answer, request))
+
     @app.get("/r/market/{name}")
     def r_market(name: str, request: Request):
         if name in ("holdings", "mine"):
@@ -470,27 +551,7 @@ def register(app, st, chains, template_dir: Path):
         if name in ("markets", "pairs"):
             return market_ok(home_markets())
         if name == "swaps":
-            if not st.setting("market_taker", False) and not st.setting("market_maker", False):
-                return market_ok({"book": [], "mine": [], "running": [], "me": "", "note": ACROSS})
-            try:
-                book = v1.cmd("swap.book") or []
-            except V1Error:
-                book = []
-            # The orders a visitor can take here, every pair swaptake.py finishes: coins for coins, and an inscription,
-            # a token, a DRC-20 / PRC-20 or DigiDollars bought or given for coins, on chains this site keeps wallets on;
-            # and the reader's own orders this site placed for them (sitemaker.py), to cancel.
-            keys = {k for c in chains.account_chains() for k in (c.key, c.network)}   # a leg may name its chain by key (peptest) or network (test)
-            kinds = lambda o: ((o.get("give") or {}).get("kind"), (o.get("get") or {}).get("kind"))
-            takeable = {("coin", "coin")} | {(k, "coin") for k in ("ord", "token", "token20", "dd")} \
-                | {("coin", k) for k in ("ord", "token", "token20", "dd")}
-            book = [o for o in book if kinds(o) in takeable
-                    and (o.get("give") or {}).get("chain") in keys and (o.get("get") or {}).get("chain") in keys]
-            reader = app.state.signed_in(request)
-            ours = app.state.made_orders(reader.pubkey) if reader is not None and hasattr(app.state, "made_orders") else set()
-            mine = [o for o in book if o.get("id") in ours]
-            if not st.setting("market_taker", False):
-                book = mine
-            return market_ok({"book": book, "mine": mine, "running": [], "me": ""})
+            return market_ok(swaps_answer(request))
         if name == "trades":
             snap = app.state.exchange_markets() if hasattr(app.state, "exchange_markets") else {}
             def one(v: str) -> int:
