@@ -705,7 +705,7 @@ async function swapTakeFor(ask, answer, wallet, held) {
   const ok = q.dd && q.dd.give ? await arcadeAsk(`${who} asks you to swap $${q.dd.give} in DigiDollars for ${q.give.amount} ${q.give.coin}`,
     `Your $${q.dd.give} DigiDollars are locked by script on ${q.get.chain}, with 0.5 DGB beside them for its spend; then ` +
     `you claim ${q.give.amount} ${q.give.coin} on ${q.give.chain}` + (q.dd.fee ? `; this site's fee is $${q.dd.fee} in ` +
-    `DigiDollars (whole dollars), sent on its own` : "") + `. Keep this tab open for a few minutes. If the swap doesn't ` +
+    `DigiDollars (whole dollars), sent on its own` : "") + `. You can close this tab once it starts: this site finishes the swap. If the swap doesn't ` +
     `finish, your DigiDollars come back after about ${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund ` +
     `first, and this site sends it.`, "Yes, swap")
     : q.dd && q.dd.get ? await arcadeAsk(`${who} asks you to swap ${q.get.amount} ${q.get.coin} for $${q.dd.get} in DigiDollars`,
@@ -717,27 +717,27 @@ async function swapTakeFor(ask, answer, wallet, held) {
     `Your ${q.t20.amount} ${q.t20.tick.toUpperCase()} are locked by script on ${q.get.chain} (four steps: a transfer note, the ` +
     `tokens moved to the lock, and the note that the lock holds), then you claim ${q.give.amount} ${q.give.coin} on ` +
     `${q.give.chain}` + (q.t20.fee ? `; this site's fee is ${q.t20.fee} ${q.t20.tick.toUpperCase()}, sent on its own` : "") +
-    `. Keep this tab open for a few minutes. If the swap doesn't finish, your tokens come back after about ` +
+    `. You can close this tab once it starts: this site finishes the swap. If it doesn't finish, your tokens come back after about ` +
     `${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund first, and this site sends it.`, "Yes, swap")
     : q.sell ? await arcadeAsk(`${who} asks you to sell inscription ${String(q.inscription).slice(0, 12)}… for ${q.give.amount} ${q.give.coin}`,
     `Your inscription is locked by script on ${q.get.chain} (with ${"0.02"} ${q.get.coin} beside it for its spend). The buyer's ` +
     `arcade has locked ${q.give.amount} ${q.give.coin} on ${q.give.chain}; once your lock is mined you claim those coins` +
     (q.fee ? `, less this site's fee (${q.fee_pct}%: ${q.fee} ${q.give.coin})` : "") + `, and the buyer claims the inscription. ` +
-    `Keep this tab open for a few minutes. If the swap doesn't finish, your inscription comes back to you after about ` +
+    `You can close this tab once it starts: this site finishes the swap. If it doesn't finish, your inscription comes back to you after about ` +
     `${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund first, and this site sends it.`, "Yes, sell it")
     : ord ? await arcadeAsk(`${who} asks you to buy inscription ${String(q.inscription).slice(0, 12)}… for ${q.get.amount} ${q.get.coin}`,
     `You lock ${q.lock} ${q.get.coin} on ${q.get.chain} by script: the price and the 0.01 its spend costs` +
     (q.fee ? `, and pay this site's fee (${q.fee_pct}%: ${q.fee} ${q.get.coin}) in the same transaction` : "") +
     `. The seller's arcade then locks the inscription on ${q.give.chain}, and you claim it: it comes to your ` +
-    `${q.give.chain} address. Keep this tab open for a few minutes. If the swap doesn't finish, your locked coins come ` +
+    `${q.give.chain} address. You can close this tab once it starts: this site finishes the swap. If it doesn't finish, your locked coins come ` +
     `back after about ${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund first, and this site sends it` +
     (q.fee ? " (the fee is not refunded)." : "."), "Yes, buy it")
     : await arcadeAsk(`${who} asks you to swap ${q.get.amount} ${q.get.coin} for ${q.give.amount} ${q.give.coin}`,
     `You lock ${q.lock} ${q.get.coin} on ${q.get.chain} by script: the amount and the 0.01 its spend costs. The other ` +
     `side locks ${q.give.amount} ${q.give.coin} on ${q.give.chain}, and then you claim it` +
     (q.fee ? ` (this site's fee, ${q.fee_pct}% of what you give: ${q.fee} ${q.get.coin}, paid in the same transaction as your lock; it stays paid if the swap doesn't finish)` : "") +
-    `. Keep this tab open for a few ` +
-    `minutes. If the swap doesn't finish, your coins come back to you after about ${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund ` +
+    `. You can close this tab once it starts: this site finishes the swap ` +
+    `and pays you. If it doesn't finish, your coins come back to you after about ${hours === 1 ? "an hour" : hours + " hours"}: you sign that refund ` +
     `first, and this site sends it.`, "Yes, swap");
   if (!ok) { await answer({status: "denied"}); return; }
   const coins = await import("/coins.js");
@@ -745,7 +745,16 @@ async function swapTakeFor(ask, answer, wallet, held) {
   const hash = await coins.sha256Of(secret);
   const redeem = coins.htlcRedeem(hash, un(q.maker_key), un(q.my_key), q.taker_time);
   try { localStorage.setItem("arcade-swap:" + ask.id, hx(secret)); } catch (e) { /* kept in this tab only */ }
-  const where = await post("/account/swap/lock", {id: ask.id, hash: hx(hash), redeem: hx(redeem)});
+  // The swap handed to this site so it finishes with the tab closed (not DigiDollars bought: that claim is signed
+  // here): a one-time key for claiming the other side's lock, and the secret. Your own coins' refund stays the one you
+  // sign below, with your own key.
+  let claimKey = null;
+  if (!(q.dd && q.dd.get)) {
+    do { claimKey = crypto.getRandomValues(new Uint8Array(32)); } while (claimKey[0] === 255);   // below the curve order
+  }
+  const where = await post("/account/swap/lock", {id: ask.id, hash: hx(hash), redeem: hx(redeem),
+                                                  ...(claimKey ? {claim_pub: hx(coins.publicKey(claimKey))} : {})});
+  if (claimKey) await post("/account/swap/hand", {id: ask.id, secret: hx(secret), claim_key: hx(claimKey)});
   // The site's own offer when the lock carries its fee (an inscription bought), else a plain send to the lock.
   let sent, lk;
   if (where.lock20) {
@@ -788,11 +797,20 @@ async function swapTakeFor(ask, answer, wallet, held) {
   await wallet.tradePresign(held, {chain: lk.network, redeem: lk.redeem, txid: sent.txid, vout: lk.vout, kind: "refund",
                                    leg: lk.leg || {kind: "coin", amount: q.lock}});
   }
-  arcadeToast("Swap started. Keep this tab open for a few minutes.");
+  arcadeToast(claimKey ? "Swap started. You can close this tab: this site finishes the swap and pays you."
+                       : "Swap started. Keep this tab open for a few minutes.");
   let said = "";
   for (let i = 0; i < 480; i++) {
     const st = await post("/account/swap/step", {id: ask.id}).catch((e) => ({step: "", say: e.message}));
     if (st.say && st.say !== said) { said = st.say; arcadeToast(st.say); }
+    if (claimKey && (st.step === "claimed" || st.step === "claimable")) {
+      // Claimed by this site with the key handed over; wait for its claim.
+      if (st.step === "claimable") { await new Promise((z) => setTimeout(z, 15000)); continue; }
+      await answer({status: "sent", txid: st.txid});
+      arcadeToast(ord ? "Bought: the inscription is yours when its block lands."
+                      : `Swapped: ${q.give.amount} ${q.give.coin} is yours when its block lands.`);
+      return;
+    }
     if (st.step === "claimable" && st.dd) {
       // DigiDollars out of the other side's lock: the claim (with the secret) built by the site, checked and signed here.
       const claim = await post("/account/swap/ddclaim", {id: ask.id, secret: hx(secret)});
@@ -887,7 +905,7 @@ async function swapMakeFor(ask, answer, wallet, held) {
   await wallet.checked(fund, held);
   await wallet.confirm(held, fund);
   await post("/account/swap/make/funded", {id: ask.id});
-  arcadeToast("Order funded: it goes on the book once its block lands. Keep this tab open a minute.");
+  arcadeToast("Order funded: it goes on the book once its block lands. You can close this tab.");
   let said = "";
   for (let i = 0; i < 240; i++) {
     const st = await post("/account/swap/make/step", {id: ask.id}).catch((e) => ({step: "", say: e.message}));

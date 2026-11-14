@@ -11,6 +11,14 @@ refund the browser signs first, which it sends after the lock's time if the swap
     POST /account/trade/spend    the unsigned claim or refund of one lock coin and its digests (the original's route)
     POST /account/trade/spend/sign   the browser's signatures put in place, checked and broadcast
     POST /account/trade/watch    a pre-signed refund held, sent after the lock's time if the coin is still there
+    POST /account/swap/hand      {id, secret, claim_key}  the swap handed to this site (2026-11-13), to finish with the
+                                 tab closed: the browser makes a one-time key for claiming the maker's lock (named as
+                                 claim_pub at /account/swap/lock, so the maker locks to it) and hands it over with the
+                                 secret. This site's runner then finds the visitor's lock, tells the maker once it is
+                                 mined, checks the maker's lock and claims it to the visitor's own address. The site holds
+                                 that key and secret only for the swap in flight; the visitor's own coins stay under
+                                 their lock, refunded by the refund they signed with their own key (held here, sent after
+                                 the lock's time). DigiDollars bought are still claimed by the tab (a Taproot claim).
 
 Coins for coins on chains this site keeps a wallet on (V1.0's lock times are clock times there), and one inscription
 for coins (2026-11-12, the Ord Market app's listings): the visitor locks the price, claims the inscription's lock (its
@@ -34,6 +42,7 @@ from arcade import fees
 from arcade import funding as fundinglib
 from arcade import htlc as htlclib
 from arcade.txbuild import op_return_script, p2pkh_script
+from arcade.node_trader import HeldKey
 from arcade.trade_watch import WatchError, put_scripts
 
 from .v1 import V1Error
@@ -60,6 +69,7 @@ def register(app, st, chains):
     v1 = st.v1
     db_path = st.home / "site-swaps.sqlite"
     lock = threading.Lock()
+    running = threading.Lock()                              # one hand on a swap at a time: the tab's or the runner's
 
     def db():
         c = sqlite3.connect(db_path, timeout=30)
@@ -267,6 +277,13 @@ def register(app, st, chains):
                 or lk["refunder"].hex() != s["my_get"] or lk["locktime"] != s["taker_time"]):
             return fail("that lock is not the one agreed: nothing to send")
         wc = chains.by_network(s["get_net"])
+        claim_pub = str(said.get("claim_pub") or "").lower()
+        if claim_pub:
+            # The visitor's one-time key for claiming the other side's lock (the swap handed to this site, so it finishes
+            # with the tab closed): the maker locks to it instead of the account's own key.
+            if not re.fullmatch(r"0[23][0-9a-f]{64}", claim_pub) or s.get("dd_buy"):
+                return fail("that claim key can't be used for this swap")
+            s.update(my_give=claim_pub, claim_pub=claim_pub)
         s.update(hash=want_hash.hex(), redeem=redeem.hex(), step="locking")
         save(s["question"], account.pubkey, s)
         out = {"address": htlclib.address_of(redeem, wc.params), "amount": _fmt(int(get["amount"]) + SPEND_FEE),
@@ -352,32 +369,54 @@ def register(app, st, chains):
         txid = str(said.get("txid") or "").lower()
         if s is None or s["step"] != "locking" or not TXID.fullmatch(txid):
             return fail("no such swap locking", 404)
-        wc = chains.by_network(s["get_net"])
-        script = htlclib.p2sh_script(bytes.fromhex(s["redeem"])).hex()
-        if s.get("dd_give"):
-            script = taker_dd_lock(s).script().hex()
         try:
-            got = v1.core(wc.network, "getrawtransaction", txid, True)
-        except V1Error as e:
+            got = adopt(s, txid)
+        except (ValueError, V1Error) as e:
             return fail(str(e))
-        need = (0 if s.get("dd_give") else LEDGER_COIN if s.get("token_give") else int(s.get("sell_value") or 0) if s.get("ord_sell")
+        return JSONResponse(got)
+
+    def lock_script(s: dict) -> str:
+        if s.get("dd_give"):
+            return taker_dd_lock(s).script().hex()
+        return htlclib.p2sh_script(bytes.fromhex(s["redeem"])).hex()
+
+    def lock_need(s: dict) -> int:
+        return (0 if s.get("dd_give") else LEDGER_COIN if s.get("token_give") else int(s.get("sell_value") or 0) if s.get("ord_sell")
                 else int(s["order"]["get"]["amount"]) + SPEND_FEE)
+
+    def adopt(s: dict, txid: str) -> dict:
+        """The visitor's lock transaction `txid` taken as this swap's lock once it pays the lock: step "locked"."""
+        wc = chains.by_network(s["get_net"])
+        got = v1.core(wc.network, "getrawtransaction", txid, True)
+        script, need = lock_script(s), lock_need(s)
         vout = next((n for n, o in enumerate((got or {}).get("vout") or [])
                      if o["scriptPubKey"]["hex"] == script and int(round(float(o["value"]) * COIN)) >= need), None)
         if vout is None:
-            return fail("that transaction does not pay the lock")
+            raise ValueError("that transaction does not pay the lock")
         s.update(lock_txid=txid, lock_vout=vout, step="locked")
-        save(s["question"], account.pubkey, s)
+        save(s["question"], s["account"], s)
         if s.get("ord_sell") and vout != 0:
-            return fail("an inscription's lock is output 0 of its transaction")
+            raise ValueError("an inscription's lock is output 0 of its transaction")
         if s.get("dd_give"):
-            s.update(lock_txid=txid, lock_vout=vout, step="locked")
-            save(s["question"], account.pubkey, s)
-            return JSONResponse({"vout": vout, "network": wc.network, "locktime": s["taker_time"], "dd": True})
+            return {"vout": vout, "network": wc.network, "locktime": s["taker_time"], "dd": True}
         leg = ({"kind": "token", "asset": s["token_give"]["asset"], "amount": s["token_give"]["amount"]} if s.get("token_give")
                else {"kind": "doginal", "asset": s["inscription"], "amount": "1"} if s.get("ord_sell")
                else {"kind": "coin", "amount": _fmt(need)})
-        return JSONResponse({"vout": vout, "redeem": s["redeem"], "network": wc.network, "locktime": s["taker_time"], "leg": leg})
+        return {"vout": vout, "redeem": s["redeem"], "network": wc.network, "locktime": s["taker_time"], "leg": leg}
+
+    def find_lock(s: dict) -> str:
+        """The visitor's lock found on its chain by the lock's own address (the tab closed before it said which
+        transaction it sent): its txid, or ""."""
+        if s.get("dd_give"):
+            return ""
+        wc = chains.by_network(s["get_net"])
+        addr = htlclib.address_of(bytes.fromhex(s["redeem"]), wc.params)
+        held = (v1.cmd("tx.coins", addresses=[addr], chain=wc.key) or {}).get("addresses", {}).get(addr, {})
+        need = lock_need(s)
+        for c in (held.get("confirmed") or []) + (held.get("unconfirmed") or []):
+            if int(c.get("value") or 0) >= need and TXID.fullmatch(str(c.get("txid") or "")):
+                return str(c["txid"])
+        return ""
 
     def ord_lock_wrong(chain, txid: str, vout: int, redeem: bytes, inscription: str) -> str:
         """Why the maker's lock of an inscription is not the one agreed ("" when it is): the inscription at the start of
@@ -652,40 +691,38 @@ def register(app, st, chains):
         except (fundinglib.FundingError, ValueError, V1Error, StopIteration) as e:
             return fail(str(e) or "that commit is not the one this lock made")
 
-    @app.post("/account/swap/step")
-    def swap_step(request: Request, payload: Any = Body(None)):
-        """One step on: the maker told once the visitor's lock is mined; then the maker's lock read and checked."""
-        said = payload if isinstance(payload, dict) else {}
-        account, s = mine(request, str(said.get("id") or ""))
-        if s is None:
-            return fail("no such swap", 404)
-        o, wait = s["order"], ""
+    def advance(s: dict) -> dict:
+        """One step on: the maker told once the visitor's lock is mined; then the maker's lock read and checked. Run by
+        the browser while it is open (/account/swap/step) and by this site's runner when it was handed the swap."""
+        o, wait, who = s["order"], "", s["account"]
+        if s["step"] == "claimed":
+            return {"step": "claimed", "txid": s.get("claim_txid", ""), "say": ""}
         if s["step"] == "wrong":
-            return JSONResponse({"step": "failed", "say": "The other side's lock is not what was agreed: it is not claimed. "
+            return ({"step": "failed", "say": "The other side's lock is not what was agreed: it is not claimed. "
                                  "Your refund comes back after your lock's time."})
         try:
             if s["step"] == "locked":
                 wc = chains.by_network(s["get_net"])
                 out = tx_out(wc, s["lock_txid"], s["lock_vout"])
                 if not out or out["confirmations"] < 1:
-                    return JSONResponse({"step": "locked", "say": f"Your lock is waiting for its block on {wc.label}."})
+                    return ({"step": "locked", "say": f"Your lock is waiting for its block on {wc.label}."})
                 keys = {o["get"]["chain"]: s["my_get"], o["give"]["chain"]: s["my_give"]}
                 v1.cmd("swap.told", node=s["node"], order=o["id"], hash=s["hash"], taker=s["question"], taker_keys=keys,
                        taker_time=s["taker_time"], taker_lock={"txid": s["lock_txid"], "vout": s["lock_vout"], "step": "locked"})
                 s["step"] = "told"
-                save(s["question"], account.pubkey, s)
+                save(s["question"], who, s)
             if s["step"] == "told":
                 a = v1.cmd("swap.status", node=s["node"], hash=s["hash"], taker=s["question"])
                 ml = a.get("maker_lock") or {}
                 if a.get("step") in ("failed", "refunded"):
-                    return JSONResponse({"step": "failed", "say": "The other side did not lock. Your coins come back "
+                    return ({"step": "failed", "say": "The other side did not lock. Your coins come back "
                                          "to you after your lock's time; this site sends the refund you signed."})
                 if ml.get("step") != "locked":
-                    return JSONResponse({"step": "told", "say": "The other side is locking its coins."})
+                    return ({"step": "told", "say": "The other side is locking its coins."})
                 gc = chains.by_network(s["give_net"])
                 t = int(ml.get("time") or 0)
                 if t < time.time() + min(CLAIM_MARGIN, s["maker_secs"] // 3):
-                    return JSONResponse({"step": "told", "say": "The other side's lock ends too soon to claim safely; "
+                    return ({"step": "told", "say": "The other side's lock ends too soon to claim safely; "
                                          "your refund comes back after your lock's time."})
                 redeem = htlclib.redeem_script(bytes.fromhex(s["hash"]), bytes.fromhex(s["my_give"]),
                                                bytes.fromhex(s["maker_keys"].get(o["give"]["chain"], "")), t,
@@ -693,7 +730,7 @@ def register(app, st, chains):
                 txid, vout = str(ml.get("txid") or ""), int(ml.get("vout") or 0)
                 out = tx_out(gc, txid, vout) if TXID.fullmatch(txid) else None
                 if not out or out["confirmations"] < 1:
-                    return JSONResponse({"step": "told", "say": f"The other side's lock is waiting for its block on "
+                    return ({"step": "told", "say": f"The other side's lock is waiting for its block on "
                                                                 f"{gc.label}."})
                 if s.get("kind") == "ord":
                     bad = ord_lock_wrong(gc, txid, vout, redeem, s["inscription"])
@@ -709,24 +746,24 @@ def register(app, st, chains):
                     bad = ""
                 if bad:
                     s["step"] = "wrong"
-                    save(s["question"], account.pubkey, s)
-                    return JSONResponse({"step": "failed", "say": "The other side's lock is not what was agreed: it is "
+                    save(s["question"], who, s)
+                    return ({"step": "failed", "say": "The other side's lock is not what was agreed: it is "
                                          "not claimed. Your refund comes back after your lock's time."})
                 s.update(step="claimable", maker_redeem=redeem.hex(), maker_txid=txid, maker_vout=vout)
-                save(s["question"], account.pubkey, s)
+                save(s["question"], who, s)
             if s["step"] == "claimable" and s.get("dd_buy"):
-                return JSONResponse({"step": "claimable", "network": s["give_net"], "dd": True,
+                return ({"step": "claimable", "network": s["give_net"], "dd": True,
                                      "leg": {"kind": "dd", "network": s["give_net"], "amount": s["dd_buy"]}})
             if s["step"] == "claimable" and s.get("kind") in ("token", "token20"):
-                return JSONResponse({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
+                return ({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
                                      "txid": s["maker_txid"], "vout": 0 if s["kind"] == "token20" else s["maker_vout"],
                                      "leg": {"kind": s["kind"], "network": s["give_net"], **s["token"]}})
             if s["step"] == "claimable" and s.get("kind") == "ord":
-                return JSONResponse({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
+                return ({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
                                      "txid": s["maker_txid"], "vout": 0,
                                      "leg": {"kind": "doginal", "network": s["give_net"], "asset": s["inscription"], "amount": "1"}})
             if s["step"] == "claimable":
-                return JSONResponse({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
+                return ({"step": "claimable", "network": s["give_net"], "redeem": s["maker_redeem"],
                                      "txid": s["maker_txid"], "vout": s["maker_vout"],
                                      "leg": {"kind": "coin", "network": s["give_net"],
                                              **({"amount": str(int(o["give"]["amount"]) - int(s["fee"])), "fee_value": int(s["fee"]),
@@ -734,7 +771,16 @@ def register(app, st, chains):
                                                 else {"amount": str(int(o["give"]["amount"]))})}})
         except V1Error as e:
             wait = str(e)
-        return JSONResponse({"step": s["step"], "say": wait or ""})
+        return {"step": s["step"], "say": wait or ""}
+
+    @app.post("/account/swap/step")
+    def swap_step(request: Request, payload: Any = Body(None)):
+        said = payload if isinstance(payload, dict) else {}
+        account, s = mine(request, str(said.get("id") or ""))
+        if s is None:
+            return fail("no such swap", 404)
+        with running:                                       # the runner and the tab take turns on one swap
+            return JSONResponse(advance(load(s["question"]) or s))
 
     @app.post("/account/swap/done")
     def swap_done(request: Request, payload: Any = Body(None)):
@@ -779,58 +825,63 @@ def register(app, st, chains):
         said = payload if isinstance(payload, dict) else {}
         try:
             chain, owner, redeem, lk = lock_for(account, said)
-            kind = str(said.get("kind") or "")
-            me = bytes.fromhex(coin_pub(account.pubkey, chain) or "00")
-            if kind not in ("claim", "refund"):
-                raise ValueError("a lock is claimed or refunded")
-            if (kind == "claim" and lk["claimer"] != me) or (kind == "refund" and lk["refunder"] != me):
-                raise ValueError("that lock is not this account's to " + kind)
-            leg = said.get("leg") or {}
-            leg_kind = str(leg.get("kind") or "coin")
-            if leg_kind not in ("coin", "doginal", "token", "token20"):
-                raise ValueError("coins, inscriptions and tokens only on this website for now")
-            txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
-            if leg_kind in ("doginal", "token20"):
-                vout = 0
-            out = lock_coin(chain, txid, vout)
-            if out is None:
-                raise ValueError("that lock coin is spent, or not there")
-            if out["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
-                raise ValueError("that coin is not under this lock")
-            coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
-            operator = take_fee(account.pubkey, txid, vout) if kind == "claim" else None
-            if leg_kind == "token":
-                # An arcade-ledger token out of the lock (V1.0's swaps.rs spend): the ledger's send in one data output,
-                # the receiver the last output; the lock's coin pays the fee.
-                pid, units = int(leg.get("asset") or 0), int(leg.get("amount") or 0)
-                if pid <= 0 or units <= 0:
-                    raise ValueError("a token leg names its token and amount")
-                data = b"arcd" + bytes(4) + pid.to_bytes(4, "big") + units.to_bytes(8, "big")
-                if coin["value"] < htlclib.DUST + SPEND_FEE // 2:
-                    raise ValueError("the lock's coin is too small to pay for its spend")
-                inputs = [{"txid": txid, "vout": vout, "value": coin["value"]}]
-                outputs = [(0, op_return_script(data)), (htlclib.DUST, p2pkh_script(owner))]
-            elif leg_kind in ("doginal", "token20"):
-                # An inscription (or a DRC-20 / PRC-20 note) comes out first and whole; its reserve (output 1, under the same lock) is the fee.
-                res = lock_coin(chain, txid, 1)
-                if res is None or res["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
-                    raise ValueError("no reserve under this lock beside the inscription")
-                reserve = {"txid": txid, "vout": 1, "value": int(round(float(res["value"]) * COIN))}
-                inputs, outputs = htlclib.doginal_out(coin, reserve, owner, operator=operator, refund=kind == "refund")
-                inputs = [{**inputs[0], "value": coin["value"]}, {**inputs[1], "value": reserve["value"]}]
-            else:
-                inputs, outputs = htlclib.pay_out(coin, owner, fee=SPEND_FEE, params=chain.params, operator=operator)
-            locktime = 0
-            if kind == "refund":
-                inputs = [{**c, "sequence": htlclib.NOT_FINAL} for c in inputs]
-                locktime = lk["locktime"]
-            nt = ntime(chain)
-            raw = escrowlib.serialize(inputs, outputs, locktime, ntime=nt).hex()
-            digests = [escrowlib.sighash(inputs, outputs, n, redeem, locktime, ntime=nt).hex() for n in range(len(inputs))]
+            got = spend_parts(account.pubkey, chain, owner, redeem, lk, bytes.fromhex(coin_pub(account.pubkey, chain) or "00"),
+                              str(said.get("kind") or ""), str(said.get("txid") or "").lower(), int(said.get("vout") or 0),
+                              said.get("leg") or {})
         except (ValueError, V1Error) as exc:
             return fail(str(exc))
-        return JSONResponse({"chain": chain.network, "kind": kind, "raw": raw, "sighash": digests[0], "sighashes": digests,
-                             "value": coin["value"], "to": owner, "locktime": locktime})
+        return JSONResponse({"chain": chain.network, "kind": got["kind"], "raw": got["raw"], "sighash": got["digests"][0],
+                             "sighashes": got["digests"], "value": got["coin"]["value"], "to": owner, "locktime": got["locktime"]})
+
+    def spend_parts(pubkey: str, chain, owner: str, redeem: bytes, lk: dict, me: bytes, kind: str, txid: str, vout: int,
+                    leg: dict) -> dict:
+        """The unsigned claim or refund of one lock coin, paying `owner`, by the lock's key `me`: {raw, digests, coin,
+        locktime, kind}. ValueError when it can't be built."""
+        if kind not in ("claim", "refund"):
+            raise ValueError("a lock is claimed or refunded")
+        if (kind == "claim" and lk["claimer"] != me) or (kind == "refund" and lk["refunder"] != me):
+            raise ValueError("that lock is not this account's to " + kind)
+        leg_kind = str(leg.get("kind") or "coin")
+        if leg_kind not in ("coin", "doginal", "token", "token20"):
+            raise ValueError("coins, inscriptions and tokens only on this website for now")
+        if leg_kind in ("doginal", "token20"):
+            vout = 0
+        out = lock_coin(chain, txid, vout)
+        if out is None:
+            raise ValueError("that lock coin is spent, or not there")
+        if out["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+            raise ValueError("that coin is not under this lock")
+        coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
+        operator = take_fee(pubkey, txid, vout) if kind == "claim" else None
+        if leg_kind == "token":
+            # An arcade-ledger token out of the lock (V1.0's swaps.rs spend): the ledger's send in one data output,
+            # the receiver the last output; the lock's coin pays the fee.
+            pid, units = int(leg.get("asset") or 0), int(leg.get("amount") or 0)
+            if pid <= 0 or units <= 0:
+                raise ValueError("a token leg names its token and amount")
+            data = b"arcd" + bytes(4) + pid.to_bytes(4, "big") + units.to_bytes(8, "big")
+            if coin["value"] < htlclib.DUST + SPEND_FEE // 2:
+                raise ValueError("the lock's coin is too small to pay for its spend")
+            inputs = [{"txid": txid, "vout": vout, "value": coin["value"]}]
+            outputs = [(0, op_return_script(data)), (htlclib.DUST, p2pkh_script(owner))]
+        elif leg_kind in ("doginal", "token20"):
+            # An inscription (or a DRC-20 / PRC-20 note) comes out first and whole; its reserve (output 1, under the same lock) is the fee.
+            res = lock_coin(chain, txid, 1)
+            if res is None or res["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                raise ValueError("no reserve under this lock beside the inscription")
+            reserve = {"txid": txid, "vout": 1, "value": int(round(float(res["value"]) * COIN))}
+            inputs, outputs = htlclib.doginal_out(coin, reserve, owner, operator=operator, refund=kind == "refund")
+            inputs = [{**inputs[0], "value": coin["value"]}, {**inputs[1], "value": reserve["value"]}]
+        else:
+            inputs, outputs = htlclib.pay_out(coin, owner, fee=SPEND_FEE, params=chain.params, operator=operator)
+        locktime = 0
+        if kind == "refund":
+            inputs = [{**c, "sequence": htlclib.NOT_FINAL} for c in inputs]
+            locktime = lk["locktime"]
+        nt = ntime(chain)
+        raw = escrowlib.serialize(inputs, outputs, locktime, ntime=nt).hex()
+        digests = [escrowlib.sighash(inputs, outputs, n, redeem, locktime, ntime=nt).hex() for n in range(len(inputs))]
+        return {"raw": raw, "digests": digests, "coin": coin, "locktime": locktime, "kind": kind}
 
     def checked_spend(account, said: dict):
         """(chain, redeem, lock, raw, signatures, kind): a spend of one lock coin that pays this account only."""
@@ -929,6 +980,86 @@ def register(app, st, chains):
     # it, since a just-sent transaction on another chain may not be read back yet.
     app.state.swap_claim_of = lambda qid: str((load(qid) or {}).get("claim_txid") or "")
 
+    # ---------------------------------------------------------------- swaps handed to this site
+    @app.post("/account/swap/hand")
+    def swap_hand(request: Request, payload: Any = Body(None)):
+        """The swap handed to this site so it finishes with the tab closed: the secret and the one-time claim key (its
+        public half named at /account/swap/lock). This site then tells the maker, checks the maker's lock and claims it
+        to this account's own address; the visitor's refund stays the one they signed."""
+        said = payload if isinstance(payload, dict) else {}
+        account, s = mine(request, str(said.get("id") or ""))
+        if s is None or not s.get("claim_pub") or s["step"] in ("claimed", "wrong"):
+            return fail("no such swap to hand over", 404)
+        try:
+            secret, key_hex = bytes.fromhex(str(said.get("secret") or "")), str(said.get("claim_key") or "")
+            held = HeldKey(key_hex)
+        except ValueError:
+            return fail("hex, please")
+        if len(secret) != 32 or htlclib.hash_of(secret).hex() != s.get("hash"):
+            return fail("that secret does not open this swap's locks")
+        if held.pubkey.hex() != s["claim_pub"]:
+            return fail("that key is not the claim key named for this swap")
+        with running:
+            s = load(s["question"]) or s
+            s.update(secret=secret.hex(), claim_key=key_hex, handed=int(time.time()))
+            save(s["question"], account.pubkey, s)
+        return JSONResponse({"ok": True})
+
+    def claim_handed(s: dict, at: dict) -> str:
+        """The maker's lock claimed for the visitor with the key and secret they handed over: the claim's txid."""
+        chain = chains.by_network(s["give_net"])
+        owner = chains.account_address(s["account"], chain)
+        if not owner:
+            raise ValueError("this account has no address on that chain")
+        redeem = bytes.fromhex(s["maker_redeem"])
+        lk = htlclib.parse(redeem)
+        key = HeldKey(s["claim_key"])
+        got = spend_parts(s["account"], chain, owner, redeem, lk, key.pubkey, "claim", s["maker_txid"],
+                          int(s["maker_vout"]), at.get("leg") or {})
+        secret = bytes.fromhex(s["secret"])
+        scripts = [htlclib.claim_script_sig(key.sign(bytes.fromhex(d)), secret, redeem) for d in got["digests"]]
+        return v1.core(chain.network, "sendrawtransaction", put_scripts(bytes.fromhex(got["raw"]), scripts).hex())
+
+    def run_once() -> None:
+        """Every swap handed to this site, one step on; a claimable one claimed."""
+        with db() as c:
+            rows = [json.loads(r["data"]) for r in c.execute(
+                "SELECT data FROM swap WHERE step IN ('locking', 'locked', 'told', 'claimable')")]
+        for s in rows:
+            if not s.get("handed"):
+                continue
+            with running:
+                s = load(s["question"]) or s
+                try:
+                    if s["step"] == "locking":
+                        txid = find_lock(s)
+                        if not txid:
+                            continue
+                        adopt(s, txid)
+                    at = advance(s)
+                    s = load(s["question"]) or s
+                    if at.get("step") == "claimable" and s["step"] == "claimable":
+                        txid = claim_handed(s, at)
+                        s.update(step="claimed", claim_txid=str(txid)[:64], claimed_by="site", note="")
+                        save(s["question"], s["account"], s)
+                        row = app.state.page_send(s["question"]) if hasattr(app.state, "page_send") else None
+                        if row is not None and row.get("status") == "pending":
+                            row.update(status="sent", txid=s["claim_txid"])
+                    elif at.get("say") and at["say"] != s.get("note"):
+                        s["note"] = at["say"]
+                        save(s["question"], s["account"], s)
+                except (ValueError, V1Error, WatchError) as e:
+                    s["note"] = str(e)[:200]
+                    save(s["question"], s["account"], s)
+
+    def runner():
+        while True:
+            try:
+                run_once()
+            except Exception:                               # noqa: BLE001 -- kept running; each swap notes its own error
+                pass
+            time.sleep(20)
+
     # ---------------------------------------------------------------- the refunds held
     def watch_once() -> None:
         with db() as c:
@@ -967,4 +1098,6 @@ def register(app, st, chains):
             time.sleep(60)
 
     app.state.swap_watch_once = watch_once
+    app.state.swap_run_once = run_once
     threading.Thread(target=watcher, name="swap-refunds", daemon=True).start()
+    threading.Thread(target=runner, name="swap-runner", daemon=True).start()
