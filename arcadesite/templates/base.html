@@ -628,10 +628,91 @@ const CREATOR_ACTIONS = {
   "token.manage": {path: "/account/token/manage", title: "change a token you issued", yes: "Do it",
                    fields: ["action", "property_id", "amount", "to", "note"]},
 };
+// inscribe.file (NFT Inscriber): a whole file of any size, as the NFTs page inscribes one. Asked ONCE with every cost,
+// then the split and each piece are signed here without asking again, and the app hears {progress, sent, pieces}
+// as they go. args: {data: ArrayBuffer | Uint8Array, name, contenttype, json?: object}.
+const CREATOR_FILE_MOST = 4 * 1024 * 1024;
+async function creatorInscribeFile(m, answer, wallet, held, who) {
+  const a = (m.args && typeof m.args === "object") ? m.args : {};
+  const bytes = a.data instanceof ArrayBuffer ? new Uint8Array(a.data) : a.data instanceof Uint8Array ? a.data : null;
+  if (!bytes || !bytes.length) throw new Error("there is nothing to inscribe");
+  if (bytes.length > CREATOR_FILE_MOST) {
+    throw new Error(`an app may inscribe up to ${CREATOR_FILE_MOST.toLocaleString()} bytes at a time`);
+  }
+  const b64 = (u) => { let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
+  const post = async (body) => {
+    const r = await fetch("/account/inscribe", {method: "POST", headers: {"Content-Type": "application/json"},
+                                               body: JSON.stringify({chain: ARCADE_CHAIN.network, ...body})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || "this cannot be inscribed");
+    return j;
+  };
+  const name = String(a.name || "file").slice(0, 120);
+  const type = String(a.contenttype || "application/octet-stream").slice(0, 100);
+  const json = (a.json && typeof a.json === "object" && !Array.isArray(a.json)) ? JSON.stringify(a.json) : "";
+  const start = await post({content: b64(bytes), content_type: type, name, json});
+  const pieces = Math.max(1, Number(start.chunks || 1));
+  let n = Number(start.next ?? start.sent ?? 0) || 0;
+  const shown = start.offer ? await wallet.checked(start, held) : null;
+  const cost = pieces === 1 ? (shown ? shown.says : "")
+    : `as ${pieces.toLocaleString()} transactions, for about ${arcadeCoins(arcadeFileCost(bytes.length).coins)} in dust and fees`
+      + (n ? ` (${n.toLocaleString()} are already on the chain)` : "");
+  const ok = await arcadeAsk(`${who} asks to inscribe ${name}`,
+    `${bytes.length.toLocaleString()} bytes (${type}) go on the chain for good, as yours, ${cost}. `
+    + (pieces > 1 ? "One transaction first splits your coins into the pieces; after its block (about a minute) the rest "
+                    + "go out, signed here without asking again. Keep this tab open until it says done. " : "")
+    + "Worked out in this browser from the transactions' own bytes, not from what the app says.", "Inscribe it");
+  if (!ok) { answer({error: "Cancelled."}); return; }
+  if (pieces === 1) {
+    const done = await wallet.confirm(held, start);
+    answer({ok: true, txid: done.txid || "", inscription: done.txid || "", what: `inscribe ${name}`});
+    arcadeToast("Inscribed. It is on the chain when the block lands.");
+    return;
+  }
+  if (start.offer) { await wallet.confirm(held, start); answer({progress: "Split sent; waiting for its block…", sent: n, pieces}); }
+  const cl = Number(start.chunk_len || 0), ml = Number(start.manifest_len || 0);
+  let root = "", until = Date.now() + 15 * 60 * 1000;
+  while (n < pieces) {
+    const from = Math.max(0, n * cl - ml), to = Math.min(bytes.length, (n + 1) * cl - ml);
+    const got = await post({part: start.part, chunk: n, content: b64(bytes.subarray(from, Math.max(from, to)))});
+    if (got.resplit && got.offer) {
+      await wallet.checked(got, held); await wallet.confirm(held, got);
+      until = Date.now() + 15 * 60 * 1000;
+      answer({progress: "Your coins were spent elsewhere; split again, waiting for its block…", sent: n, pieces});
+      continue;
+    }
+    if (got.waiting) {
+      if (Date.now() > until) throw new Error("the split has not been mined in fifteen minutes; nothing more was paid for. Ask again with the same file and it carries on.");
+      answer({progress: "Waiting for the split's block (about a minute)…", sent: n, pieces});
+      await new Promise((r) => setTimeout(r, 5000));
+      continue;
+    }
+    await wallet.checked(got, held);
+    const done = await wallet.confirm(held, got);
+    if (n === 0) root = done.txid || "";
+    n += 1;
+    answer({progress: `Piece ${n.toLocaleString()} of ${pieces.toLocaleString()} sent`, sent: n, pieces});
+  }
+  answer({ok: true, txid: root, inscription: root, what: `inscribe ${name}`});
+  arcadeToast(`Inscribed ${name}: every piece is sent.`);
+}
 async function creatorFor(source, m, page = "") {
   const answer = (body) => source.postMessage({arcade: "creator", seq: m.seq, ...body}, "*");
   answer({heard: true});
   if (!ARCADE_ME) { answer({error: "Sign in or join first."}); return; }
+  if (m.action === "inscribe.file") {
+    while (minting) await new Promise((r) => setTimeout(r, 200));
+    minting = true;
+    try {
+      const wallet = await import("/wallet.js");
+      const held = (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+      if (!held) throw new Error("Unlock your wallet first.");
+      await creatorInscribeFile(m, answer, wallet, held, await arcadeRequester(page));
+    } catch (err) {
+      answer({error: String(err.message || err)});
+    } finally { minting = false; }
+    return;
+  }
   const act = CREATOR_ACTIONS[String(m.action || "")];
   if (!act) { answer({error: "that is not something an app can ask the Creator for"}); return; }
   while (minting) await new Promise((r) => setTimeout(r, 200));
