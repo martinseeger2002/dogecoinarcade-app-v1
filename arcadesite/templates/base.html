@@ -711,7 +711,8 @@ async function swapTakeFor(ask, answer, wallet, held) {
     : q.dd && q.dd.get ? await arcadeAsk(`${who} asks you to swap ${q.get.amount} ${q.get.coin} for $${q.dd.get} in DigiDollars`,
     `You lock ${q.lock} ${q.get.coin} on ${q.get.chain} by script` + (q.fee ? `, and pay this site's fee (${q.fee} ` +
     `${q.get.coin}) in the same transaction` : "") + `. The other side locks $${q.dd.get} DigiDollars on ${q.give.chain}; ` +
-    `you claim them to your own DigiDollar address. If the swap doesn't finish, your coins come back after about ` +
+    `they are claimed to your own DigiDollar address. You can close this tab once it starts: this site finishes the ` +
+    `swap. If it doesn't finish, your coins come back after about ` +
     `${hours === 1 ? "an hour" : hours + " hours"}.`, "Yes, swap")
     : q.t20 ? await arcadeAsk(`${who} asks you to swap ${q.t20.amount} ${q.t20.tick.toUpperCase()} for ${q.give.amount} ${q.give.coin}`,
     `Your ${q.t20.amount} ${q.t20.tick.toUpperCase()} are locked by script on ${q.get.chain} (four steps: a transfer note, the ` +
@@ -745,13 +746,11 @@ async function swapTakeFor(ask, answer, wallet, held) {
   const hash = await coins.sha256Of(secret);
   const redeem = coins.htlcRedeem(hash, un(q.maker_key), un(q.my_key), q.taker_time);
   try { localStorage.setItem("arcade-swap:" + ask.id, hx(secret)); } catch (e) { /* kept in this tab only */ }
-  // The swap handed to this site so it finishes with the tab closed (not DigiDollars bought: that claim is signed
-  // here): a one-time key for claiming the other side's lock, and the secret. Your own coins' refund stays the one you
+  // The swap handed to this site so it finishes with the tab closed: a one-time key for claiming the other side's lock
+  // (coins, an inscription, tokens or DigiDollars), and the secret. Your own coins' refund stays the one you
   // sign below, with your own key.
   let claimKey = null;
-  if (!(q.dd && q.dd.get)) {
-    do { claimKey = crypto.getRandomValues(new Uint8Array(32)); } while (claimKey[0] === 255);   // below the curve order
-  }
+  do { claimKey = crypto.getRandomValues(new Uint8Array(32)); } while (claimKey[0] === 255);   // below the curve order
   const where = await post("/account/swap/lock", {id: ask.id, hash: hx(hash), redeem: hx(redeem),
                                                   ...(claimKey ? {claim_pub: hx(coins.publicKey(claimKey))} : {})});
   if (claimKey) await post("/account/swap/hand", {id: ask.id, secret: hx(secret), claim_key: hx(claimKey)});
@@ -807,8 +806,9 @@ async function swapTakeFor(ask, answer, wallet, held) {
       // Claimed by this site with the key handed over; wait for its claim.
       if (st.step === "claimable") { await new Promise((z) => setTimeout(z, 15000)); continue; }
       await answer({status: "sent", txid: st.txid});
-      arcadeToast(ord ? "Bought: the inscription is yours when its block lands."
-                      : `Swapped: ${q.give.amount} ${q.give.coin} is yours when its block lands.`);
+      arcadeToast(q.dd && q.dd.get ? `Swapped: $${q.dd.get} in DigiDollars is yours when its block lands.`
+                  : ord ? "Bought: the inscription is yours when its block lands."
+                  : `Swapped: ${q.give.amount} ${q.give.coin} is yours when its block lands.`);
       return;
     }
     if (st.step === "claimable" && st.dd) {

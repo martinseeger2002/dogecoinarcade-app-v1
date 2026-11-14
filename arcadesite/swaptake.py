@@ -18,7 +18,8 @@ refund the browser signs first, which it sends after the lock's time if the swap
                                  mined, checks the maker's lock and claims it to the visitor's own address. The site holds
                                  that key and secret only for the swap in flight; the visitor's own coins stay under
                                  their lock, refunded by the refund they signed with their own key (held here, sent after
-                                 the lock's time). DigiDollars bought are still claimed by the tab (a Taproot claim).
+                                 the lock's time). DigiDollars bought are claimed the same way, by the lock's claim leaf
+                                 with a BIP-340 signature by that key, paid to the visitor's own DigiDollar address.
 
 Coins for coins on chains this site keeps a wallet on (V1.0's lock times are clock times there), and one inscription
 for coins (2026-11-12, the Ord Market app's listings): the visitor locks the price, claims the inscription's lock (its
@@ -59,6 +60,28 @@ TAKER_FACTOR = 2
 #: never claims within 2 minutes of it).
 CLAIM_MARGIN = 600
 TXID = re.compile(r"[0-9a-f]{64}")
+
+
+def schnorr_sign(secret: int, message: bytes) -> bytes:
+    """A BIP-340 signature by `secret` over a 32-byte message (a Taproot script path's SIGHASH_DEFAULT digest): for a
+    DigiDollar lock's claim leaf, signed with the one-time key a visitor handed over."""
+    import os
+    from arcade import taproot as tap
+    n = tap.N
+    if not 0 < secret < n:
+        raise ValueError("that is not a key")
+    pub = tap.mul(secret)
+    d = secret if pub[1] % 2 == 0 else n - secret
+    px = pub[0].to_bytes(32, "big")
+    t = (d ^ int.from_bytes(tap.tagged("BIP0340/aux", os.urandom(32)), "big")).to_bytes(32, "big")
+    k0 = int.from_bytes(tap.tagged("BIP0340/nonce", t + px + message), "big") % n
+    if k0 == 0:
+        raise ValueError("try again")
+    r = tap.mul(k0)
+    k = k0 if r[1] % 2 == 0 else n - k0
+    rx = r[0].to_bytes(32, "big")
+    e = int.from_bytes(tap.tagged("BIP0340/challenge", rx + px + message), "big") % n
+    return rx + ((k + e * d) % n).to_bytes(32, "big")
 
 
 def _fmt(sats: int) -> str:
@@ -281,9 +304,9 @@ def register(app, st, chains):
         if claim_pub:
             # The visitor's one-time key for claiming the other side's lock (the swap handed to this site, so it finishes
             # with the tab closed): the maker locks to it instead of the account's own key.
-            if not re.fullmatch(r"0[23][0-9a-f]{64}", claim_pub) or s.get("dd_buy"):
+            if not re.fullmatch(r"0[23][0-9a-f]{64}", claim_pub):
                 return fail("that claim key can't be used for this swap")
-            s.update(my_give=claim_pub, claim_pub=claim_pub)
+            s.update(own_give=s.get("own_give") or s["my_give"], my_give=claim_pub, claim_pub=claim_pub)
         s.update(hash=want_hash.hex(), redeem=redeem.hex(), step="locking")
         save(s["question"], account.pubkey, s)
         out = {"address": htlclib.address_of(redeem, wc.params), "amount": _fmt(int(get["amount"]) + SPEND_FEE),
@@ -407,12 +430,18 @@ def register(app, st, chains):
     def find_lock(s: dict) -> str:
         """The visitor's lock found on its chain by the lock's own address (the tab closed before it said which
         transaction it sent): its txid, or ""."""
-        if s.get("dd_give"):
-            return ""
         wc = chains.by_network(s["get_net"])
-        addr = htlclib.address_of(bytes.fromhex(s["redeem"]), wc.params)
+        if s.get("dd_give"):
+            # A DigiDollar lock: a Taproot output, found by its reserve of DGB at the same address.
+            from arcade.script import segwit_encode
+            from .ddswap import RESERVE
+            hrp = getattr(wc.params, "bech32_hrp", "")
+            if not hrp:
+                return ""
+            addr, need = segwit_encode(hrp, 1, bytes.fromhex(lock_script(s))[2:]), RESERVE
+        else:
+            addr, need = htlclib.address_of(bytes.fromhex(s["redeem"]), wc.params), lock_need(s)
         held = (v1.cmd("tx.coins", addresses=[addr], chain=wc.key) or {}).get("addresses", {}).get(addr, {})
-        need = lock_need(s)
         for c in (held.get("confirmed") or []) + (held.get("unconfirmed") or []):
             if int(c.get("value") or 0) >= need and TXID.fullmatch(str(c.get("txid") or "")):
                 return str(c["txid"])
@@ -586,7 +615,7 @@ def register(app, st, chains):
                    and round(float(o["value"]) * COIN) >= RESERVE), None)
         if rv is None:
             return fail("no reserve beside the dollars")
-        to = tr.p2tr(tr.tweak(bytes.fromhex(s["my_give"])[1:]))
+        to = tr.p2tr(tr.tweak(bytes.fromhex(s.get("own_give") or s["my_give"])[1:]))
         dgb_to = p2pkh_script(chains.account_address(account.pubkey, gc))
         try:
             u = spend(ddl, {"txid": s["maker_txid"], "vout": s["maker_vout"]}, int(s["dd_buy"]),
@@ -1007,6 +1036,8 @@ def register(app, st, chains):
 
     def claim_handed(s: dict, at: dict) -> str:
         """The maker's lock claimed for the visitor with the key and secret they handed over: the claim's txid."""
+        if s.get("dd_buy"):
+            return claim_handed_dd(s)
         chain = chains.by_network(s["give_net"])
         owner = chains.account_address(s["account"], chain)
         if not owner:
@@ -1019,6 +1050,36 @@ def register(app, st, chains):
         secret = bytes.fromhex(s["secret"])
         scripts = [htlclib.claim_script_sig(key.sign(bytes.fromhex(d)), secret, redeem) for d in got["digests"]]
         return v1.core(chain.network, "sendrawtransaction", put_scripts(bytes.fromhex(got["raw"]), scripts).hex())
+
+    def claim_handed_dd(s: dict) -> str:
+        """The maker's DigiDollar lock claimed by its claim leaf (the secret, then a BIP-340 signature by the handed key):
+        the dollars to the visitor's own DigiDollar address, what the reserve has left to their DGB address."""
+        from arcade import taproot as tap
+        from arcade.ddlib import taproot as tr
+        from .ddswap import RESERVE, spend
+        gc = chains.by_network(s["give_net"])
+        ddl = maker_dd_lock(s, int(s["maker_time"]))
+        key = HeldKey(s["claim_key"])
+        if ddl.claimer != key.pubkey[1:]:
+            raise ValueError("the dollars are not locked to the claim key handed over")
+        got = v1.core(gc.network, "getrawtransaction", s["maker_txid"], True) or {}
+        rv = next((n for n, o in enumerate(got.get("vout") or []) if o["scriptPubKey"]["hex"] == ddl.script().hex()
+                   and round(float(o["value"]) * COIN) >= RESERVE), None)
+        if rv is None:
+            raise ValueError("no reserve beside the dollars")
+        owner = chains.account_address(s["account"], gc)
+        if not owner:
+            raise ValueError("this account has no DigiByte address")
+        to = tr.p2tr(tr.tweak(bytes.fromhex(s.get("own_give") or s["my_give"])[1:]))
+        u = spend(ddl, {"txid": s["maker_txid"], "vout": s["maker_vout"]}, int(s["dd_buy"]),
+                  {"txid": s["maker_txid"], "vout": rv, "value": round(float(got["vout"][rv]["value"]) * COIN)},
+                  to, p2pkh_script(owner), bytes.fromhex(s["secret"]))
+        sigs = [schnorr_sign(int(s["claim_key"], 16), bytes.fromhex(h)) for h in u.sighashes]
+        for n, sig in enumerate(sigs):
+            if not tap.verify(ddl.claimer, bytes.fromhex(u.sighashes[n]), sig):
+                raise ValueError("the claim's signature did not check")
+        raw = fundinglib.assemble(u, [x.hex() for x in sigs], key.pubkey)
+        return v1.core(gc.network, "sendrawtransaction", raw)
 
     def run_once() -> None:
         """Every swap handed to this site, one step on; a claimable one claimed."""
@@ -1048,7 +1109,7 @@ def register(app, st, chains):
                     elif at.get("say") and at["say"] != s.get("note"):
                         s["note"] = at["say"]
                         save(s["question"], s["account"], s)
-                except (ValueError, V1Error, WatchError) as e:
+                except (ValueError, V1Error, WatchError, fundinglib.FundingError) as e:
                     s["note"] = str(e)[:200]
                     save(s["question"], s["account"], s)
 

@@ -48,6 +48,9 @@ def varint(b, at):
 
 def decode(raw: bytes) -> dict:
     at = 4
+    segwit = raw[4] == 0 and raw[5] == 1
+    if segwit:
+        at = 6
     n, at = varint(raw, at)
     vin = []
     for _ in range(n):
@@ -62,6 +65,14 @@ def decode(raw: bytes) -> dict:
         v = int.from_bytes(raw[at:at + 8], "little")
         ln, at = varint(raw, at + 8)
         vout.append({"value": v / COIN, "n": i, "scriptPubKey": {"hex": raw[at:at + ln].hex()}}); at += ln
+    if segwit:
+        for v in vin:
+            k, at = varint(raw, at)
+            items = []
+            for _ in range(k):
+                ln, at = varint(raw, at)
+                items.append(raw[at:at + ln].hex()); at += ln
+            v["txinwitness"] = items
     return {"vin": vin, "vout": vout, "locktime": int.from_bytes(raw[at:at + 4], "little")}
 
 
@@ -494,6 +505,49 @@ def main():
     check(len(d10["vin"]) == 2 and d10["vout"] and d10["vout"][0]["scriptPubKey"]["hex"] == mine_dd
           and (cl.get("inputs") or [{}])[0].get("taproot", {}).get("extra") == [s10.hex()],
           f"the claim: both lock coins in, the dollars to the visitor's DigiDollar address, the secret carried ({cl.get('detail')})")
+    # ---- DigiDollars bought, handed to this site: the seller locks the dollars to the one-time claim key, and this site
+    # claims them by the claim leaf (a BIP-340 signature by that key), whole dollars to the visitor's own DD address
+    from arcade import taproot as tap
+    ORDER.update(id="dd00dd02", give={"chain": "doge", "kind": "dd", "asset": "DD", "amount": "2500"},
+                 get={"chain": "peptest", "kind": "coin", "asset": "", "amount": str(COIN)})
+    MAKER["lock"] = None
+    qe = c.post("/r/market/swap_take" + v, json={"node": "ab" * 8, "order": ORDER["id"]}).json()["id"]
+    qE = c.post("/account/swap/quote", json={"id": qe}).json()
+    sE = os.urandom(32); hE = hashlib.sha256(sE).digest()
+    kE, pE = key()
+    kE_hex = kE.private_numbers().private_value.to_bytes(32, "big").hex()
+    rE = htlc.redeem_script(hE, MK_K["test"][1], ME_K["test"][1], qE["taker_time"])
+    w = c.post("/account/swap/lock", json={"id": qe, "hash": hE.hex(), "redeem": rE.hex(), "claim_pub": pE.hex()}).json()
+    check(w.get("amount") == "1.01", f"a handed DigiDollar buy: the lock named with a claim key ({w.get('detail') or w.get('amount')})")
+    check(c.post("/account/swap/hand", json={"id": qe, "secret": sE.hex(), "claim_key": kE_hex}).status_code == 200, "handed over")
+    put_tx("test", "e5" * 32, [(COIN + 1_000_000, htlc.p2sh_script(rE).hex())], conf=1)
+    c.post("/account/swap/locked", json={"id": qe, "txid": "e5" * 32})
+    app.state.swap_run_once()
+    toldE = [a[1] for a in ASKED if a[0] == "told"][-1]
+    check(toldE.get("taker_keys", {}).get("doge") == pE.hex(), "the seller told to lock the dollars to the claim key")
+    MAKER["time"] = int(time.time()) + 4 * 3600
+    dlE = DDLock(hE, pE, MK_K["doge"][1], MAKER["time"], sized=True)
+    MAKER["lock"] = "e6" * 32
+    put_tx("doge", MAKER["lock"], [(0, dlE.script().hex()), (DD_RESERVE, dlE.script().hex()), (0, dd_record([2500]).hex())], conf=1)
+    CH["doge"][MAKER["lock"]]["version"] = ddtx.SEND_VERSION
+    nE = len(SENT["doge"])
+    app.state.swap_run_once()
+    rowE = json.loads(sqlite3.connect(os.path.join(home, "site-swaps.sqlite")).execute("SELECT data FROM swap WHERE id=?", (qe,)).fetchone()[0])
+    cE = SENT["doge"][-1][1] if len(SENT["doge"]) > nE else {"vin": [], "vout": []}
+    check(rowE["step"] == "claimed", f"this site claimed the dollars ({rowE['step']}, {rowE.get('note')})")
+    check(len(cE["vin"]) == 2 and cE["vout"] and cE["vout"][0]["scriptPubKey"]["hex"] == mine_dd,
+          "both lock coins in; the dollars to the visitor's own DigiDollar address (not the claim key's)")
+    check(cE["vout"] and cE["vout"][-1]["scriptPubKey"]["hex"] == dd_record([2500]).hex(),
+          "the record says 2500 cents: $25, whole dollars, nothing split off")
+    wit = (cE["vin"] or [{}])[0].get("txinwitness") or []
+    check(len(wit) == 4 and wit[1] == sE.hex(), "the claim leaf's witness: signature, secret, leaf, control")
+    if len(wit) == 4:
+        from arcadesite.ddswap import spend as dd_spend
+        u = dd_spend(dlE, {"txid": MAKER["lock"], "vout": 0}, 2500, {"txid": MAKER["lock"], "vout": 1, "value": DD_RESERVE},
+                     bytes.fromhex(mine_dd), p2pkh_script(ADDR["doge"]), sE)
+        check(tap.verify(pE[1:], bytes.fromhex(u.sighashes[0]), bytes.fromhex(wit[0])), "signed by the one-time claim key (BIP-340)")
+    app.state.swap_run_once()
+    check(len(SENT["doge"]) == nE + 1, "claimed only once")
     # ---- a take handed to this site: the tab closes once the lock is sent, and this site finishes the swap
     from arcade import escrow as escrowlib
     app.state.site.set_setting("trade_cut", 0)
