@@ -315,6 +315,7 @@ def register(app, st, chains):
             if again is not None and again.get("step") == "placed":      # the tab and the placer both asked
                 return {"step": "placed", "order": again["order"]}
             s.update(order=o.get("id"), step="placed", placed_at=int(time.time()))
+            getattr(app.state, "swap_book_poke", lambda: None)()   # everybody's book shows it at once
             save(s["question"], pubkey, s)
         answered(s["question"], s["order"])
         return {"step": "placed", "order": s["order"]}
@@ -361,6 +362,7 @@ def register(app, st, chains):
         except V1Error as e:
             return fail(str(e))
         s.update(step="released", returned=r.get("returned"))
+        getattr(app.state, "swap_book_poke", lambda: None)()
         save(s["question"], account.pubkey, s)
         answered(row["id"], order)
         return JSONResponse({"ok": True, "returned": r.get("returned") or []})
