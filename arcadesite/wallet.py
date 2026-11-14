@@ -92,6 +92,14 @@ class CoinDB:
         return [dict(r) for r in self._kept[address]]
 
 
+
+def _quietly(fn, *a):
+    """A background try whose failure only means "try again later" (an ARCADE gift still owed)."""
+    try:
+        fn(*a)
+    except Exception:                                       # noqa: BLE001
+        pass
+
 def register(app, st, chains):
     v1: V1 = st.v1
     offers = accountlib.Offers()
@@ -159,6 +167,9 @@ def register(app, st, chains):
                                  "chains": [{**row, "address": chains.account_address(account.pubkey, one)}
                                             for row, one in zip(rows, listed)]})
         home = chains.account_chain()
+        # An ARCADE welcome gift still owed (none to give at sign-up): tried again in the background.
+        if st.setting(f"arcade_gift_owed:{account.pubkey}") is not None and not st.setting(f"arcade_gift:{account.pubkey}"):
+            threading.Thread(target=lambda: _quietly(chains.welcome_arcade, account.pubkey), daemon=True).start()
         mine = st.vault().by_pubkey(account.pubkey) or {}
         address = chains.account_address(account.pubkey, home)
         said: dict[str, Any] = {

@@ -9,6 +9,7 @@ Each chain is the original's Params (arcade.config.NETWORKS) plus V1.0's key for
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from dataclasses import dataclass
 
@@ -17,8 +18,23 @@ from arcade.config import NETWORKS, Params
 from .addresses import _check_address
 from .v1 import V1, V1Error, chain_key
 
+#: The ARCADE testnet (Arcade V1.0's own chain, 2026-11-14, the operator: "add arcade test net to the
+#: app.dogecoinarcade.com"). The original has no such network, so its Params are made here and added to NETWORKS once,
+#: so every lookup by network name finds it: P2PKH 0x53 ("a..."), P2SH 0x57, the chain's fee floor (0.001 ARCADE/kB,
+#: twice that as the fallback, as V1.0's tx.fee says) and its smallest output (0.001 ARCADE). Test coins: an account's
+#: address on it comes from the testnet key (coin type 1), the one its profile already names.
+ARCTEST = dataclasses.replace(
+    NETWORKS["jkc"], name="arctest", rpc_port=0, p2p_port=0, activation_height=0, pubkeyhash_version=0x53,
+    scripthash_version=0x57, other_pubkeyhash_version=None, messaging_start_height=0, min_fee_per_kb=200_000,
+    soft_dust=False, dust_limit=100_000, coin="ARCADE", label="ARCADE testnet",
+    genesis="8891596abcceae069b4f022a34e78387259e168a581d37817f015af097a1d7c8", auxpow_chain_id=None,
+    auxpow_chain_mask=0, pow_algo="", node_dir="", node_conf="", letter="a", family="ARC", net_word="arcade",
+    real_coins=False)
+NETWORKS.setdefault("arctest", ARCTEST)
+
 #: The original's order of chains in a wallet (its Params order), by original network name.
-ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest")
+ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest",
+         "arctest")
 # Bitcoin (config.BITCOIN) is defined but not listed yet (the operator, 2026-11-12: "no Bitcoin yet").
 
 
@@ -37,7 +53,7 @@ class Chain:
 
     @property
     def is_mainnet(self) -> bool:
-        return self.network not in ("test", "regtest", "ltctest", "dgbtest")
+        return self.network not in ("test", "regtest", "ltctest", "dgbtest", "arctest")
 
 
 class Chains:
@@ -105,6 +121,55 @@ class Chains:
                                   real_coins=bool(self.st.setting("faucet_real_coins", False)))
         given = faucetlib.pour(_V1Chain(self.v1, self.account_chain()), faucet, pubkey, address, ip=ip)
         return given.amount
+
+    #: The ARCADE welcome gift (2026-11-14, the operator: "add the faucet"): 0.1 test ARCADE for each new account, beside
+    #: the faucet's Pepecoin testnet gift, so names and profiles can move to ARCADE. Setting "faucet_arcade" (sats).
+    ARCADE_GIFT = 10_000_000
+    ARCADE_RETRY = 600
+
+    def arcade_address(self, pubkey: str) -> str:
+        """The account's ARCADE testnet address: the one its browser filed, else its testnet key's (the same key hash
+        as its Pepecoin testnet address, version 0x53), as its profile names it."""
+        arc = self.by_network("arctest")
+        if arc is None:
+            return ""
+        said = self.account_address(pubkey, arc)
+        if said:
+            return said
+        from arcade.script import b58check_decode, b58check_encode
+        base = self.account_address(pubkey, self.account_chain())
+        try:
+            return b58check_encode(arc.params.pubkeyhash_version, b58check_decode(base)[1]) if base else ""
+        except Exception:                                   # noqa: BLE001
+            return ""
+
+    def welcome_arcade(self, pubkey: str, *, new: bool = False) -> str:
+        """Give the account its ARCADE gift once: at sign-up (`new`, after the faucet's own gift went, so its limits
+        hold), or later for an account whose gift is still owed (the arcade's ARCADE was all maturing then). The txid
+        given, or "" (none owed, none to give yet, or not tried again so soon)."""
+        done = f"arcade_gift:{pubkey}"
+        owed = f"arcade_gift_owed:{pubkey}"
+        if self.st.setting(done):
+            return ""
+        if new:
+            self.st.set_setting(owed, 0)
+        tried = self.st.setting(owed)
+        if tried is None or time.time() - float(tried or 0) < self.ARCADE_RETRY and not new:
+            return ""
+        self.st.set_setting(owed, time.time())
+        arc = self.by_network("arctest")
+        to = self.arcade_address(pubkey)
+        if arc is None or not to:
+            return ""
+        gift = self.st.setting("faucet_arcade")
+        sats = self.ARCADE_GIFT if gift is None else int(gift)
+        if sats <= 0:
+            return ""
+        out = self.v1.cmd("wallet.send", chain=arc.key, to=to, amount=sats, send=True) or {}
+        txid = str(out.get("txid") or "")
+        if txid:
+            self.st.set_setting(done, txid)
+        return txid
 
 
 class _V1Chain:
