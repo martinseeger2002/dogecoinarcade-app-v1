@@ -122,6 +122,55 @@ class Chains:
         given = faucetlib.pour(_V1Chain(self.v1, self.account_chain()), faucet, pubkey, address, ip=ip)
         return given.amount
 
+    #: The ARCADE welcome gift (2026-11-14, the operator: "add the faucet"): 0.1 test ARCADE for each new account, beside
+    #: the faucet's Pepecoin testnet gift, so names and profiles can move to ARCADE. Setting "faucet_arcade" (sats).
+    ARCADE_GIFT = 10_000_000
+    ARCADE_RETRY = 600
+
+    def arcade_address(self, pubkey: str) -> str:
+        """The account's ARCADE testnet address: the one its browser filed, else its testnet key's (the same key hash
+        as its Pepecoin testnet address, version 0x53), as its profile names it."""
+        arc = self.by_network("arctest")
+        if arc is None:
+            return ""
+        said = self.account_address(pubkey, arc)
+        if said:
+            return said
+        from arcade.script import b58check_decode, b58check_encode
+        base = self.account_address(pubkey, self.account_chain())
+        try:
+            return b58check_encode(arc.params.pubkeyhash_version, b58check_decode(base)[1]) if base else ""
+        except Exception:                                   # noqa: BLE001
+            return ""
+
+    def welcome_arcade(self, pubkey: str, *, new: bool = False) -> str:
+        """Give the account its ARCADE gift once: at sign-up (`new`, after the faucet's own gift went, so its limits
+        hold), or later for an account whose gift is still owed (the arcade's ARCADE was all maturing then). The txid
+        given, or "" (none owed, none to give yet, or not tried again so soon)."""
+        done = f"arcade_gift:{pubkey}"
+        owed = f"arcade_gift_owed:{pubkey}"
+        if self.st.setting(done):
+            return ""
+        if new:
+            self.st.set_setting(owed, 0)
+        tried = self.st.setting(owed)
+        if tried is None or time.time() - float(tried or 0) < self.ARCADE_RETRY and not new:
+            return ""
+        self.st.set_setting(owed, time.time())
+        arc = self.by_network("arctest")
+        to = self.arcade_address(pubkey)
+        if arc is None or not to:
+            return ""
+        gift = self.st.setting("faucet_arcade")
+        sats = self.ARCADE_GIFT if gift is None else int(gift)
+        if sats <= 0:
+            return ""
+        out = self.v1.cmd("wallet.send", chain=arc.key, to=to, amount=sats, send=True) or {}
+        txid = str(out.get("txid") or "")
+        if txid:
+            self.st.set_setting(done, txid)
+        return txid
+
 
 class _V1Chain:
     """What arcade/faucet.pour asks of a chain: is_mainnet, and rpc().call("sendtoaddress", address, coins)."""

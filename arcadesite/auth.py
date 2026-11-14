@@ -324,6 +324,12 @@ def register(app, st, chains):
             given = chains.welcome(pubkey, address, ip=apikeylib.client_ip(request))
         except Exception as exc:                            # noqa: BLE001 -- never fatal: the account exists
             why_not = str(exc)
+        if given:
+            # The ARCADE gift beside it (owed if the arcade has none to give yet: given at a later visit).
+            try:
+                chains.welcome_arcade(pubkey, new=True)
+            except Exception:                               # noqa: BLE001 -- never fatal either
+                pass
         answer = JSONResponse({"tag": wanted, "pubkey": pubkey, "address": address, "fruit": False,
                                "given": given, "no_coins": why_not})
         set_session(answer, token, request)
