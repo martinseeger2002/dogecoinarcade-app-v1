@@ -152,6 +152,18 @@ class V1:
             return ""
         return str((got or {}).get("address") or "")
 
+    def tag_pending(self, tag: str) -> str:
+        """The sender of a claim for @tag waiting in the home chain's mempool ("" when none, or when it can't be
+        asked). The chain counts the first claim mined; a second one sent meanwhile is paid for and refused."""
+        try:
+            got = self.cmd("explorer.mempool") or {}
+        except V1Error:
+            return ""
+        for row in got.get("pending_tags") or []:
+            if isinstance(row, (list, tuple)) and len(row) >= 2 and row[0] == tag:
+                return str(row[1])
+        return ""
+
     def coins(self, addresses: list[str], chain: str = "test") -> dict:
         return self.cmd("tx.coins", addresses=list(addresses), chain=chain_key(chain))
 
