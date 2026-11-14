@@ -21,8 +21,8 @@ class V1:
 st, v1 = St(), V1()
 c = chainslib.Chains(st, v1)
 pk = "11" * 32
-st.set_setting(f"address:{pk}", "nVrY9PSLXmV5LP6NN5h4XjqfDNu8uq24N2")
-assert c.arcade_address(pk) == "aRiSc8VhEManoNumdVhVyyg4LFAqaCKQya", c.arcade_address(pk)
+st.set_setting(f"address:{pk}", "nVkQCLyB9Q4U15JGAhjAmBF22hjPYUwj3w")
+assert c.arcade_address(pk) == "aRcJf62XqzABU57fS7jcDR5R9a16Dh8qVH", c.arcade_address(pk)
 assert c.welcome_arcade(pk) == "", "nothing owed to an account that never signed up here"
 v1.fail = True
 try:
@@ -34,7 +34,7 @@ v1.fail = False
 assert c.welcome_arcade(pk) == "", "not tried again so soon"
 st.set_setting(f"arcade_gift_owed:{pk}", time.time() - 700)
 assert c.welcome_arcade(pk) == "ab" * 32
-assert v1.sent == [{"chain": "arctest", "to": "aRiSc8VhEManoNumdVhVyyg4LFAqaCKQya", "amount": 10_000_000, "send": True}]
+assert v1.sent == [{"chain": "arctest", "to": "aRcJf62XqzABU57fS7jcDR5R9a16Dh8qVH", "amount": 10_000_000, "send": True}]
 st.set_setting(f"arcade_gift_owed:{pk}", 0)
 assert c.welcome_arcade(pk, new=True) == "" and len(v1.sent) == 1, "never twice"
 print("ALL OK")
