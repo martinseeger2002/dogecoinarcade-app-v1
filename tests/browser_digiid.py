@@ -10,6 +10,13 @@ from playwright.sync_api import sync_playwright
 from digiid_wallet import Wallet
 
 BASE = sys.argv[1].rstrip("/")
+# DIGIID_PIN=host=ip skips this computer's DNS for that host (a home resolver can hold "no such name" for a new record)
+PIN = os.environ.get("DIGIID_PIN", "")
+if PIN:
+    import socket
+    _host, _ip = PIN.split("=", 1)
+    _real = socket.getaddrinfo
+    socket.getaddrinfo = lambda h, *a, **k: _real(_ip if h == _host else h, *a, **k)
 fails = []
 def check(ok, m): print(("ok   " if ok else "FAIL ") + m); ok or fails.append(m)
 w = Wallet()
@@ -17,11 +24,19 @@ w = Wallet()
 def scan_dialog(page):
     page.wait_for_selector("dialog.digiid-dialog[open] a.digiid-open", timeout=20000)
     uri = page.get_attribute("dialog.digiid-dialog a.digiid-open", "href")
-    r = requests.post(BASE + "/digiid/callback", json={"address": w.address, "uri": uri, "signature": w.sign(uri)}, timeout=20)
+    for attempt in range(6):                 # a phone retries too; a home DNS that just learnt the name can flap
+        try:
+            r = requests.post(BASE + "/digiid/callback", json={"address": w.address, "uri": uri, "signature": w.sign(uri)},
+                              timeout=20)
+            break
+        except requests.ConnectionError:
+            if attempt == 5:
+                raise
+            __import__("time").sleep(5)
     return uri, r
 
 with sync_playwright() as pw:
-    b = pw.chromium.launch(); page = b.new_page(viewport={"width": 1200, "height": 800})
+    b = pw.chromium.launch(args=[f"--host-resolver-rules=MAP {PIN.split('=')[0]} {PIN.split('=')[1]}"] if PIN else []); page = b.new_page(viewport={"width": 1200, "height": 800})
     errors = []; page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(BASE + "/feed"); page.wait_for_timeout(1500)
     tag = "digiidt" + secrets.token_hex(3); pw_ = "correct horse battery " + secrets.token_hex(4)
@@ -32,9 +47,15 @@ with sync_playwright() as pw:
     check("Off" in page.inner_text("#digiid-state"), "Digi-ID starts off")
     page.click("#digiid-on")
     uri, r = scan_dialog(page)
-    check(r.status_code == 200 and uri.startswith("digiid://127.0.0.1:8462/digiid/callback?x=") and uri.endswith("&u=1"),
+    host = BASE.split("://", 1)[1]
+    check(r.status_code == 200 and uri.startswith(f"digiid://{host}/digiid/callback?x=")
+          and uri.endswith("&u=1") == BASE.startswith("http:"),
           f"the dialog shows a Digi-ID code and the wallet's scan is accepted ({r.status_code})")
     page.wait_for_function("document.getElementById('digiid-said').textContent.includes('Digi-ID is on')", timeout=20000)
+    try:
+        page.wait_for_function(f"document.getElementById('digiid-state').textContent.includes('{w.address}')", timeout=15000)
+    except Exception:
+        pass
     check(w.address in page.inner_text("#digiid-state"), f"on in this browser: {page.inner_text('#digiid-state')}")
     kept = page.evaluate("async () => { const d = await import('/digiid.js'); const c = await d.kept(); return c && Object.keys(c).sort().join(','); }")
     check(kept and "sealed" in kept and "phrase" not in kept, f"the browser keeps a sealed copy only: {kept}")
