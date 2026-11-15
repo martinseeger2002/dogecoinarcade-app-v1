@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Digi-ID · {{ brand.name }}{% endblock %}
+{% block body %}
+<div class="row" style="align-items:baseline;gap:10px">
+  <h1 style="margin:0">Digi-ID</h1>
+  <a class="btn ghost small" href="/me/wallet" style="margin-left:auto">Back to the wallet</a>
+</div>
+{% if not digiid_on %}
+<div class="card">
+  <p>Digi-ID isn't turned on for this arcade. Its operator turns it on by installing the <strong>Digi-ID</strong> node module from the App Store.</p>
+</div>
+{% else %}
+<div class="card">
+  <p>Sign in with a scan from your DigiByte wallet (DigiByte Go, or any Digi-ID app) instead of typing your password.</p>
+  <p class="muted">Digi-ID is turned on <strong>per browser</strong>. This browser keeps a sealed copy of your wallet, and this arcade keeps
+    half of the key that opens it, handed back only after a scan from your Digi-ID. Neither can open your wallet alone, and your password
+    still works everywhere. On a new browser, sign in with your password once and turn Digi-ID on there too.</p>
+  <p id="digiid-state" role="status">Checking&hellip;</p>
+  <p class="row" style="gap:8px;flex-wrap:wrap">
+    <button class="btn" id="digiid-on" hidden>Turn on Digi-ID in this browser</button>
+    <button class="btn ghost" id="digiid-off" hidden>Turn off in this browser</button>
+    <button class="btn ghost" id="digiid-all" hidden>Turn off everywhere</button>
+  </p>
+  <p class="muted" id="digiid-said" role="status"></p>
+</div>
+<script type="module" nonce="{{ csp_nonce }}">
+  import * as digiid from "/digiid.js";
+  const $ = (id) => document.getElementById(id);
+  async function show() {
+    const [st, copy] = await Promise.all([digiid.status(), digiid.kept()]);
+    const here = st.this_device && copy;
+    $("digiid-state").textContent = here
+      ? `On in this browser, with Digi-ID ${copy.address}.`
+      : (st.devices ? `On in ${st.devices} other browser${st.devices === 1 ? "" : "s"}, not this one.` : "Off.");
+    $("digiid-on").hidden = !!here;
+    $("digiid-off").hidden = !here;
+    $("digiid-all").hidden = !st.devices;
+    if (copy && !st.this_device) await digiid.forgetHere();   // turned off from another browser: the copy is no use
+  }
+  async function act(button, work, done) {
+    button.disabled = true; $("digiid-said").textContent = "";
+    try { await work(); $("digiid-said").textContent = done; }
+    catch (e) { if (String(e.message) !== "cancelled") $("digiid-said").textContent = String(e.message || e); }
+    finally { button.disabled = false; show(); }
+  }
+  $("digiid-on").onclick = () => act($("digiid-on"), () => digiid.turnOn(ARCADE_CHAIN),
+    "Digi-ID is on. Next time, choose Digi-ID on the sign-in bar.");
+  $("digiid-off").onclick = () => act($("digiid-off"), () => digiid.turnOff(false), "Turned off in this browser.");
+  $("digiid-all").onclick = () => {
+    if (!confirm("Turn Digi-ID off in every browser? Your password keeps working.")) return;
+    act($("digiid-all"), () => digiid.turnOff(true), "Turned off everywhere.");
+  };
+  show();
+</script>
+{% endif %}
+{% endblock %}

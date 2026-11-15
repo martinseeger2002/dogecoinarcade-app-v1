@@ -307,6 +307,7 @@ window.arcadePreview = function (frame, html) {
   <input type="password" id="signbar-pw" autocomplete="current-password"
          placeholder="password" aria-label="Your password">
   <button type="submit" class="btn small" id="signbar-go">Sign in</button>
+  <button type="button" class="btn small ghost" id="signbar-digiid" hidden>Digi-ID</button>
   <a class="signbar-new" href="/join?next={{ path|urlencode }}#make">Create a new account</a>
   <span class="signbar-said" id="signbar-said" role="status" hidden></span>
 </form>
@@ -329,6 +330,23 @@ window.arcadePreview = function (frame, html) {
       said.textContent = String(e.message || e); said.hidden = false;
     }
   });
+  // Digi-ID (the node module): offered only in a browser where it was turned on (it keeps the sealed copy)
+  (async () => {
+    try {
+      const st = await (await fetch("/digiid/status", {cache: "no-store"})).json();
+      if (!st.on) return;
+      const digiid = await import("/digiid.js");
+      if (!(await digiid.kept())) return;
+      const b = $("signbar-digiid"), said = $("signbar-said");
+      b.hidden = false;
+      b.onclick = async () => {
+        b.disabled = true; said.hidden = true;
+        try { await digiid.signIn(ARCADE_CHAIN); location.reload(); }
+        catch (e) { if (String(e.message) !== "cancelled") { said.textContent = String(e.message || e); said.hidden = false; } }
+        finally { b.disabled = false; }
+      };
+    } catch (e) { /* no Digi-ID here */ }
+  })();
 </script>
 {% endif %}
 <script nonce="{{ csp_nonce }}">
