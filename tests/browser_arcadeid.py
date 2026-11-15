@@ -22,8 +22,13 @@ def code_on(page):
 
 def answer(phone, code, chain="doge"):
     phone.goto(BASE + "/me/arcadeid"); phone.wait_for_selector("#aid-code", timeout=20000)
-    phone.fill("#aid-code", code)
-    phone.wait_for_selector("#aid-ask:not([hidden])", timeout=20000)
+    for attempt in range(3):                 # the page's modules may still be loading (slower over the internet)
+        phone.wait_for_timeout(2000)
+        phone.fill("#aid-code", ""); phone.fill("#aid-code", code)
+        try:
+            phone.wait_for_selector("#aid-ask:not([hidden])", timeout=10000); break
+        except Exception:
+            if attempt == 2: raise
     host = phone.inner_text("#aid-host")
     phone.select_option("#aid-chain", chain)
     phone.click("#aid-go")
