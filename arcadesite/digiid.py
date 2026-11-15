@@ -1,5 +1,10 @@
-"""Digi-ID: sign in by scanning a QR code with a DigiByte wallet (DigiByte Go, Digi-ID apps), on a node that has
-installed the "Digi-ID" node module from the App Store.
+"""ARCADE ID: sign in by scanning a QR code, on a node that has installed the "Digi-ID" node module from the App Store.
+
+ARCADE ID is Digi-ID, carried to every chain an ARCADE wallet holds. Digi-ID (https://www.digi-id.io) was created by
+the DigiByte community, and it is the backbone of this feature: its QR codes, its callback and its signed URI are used
+here unchanged, so DigiByte Go and every Digi-ID wallet work as they are. What ARCADE adds is one optional field: an
+ARCADE wallet that scans the same code may answer with a key on any of its chains (Pepecoin, Dogecoin, Litecoin,
+Bitcoin, DigiByte and the rest) and says which in "chain". Credit for the idea and the protocol: the DigiByte community.
 
 Digi-ID proves who is signing in. It cannot open the account's sealed wallet: only the password does that, in the
 browser. So turning Digi-ID on (signed in with the password, wallet open) keeps a second sealed copy of the words IN
@@ -9,7 +14,7 @@ opens them. A browser where Digi-ID was never turned on still signs in with the 
 
     GET  /digiid/status             {on, linked?, devices?}       on = the node module is installed (or the setting)
     POST /digiid/start              {purpose: link|login, device} -> {uri, nonce, poll}
-    POST /digiid/callback           the wallet's {address, uri, signature}   (Digi-ID protocol)
+    POST /digiid/callback           the wallet's {address, uri, signature[, chain]}   (Digi-ID protocol; chain: ARCADE ID)
     POST /digiid/poll               {nonce, poll}                 -> waiting | done (+ half) | unknown | expired
     POST /digiid/off                {device?, all?}               signed in: forget this device, or every device
 
@@ -45,17 +50,55 @@ NONCE_SECONDS = 300                 # a QR code is good for five minutes
 MODULE_CHECK_SECONDS = 30
 STATIC = Path(__file__).with_name("static")
 MAGICS = ("DigiByte Signed Message:\n", "Bitcoin Signed Message:\n")   # Digi-ID wallets use DigiByte's; BitID's too
+#: ARCADE's own message prefix, the same on every chain (arcade/llm.py MAGIC, coins.js ARCADE_MAGIC).
+ARCADE_MAGIC = "Pepecoin Signed Message:\n"
+#: Each chain's own Core prefix (signmessage/verifymessage), where it is known; any chain also takes ARCADE's.
+CHAIN_MAGIC = {"main": "Pepecoin Signed Message:\n", "test": "Pepecoin Signed Message:\n",
+               "doge": "Dogecoin Signed Message:\n", "dgb": "DigiByte Signed Message:\n",
+               "dgbtest": "DigiByte Signed Message:\n", "ltc": "Litecoin Signed Message:\n",
+               "ltctest": "Litecoin Signed Message:\n", "btc": "Bitcoin Signed Message:\n"}
+#: Chains ARCADE ID never takes (kept out of everything published).
+NOT_TAKEN = {"kot", "wjk"}
+DIGIID_CHAIN = "dgb"            # a scan with no "chain" is a Digi-ID wallet's: DigiByte
 
 
 siglib.hash160 = hash160            # recover_hash160 looks it up at call time: the same answer, on every Python build
 
 
-def signed(uri: str, address: str, signature: str) -> bool:
-    """Whether `signature` (base64, compact, recoverable) is `address`'s signature of `uri`, under a Digi-ID prefix."""
-    want = siglib.address_hash(address)
-    if want is None:
+def chain_params(chain: str):
+    """The arcade's parameters for a chain key ("doge", "dgb", "main", ...), or None."""
+    from arcade.config import NETWORKS
+    return None if chain in NOT_TAKEN else NETWORKS.get(chain)
+
+
+def address_on(chain: str, address: str) -> bool:
+    """Whether `address` is a plain key address (P2PKH) of `chain`: Dogecoin and DigiByte share the version byte 30,
+    so the chain is always said, never guessed."""
+    from arcade.script import b58check_decode
+    params = chain_params(chain)
+    if params is None:
         return False
-    return any(siglib.recover_hash160(signature, uri, magic) == want for magic in MAGICS)
+    try:
+        version, payload = b58check_decode(address)
+    except Exception:                                       # noqa: BLE001
+        return False
+    return len(payload) == 20 and version == params.pubkeyhash_version
+
+
+def magics_for(chain: str) -> tuple[str, ...]:
+    if chain == DIGIID_CHAIN:
+        return MAGICS + (ARCADE_MAGIC,)
+    own = CHAIN_MAGIC.get(chain)
+    return (own, ARCADE_MAGIC) if own and own != ARCADE_MAGIC else (ARCADE_MAGIC,)
+
+
+def signed(uri: str, address: str, signature: str, chain: str = DIGIID_CHAIN) -> bool:
+    """Whether `signature` (base64, compact, recoverable) is `address`'s signature of `uri` on `chain`: a Digi-ID
+    wallet's (DigiByte, its own prefix or BitID's) or an ARCADE wallet's (the chain's own prefix, or ARCADE's)."""
+    if not address_on(chain, address):
+        return False
+    want = siglib.address_hash(address)
+    return want is not None and any(siglib.recover_hash160(signature, uri, magic) == want for magic in magics_for(chain))
 
 
 # ------------------------------------------------------------------------------------------------ the site's records
@@ -89,7 +132,7 @@ class Store:
         with self.lock, self._db() as db:
             held = db.execute("SELECT pubkey FROM links WHERE address=?", (address,)).fetchone()
             if held and held["pubkey"] != pubkey:
-                raise PermissionError("this Digi-ID is already turned on for another account here")
+                raise PermissionError("this ID is already turned on for another account here")
             db.execute("INSERT OR REPLACE INTO links VALUES (?,?,?,?)", (address, pubkey, tag, now))
             db.execute("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?)", (device, pubkey, address, half, now, now))
         return half
@@ -219,9 +262,22 @@ def register(app, st, chains):
                               "pubkey": account.pubkey if account is not None else "", "address": ""}
         return JSONResponse({"uri": uri, "nonce": nonce, "poll": poll, "expires": NONCE_SECONDS})
 
+    CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "600"}
+
+    @app.options("/digiid/callback", include_in_schema=False)
+    def digiid_callback_preflight():
+        # an ARCADE wallet on another site posts here from its own page: allowed, as everything here is signed
+        return Response(status_code=204, headers=CORS)
+
     @app.post("/digiid/callback")
     async def digiid_callback(request: Request):
-        """What the wallet sends after the scan: {address, uri, signature} as JSON or a form."""
+        """What the wallet sends after the scan: {address, uri, signature[, chain]} as JSON or a form."""
+        answer = await _callback(request)
+        answer.headers.update(CORS)
+        return answer
+
+    async def _callback(request: Request):
         try:
             raw = await request.body()
             kind = request.headers.get("content-type", "")
@@ -230,6 +286,7 @@ def register(app, st, chains):
         except Exception:                                   # noqa: BLE001
             return no("send address, uri and signature")
         address, uri, signature = (str(said.get(k, "")).strip() for k in ("address", "uri", "signature"))
+        chain = str(said.get("chain") or DIGIID_CHAIN).strip().lower()
         if not (address and uri and signature) or len(uri) > 400:
             return no("send address, uri and signature")
         nonce = urllib.parse.parse_qs(urllib.parse.urlsplit(uri).query).get("x", [""])[0]
@@ -240,11 +297,13 @@ def register(app, st, chains):
             return no("this code has expired; ask for a new one")
         if uri != wanted["uri"]:
             return no("this code was made for another address")
-        if not signed(uri, address, signature):
-            return no("the signature doesn't match this Digi-ID")
+        if chain_params(chain) is None:
+            return no("that chain isn't one ARCADE ID takes")
+        if not signed(uri, address, signature, chain):
+            return no("the signature doesn't match this ID")
         with plock:
             if nonce in pending and not pending[nonce]["address"]:
-                pending[nonce]["address"] = address
+                pending[nonce]["address"] = f"{chain}:{address}"      # Dogecoin and DigiByte addresses look alike
         return JSONResponse({"ok": True})
 
     @app.post("/digiid/poll")
@@ -271,12 +330,13 @@ def register(app, st, chains):
                 half = store.link(p["address"], account.pubkey, tag, p["device"])
             except PermissionError as refused:
                 return no(str(refused), 409)
-            return JSONResponse({"state": "done", "address": p["address"], "tag": tag, "half": half})
+            chain, _, address = p["address"].partition(":")
+            return JSONResponse({"state": "done", "address": address, "chain": chain, "tag": tag, "half": half})
         found = store.unlock(p["address"], p["device"])
         if found is None:
             return JSONResponse({"state": "unknown", "detail": (
-                "That Digi-ID isn't turned on for an account in this browser. Sign in with your password, then turn "
-                "on Digi-ID in Settings › Access on this device.")})
+                "That ID isn't turned on for an account in this browser. Sign in with your password, then turn on "
+                "ARCADE ID in Wallet › ARCADE ID on this device.")})
         return JSONResponse({"state": "done", "tag": found["tag"], "pubkey": found["pubkey"], "half": found["half"]})
 
     @app.post("/digiid/off")
@@ -289,15 +349,18 @@ def register(app, st, chains):
         return JSONResponse({"ok": True, "forgotten": gone})
 
     @app.get("/digiid.js", include_in_schema=False)
-    def digiid_js():
-        js = (STATIC / "digiid.js").read_text()
+    @app.get("/arcadeid.js", include_in_schema=False)
+    def digiid_js(request: Request):
+        js = (STATIC / request.url.path.lstrip("/")).read_text()
         return Response(js, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
+    @app.get("/me/arcadeid", response_class=HTMLResponse)
     @app.get("/me/digiid", response_class=HTMLResponse)
     def my_digiid(request: Request):
-        """Turn Digi-ID on or off for this browser (signed in)."""
+        """ARCADE ID (built on Digi-ID): turn signing in here with a scan on or off for this browser, and scan codes
+        with this wallet to sign in elsewhere (signed in)."""
         if session(request) is None:
-            return RedirectResponse("/join?next=/me/digiid", status_code=303)
+            return RedirectResponse("/join?next=/me/arcadeid", status_code=303)
         return app.state.render(request, "my_digiid.html", digiid_on=module_on(), chain=chains.account_chain())
 
     app.state.digiid_on = module_on

@@ -72,7 +72,7 @@ half = p.get("half")
 again = c.post("/digiid/callback", json={"address": w.address, "uri": s["uri"], "signature": w.sign(s["uri"])})
 check(again.status_code == 400, "the same code can't be used twice")
 st = c.get(f"/digiid/status?device={device}").json()
-check(st.get("linked") == [w.address] and st.get("devices") == 1 and st.get("this_device") is True,
+check(st.get("linked") == ["dgb:" + w.address] and st.get("devices") == 1 and st.get("this_device") is True,
       f"status shows the link and this device: {st}")
 
 # --- signing in with Digi-ID, from a fresh browser on the same device
@@ -98,6 +98,42 @@ c2.post("/auth/login", json={"pubkey": seat2.verify_key.encode().hex(), "nonce":
 s, cb = scan(c2, "link", secrets.token_hex(16))
 p = c2.post("/digiid/poll", json={"nonce": s["nonce"], "poll": s["poll"]})
 check(p.status_code == 409, f"a Digi-ID linked to one account can't be linked to another: {p.json().get('detail')}")
+
+# --- ARCADE ID: an ARCADE wallet answers the same code with a key on another chain, and says which
+from arcade.config import NETWORKS
+def arcade_scan(client, purpose, dev, chain, wallet, magic, claim=None):
+    s = client.post("/digiid/start", json={"purpose": purpose, "device": dev}).json()
+    cb = client.post("/digiid/callback", json={"address": wallet.address, "uri": s["uri"], "chain": claim or chain,
+                                               "signature": wallet.sign(s["uri"], magic)})
+    return s, cb
+seat3 = SigningKey.generate(); c3 = TestClient(app)
+ch = c3.get("/auth/challenge").json()
+c3.post("/auth/login", json={"pubkey": seat3.verify_key.encode().hex(), "nonce": ch["nonce"], "origin": "http://testserver",
+                             "join": True, "signature": seat3.sign(accounts.login_message("http://testserver", ch["nonce"])).signature.hex()})
+dev3 = secrets.token_hex(16)
+doge = Wallet(NETWORKS["doge"].pubkeyhash_version)
+s, cb = arcade_scan(c3, "link", dev3, "doge", doge, "Dogecoin Signed Message:\n")
+p = c3.post("/digiid/poll", json={"nonce": s["nonce"], "poll": s["poll"]}).json()
+check(cb.status_code == 200 and p.get("state") == "done" and p.get("chain") == "doge",
+      f"a Dogecoin key (Dogecoin's own prefix) turns ARCADE ID on: {cb.text[:60]}")
+s, cb = arcade_scan(TestClient(app), "login", dev3, "doge", doge, "Dogecoin Signed Message:\n")
+p = c3.post("/digiid/poll", json={"nonce": s["nonce"], "poll": s["poll"]}).json()
+check(p.get("state") == "done" and p.get("pubkey") == seat3.verify_key.encode().hex(), "and signs in with it")
+s, cb = arcade_scan(TestClient(app), "login", dev3, "doge", doge, "Dogecoin Signed Message:\n", claim="dgb")
+check(cb.status_code == 400, "a Dogecoin key's signature passed off as DigiByte is refused (same D addresses, other prefix)")
+pep = Wallet(NETWORKS["test"].pubkeyhash_version)
+s, cb = arcade_scan(TestClient(app), "login", secrets.token_hex(16), "test", pep, "Pepecoin Signed Message:\n")
+check(cb.status_code == 200, "a Pepecoin testnet key answers with ARCADE's prefix")
+ltc = Wallet(NETWORKS["ltc"].pubkeyhash_version)
+s, cb = arcade_scan(TestClient(app), "login", secrets.token_hex(16), "ltc", ltc, "Pepecoin Signed Message:\n")
+check(cb.status_code == 200, "any chain also takes ARCADE's own prefix (Litecoin key)")
+s, cb = arcade_scan(TestClient(app), "login", secrets.token_hex(16), "ltc", pep, "Litecoin Signed Message:\n")
+check(cb.status_code == 400, "an address of another chain than the one said is refused")
+s, cb = arcade_scan(TestClient(app), "login", secrets.token_hex(16), "kot", pep, "Pepecoin Signed Message:\n")
+check(cb.status_code == 400, "a chain ARCADE ID doesn't take is refused")
+r = c.options("/digiid/callback")
+check(r.status_code == 204 and r.headers.get("access-control-allow-origin") == "*",
+      "an ARCADE wallet on another site may post to the callback (CORS)")
 
 # --- turning it off
 r = c.post("/digiid/off", json={"device": device})

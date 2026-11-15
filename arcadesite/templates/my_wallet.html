@@ -16,7 +16,7 @@
   <h1 style="margin:0">Wallet</h1>
   {# Backup lives here now, not as a tab (2026-09-27). #}
   <a class="btn ghost small" href="{{ '/backup' if node_side else '/me/backup' }}" style="margin-left:auto">Back up your wallet</a>
-  {% if digiid_on is defined and digiid_on or (request is defined and request.app.state.digiid_on()) %}<a class="btn ghost small" href="/me/digiid">Digi-ID</a>{% endif %}
+<a class="btn ghost small" href="/me/arcadeid" title="Sign in with a scan: built on Digi-ID">ARCADE ID</a>
 </div>
 
 <p class="muted" id="shut" hidden style="font-size:.86rem;margin:10px 0 0">

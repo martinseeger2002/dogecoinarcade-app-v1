@@ -11,11 +11,11 @@ DGB_P2PKH = 0x1E            # DigiByte addresses start with D
 
 class Wallet:
     """A Digi-ID wallet: a DigiByte key that signs a Digi-ID URI as a Core-style message."""
-    def __init__(self):
+    def __init__(self, version=None):
         self.d = int.from_bytes(secrets.token_bytes(32), "big") % (ec._N - 1) + 1
         q = ec._mul(self.d, ec._G)
         self.pub = bytes([2 + (q[1] & 1)]) + q[0].to_bytes(32, "big")
-        self.address = b58check_encode(DGB_P2PKH, hash160(self.pub))
+        self.address = b58check_encode(DGB_P2PKH if version is None else version, hash160(self.pub))
 
     def sign(self, message, magic="DigiByte Signed Message:\n"):
         e = int.from_bytes(ec.message_hash(message, magic), "big")

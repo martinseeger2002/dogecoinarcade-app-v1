@@ -307,7 +307,7 @@ window.arcadePreview = function (frame, html) {
   <input type="password" id="signbar-pw" autocomplete="current-password"
          placeholder="password" aria-label="Your password">
   <button type="submit" class="btn small" id="signbar-go">Sign in</button>
-  <button type="button" class="btn small ghost" id="signbar-digiid" hidden>Digi-ID</button>
+  <button type="button" class="btn small ghost" id="signbar-digiid" hidden title="ARCADE ID, built on Digi-ID">ARCADE ID</button>
   <a class="signbar-new" href="/join?next={{ path|urlencode }}#make">Create a new account</a>
   <span class="signbar-said" id="signbar-said" role="status" hidden></span>
 </form>
@@ -330,7 +330,7 @@ window.arcadePreview = function (frame, html) {
       said.textContent = String(e.message || e); said.hidden = false;
     }
   });
-  // Digi-ID (the node module): offered only in a browser where it was turned on (it keeps the sealed copy)
+  // ARCADE ID (built on Digi-ID; the Digi-ID node module): offered only in a browser where it was turned on
   (async () => {
     try {
       const st = await (await fetch("/digiid/status", {cache: "no-store"})).json();

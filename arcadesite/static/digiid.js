@@ -1,4 +1,5 @@
-/* Digi-ID in the browser (arcadesite/digiid.py has the server half and the why).
+/* ARCADE ID in the browser: signing in HERE with a scan (arcadesite/digiid.py has the server half and the why).
+ * Built on Digi-ID (https://www.digi-id.io), created by the DigiByte community; arcadeid.js is the wallet's side.
  *
  * Turning Digi-ID on (signed in, wallet open): scan with a DigiByte wallet -> the site links that Digi-ID to this
  * account and hands this browser ITS half of a key; the browser makes the other half, seals the twelve words under
@@ -62,7 +63,7 @@ async function post(path, body) {
 }
 
 const CSS = `.digiid-dialog{border:1px solid #8884;border-radius:12px;padding:0;max-width:360px;width:calc(100% - 32px)}
-.digiid-box{padding:18px;text-align:center}.digiid-qr svg{width:100%;max-width:260px;height:auto;background:#fff}`;
+.digiid-box{padding:18px;text-align:center}.digiid-how,.digiid-credit{font-size:13px;opacity:.8}.digiid-qr svg{width:100%;max-width:260px;height:auto;background:#fff}`;
 function ensureStyle() {
   if (document.getElementById("digiid-css")) return;
   const s = document.createElement("style"); s.id = "digiid-css"; s.textContent = CSS; document.head.append(s);
@@ -86,9 +87,11 @@ async function scan(purpose, title, lead) {
   dlg.innerHTML = `<form method="dialog" class="digiid-box">
       <h2></h2><p class="digiid-lead"></p>
       <div class="digiid-qr" aria-label="Digi-ID QR code"></div>
-      <p><a class="btn small digiid-open">Open in my DigiByte wallet</a></p>
+      <p class="digiid-how">Scan with any ARCADE wallet (Wallet \u203a ARCADE ID \u203a Scan a code) or a Digi-ID wallet such as DigiByte Go.</p>
+      <p><a class="btn small digiid-open">Open in my Digi-ID wallet</a></p>
       <p class="digiid-said" role="status">Waiting for your wallet…</p>
-      <p><button class="btn ghost small" value="cancel">Cancel</button></p></form>`;
+      <p><button class="btn ghost small" value="cancel">Cancel</button></p>
+      <p class="digiid-credit">ARCADE ID is built on <a href="https://www.digi-id.io" target="_blank" rel="noopener">Digi-ID</a>, created by the DigiByte community.</p></form>`;
   dlg.querySelector("h2").textContent = title;
   dlg.querySelector(".digiid-lead").textContent = lead;
   dlg.querySelector(".digiid-open").href = started.uri;
@@ -121,13 +124,15 @@ async function scan(purpose, title, lead) {
 export async function turnOn(chain) {
   const held = await wallet.opened(chain);
   if (!held || !held.phrase) throw new Error("open your wallet with your password first, then turn on Digi-ID");
-  const p = await scan("link", "Turn on Digi-ID",
-    "Scan this with your DigiByte wallet's Digi-ID. From then on, this browser signs you in with a scan, no password.");
+  const p = await scan("link", "Turn on ARCADE ID",
+    "Scan this with your ID. From then on, this browser signs you in with a scan, no password.");
   const mine = hex(crypto.getRandomValues(new Uint8Array(32)));
   const salt = crypto.getRandomValues(new Uint8Array(16)), nonce = crypto.getRandomValues(new Uint8Array(12));
   const key = await keyFrom(mine, p.half, salt);
   const sealed = await crypto.subtle.encrypt({name: "AES-GCM", iv: nonce}, key, enc.encode(held.phrase));
-  await keep({tag: p.tag || "", pubkey: held.pubkey, address: p.address, mine,
+  const NAMES = {dgb: "DigiByte", main: "Pepecoin", test: "Pepecoin testnet", doge: "Dogecoin", ltc: "Litecoin", btc: "Bitcoin"};
+  await keep({tag: p.tag || "", pubkey: held.pubkey, address: p.address, chain: p.chain || "dgb",
+              chainName: NAMES[p.chain || "dgb"] || p.chain, mine,
               salt: hex(salt), nonce: hex(nonce), sealed: hex(sealed), at: Date.now()});
   return {address: p.address};
 }
@@ -141,19 +146,20 @@ export async function turnOff(everywhere = false) {
 /** Sign in with Digi-ID: scan, open the words kept here, take the seat as a password sign-in does. */
 export async function signIn(chain) {
   const copy = await kept();
-  if (!copy) throw new Error("Digi-ID isn't turned on in this browser: sign in with your password, then turn it on");
-  const p = await scan("login", "Sign in with Digi-ID", "Scan this with the DigiByte wallet you turned Digi-ID on with.");
+  if (!copy) throw new Error("ARCADE ID isn't turned on in this browser: sign in with your password, then turn it on");
+  const p = await scan("login", "Sign in with ARCADE ID", "Scan this with the ID you turned it on with" +
+                       (copy.chainName ? ` (your ${copy.chainName} ID).` : "."));
   let phrase;
   try {
     const key = await keyFrom(copy.mine, p.half, unhex(copy.salt));
     phrase = new TextDecoder().decode(await crypto.subtle.decrypt({name: "AES-GCM", iv: unhex(copy.nonce)}, key,
                                                                   unhex(copy.sealed)));
   } catch (e) {
-    throw new Error("this browser's Digi-ID copy didn't open; sign in with your password and turn Digi-ID on again");
+    throw new Error("this browser's ARCADE ID copy didn't open; sign in with your password and turn it on again");
   }
   const held = await wallet.everyChain(await wallet.walletFrom(phrase, chain.network, chain.version),
                                        await wallet.chains());
-  if (p.pubkey && held.pubkey !== p.pubkey) throw new Error("that Digi-ID belongs to another account. Nothing was opened.");
+  if (p.pubkey && held.pubkey !== p.pubkey) throw new Error("that ID belongs to another account. Nothing was opened.");
   const challenge = await (await fetch("/auth/challenge")).json();
   const origin = signer.loginOrigin();
   const signature = await held.sign(signer.loginMessage(origin, challenge.nonce));
