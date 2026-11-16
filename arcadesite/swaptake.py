@@ -740,6 +740,7 @@ def register(app, st, chains):
                        taker_time=s["taker_time"], taker_lock={"txid": s["lock_txid"], "vout": s["lock_vout"], "step": "locked"})
                 s["step"] = "told"
                 save(s["question"], who, s)
+                getattr(app.state, "swap_book_poke", lambda: None)()   # the order is being taken: everybody's book
             if s["step"] == "told":
                 a = v1.cmd("swap.status", node=s["node"], hash=s["hash"], taker=s["question"])
                 ml = a.get("maker_lock") or {}
