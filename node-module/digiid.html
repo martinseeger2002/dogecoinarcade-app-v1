@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Digi-ID sign-in</title>
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --ink:#e8edf6; --mute:#9aa6bb; --blue:#2f7fe0; --line:#2a3550; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f6fa; --card:#fff; --ink:#152033; --mute:#5a6780; --line:#d9dfea; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 40px; }
+  h1 { font-size:26px; margin:0 0 4px; } h2 { font-size:18px; margin:28px 0 8px; }
+  .kicker { color:var(--blue); font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin:14px 0; }
+  .on { display:inline-block; background:var(--blue); color:#fff; border-radius:999px; padding:3px 12px; font-weight:700; font-size:14px; }
+  p, li { color:var(--ink); } .mute { color:var(--mute); } ol, ul { padding-left:22px; }
+  code { background:rgba(127,127,127,.15); padding:1px 5px; border-radius:4px; }
+</style></head>
+<body><main>
+  <p class="kicker">Node module</p>
+  <h1>Digi-ID sign-in</h1>
+  <p><span class="on">Installed: Digi-ID is on for this arcade</span></p>
+  <div class="card">
+    <p>With this module installed, the white-label website in front of this arcade lets people sign in by scanning a QR code with a
+      DigiByte wallet (DigiByte Go, or any Digi-ID app) instead of typing a password. Uninstall it to turn Digi-ID off; passwords
+      keep working either way.</p>
+  </div>
+  <h2>For the people who use your site</h2>
+  <ol>
+    <li>Sign in with their @handle and password, as always (accounts from ARCADE Legacy too).</li>
+    <li>Open <strong>Wallet › Digi-ID</strong> and choose <strong>Turn on Digi-ID in this browser</strong>, then scan the code with their DigiByte wallet.</li>
+    <li>From then on, the sign-in bar in that browser offers <strong>Digi-ID</strong>: one scan, no password, and the wallet opens ready to sign.</li>
+  </ol>
+  <h2>Why it's safe</h2>
+  <ul>
+    <li>Digi-ID proves who is signing in; it never sees or holds coins.</li>
+    <li>Turning it on keeps a sealed copy of the wallet <em>in that browser</em>, under a key made of two halves: the browser keeps one, the site keeps the other and hands it back only after a scan from the linked Digi-ID. Neither can open the wallet alone, and the site never sees the twelve words.</li>
+    <li>It's per browser: a new browser signs in with the password once, then can turn Digi-ID on too. Anyone can turn it off in one browser or everywhere.</li>
+  </ul>
+  <h2>For operators</h2>
+  <p class="mute">The site (arcadesite) asks this arcade for its installed apps (<code>apps.installed</code>) every 30 seconds and turns Digi-ID on
+    when a node module named <code>Digi-ID</code> is installed. The site setting <code>"digiid": "on"</code> or <code>"off"</code> overrides it.
+    Digi-ID codes name the site's own address, so serve it over https (a plain-http test address works too, marked <code>u=1</code>).</p>
+</main></body></html>
