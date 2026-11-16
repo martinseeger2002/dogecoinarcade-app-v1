@@ -298,7 +298,14 @@ $("show-words").onclick = async () => {
         throw new Error("that wallet opened, but its words are not this account's.");
     }
     $("words-pw").value = "";
-    {
+    // The words first: nothing drawn after them (keys, restore kits) can keep them from showing.
+    for (const word of phrase.trim().split(/\s+/)) {
+      const li = document.createElement("li");
+      li.textContent = word;
+      list.append(li);
+    }
+    shown.hidden = false;
+    try {
       // The Litecoin key on its own (coin type 3: the same key as Pepecoin and Dogecoin here).
       const coins = await import("/coins.js");
       const signin = await import("/signin.js");
@@ -323,13 +330,11 @@ $("show-words").onclick = async () => {
       // Restore without an arcade (2026-11-07): every chain's path and its Core's own commands.
       restoreSeed = seed;
       await drawRestore();
+    } catch (e) {
+      // The words are shown already; say what else could not be drawn.
+      box.textContent = "Your words are shown, but the chain keys and restore steps could not be drawn: " + String(e.message || e);
+      box.hidden = false;
     }
-    for (const word of phrase.trim().split(/\s+/)) {
-      const li = document.createElement("li");
-      li.textContent = word;
-      list.append(li);
-    }
-    shown.hidden = false;
   } catch (e) {
     box.textContent = String(e.message || e);
     box.hidden = false;

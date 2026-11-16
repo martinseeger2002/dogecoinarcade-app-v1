@@ -63,7 +63,7 @@ def _json(v, status: int = 200) -> Response:
                     headers={**contentlib.CORS, "Cache-Control": "no-store"})
 
 
-CONTENT_CHAINS = ("main", "doge", "dgb", "flop", "wjk", "kot", "ltc")   # tried in turn for an id not on the home chain
+CONTENT_CHAINS = ("main", "doge", "dgb", "flop", "wjk", "kot", "ltc", "arctest")   # tried in turn for an id not on the home chain
 
 
 def register(app, st, chains, template_dir: Path):
@@ -875,7 +875,7 @@ def register_pages(app, st, chains):
         net = "test"
         if code != 200 or not row:
             row = None
-            for one in ("main", "doge", "dgb", "flop", "wjk", "kot", "ltc"):   # another chain's arcade ledger
+            for one in CONTENT_CHAINS:                       # another chain's arcade ledger (ARCADE testnet too)
                 try:                                         # (kept here or borrowed: V1.0 asks the mesh)
                     got = v1.cmd("explorer.ledger_inscription", chain=chain_key(one), id=key) or {}
                 except V1Error:

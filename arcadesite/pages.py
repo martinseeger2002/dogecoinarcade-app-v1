@@ -43,6 +43,7 @@ PUBLIC_NAV = [
     ("/feed", "Feed", "testnet", True),
 ]
 ASSETS = {"/wallet.js": "wallet_js.js", "/coins.js": "coins.js", "/signin.js": "signin.js",
+          "/restore-kit.js": "restore_kit.js",   # the backup page draws each chain's Core commands with it
           "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css",
           "/desk98.css": "desk98_css.css", "/deskubuntu.css": "deskubuntu_css.css",
           "/deskdogefeedx.css": "deskdogefeedx_css.css"}

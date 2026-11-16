@@ -540,10 +540,14 @@ def register(app, st, chains):
             if str(c.get("cover") or "").split("i")[0] == txid:
                 return {"kind": "collection", "name": str(c.get("name") or ""), "creator": str(c.get("creator") or ""),
                         "count": _int(c.get("count")), "txid": txid, "cover_type": c.get("covertype"), "time": 0}
-        try:
-            got = v1.cmd("apps.card", chain=chain_key("test"), txid=txid) or {}
-        except V1Error:
-            got = {}
+        got = {}
+        for net in ("test", "arctest"):                     # the home chain's apps, then ARCADE testnet's
+            try:
+                got = v1.cmd("apps.card", chain=chain_key(net), txid=txid) or {}
+            except V1Error:
+                got = {}
+            if got.get("card"):
+                break
         card = got.get("card") or {}
         if card:
             return {"kind": "game", "name": str(card.get("name") or ""), "creator": str(got.get("creator") or ""),
