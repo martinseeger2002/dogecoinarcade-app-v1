@@ -174,6 +174,9 @@ def register(app, st, chains):
             holder = v1.tag_owner(wanted)
             if holder and holder != address:
                 raise taglib.TagError(f"@{wanted} is taken.")
+            waiting = "" if holder else v1.tag_pending(wanted)
+            if waiting and waiting != address:
+                raise taglib.TagError(f"someone else's claim for @{wanted} is waiting for a block.")
             unsigned = build(account, chain, address,
                              class_c_or_b(chain, address, taglib.encode(wanted), coin_pubkey(account.pubkey)),
                              f"claim @{wanted}")

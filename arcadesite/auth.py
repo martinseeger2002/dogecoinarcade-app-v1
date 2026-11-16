@@ -232,7 +232,7 @@ def register(app, st, chains):
         except taglib.TagError as bad:
             return JSONResponse({"free": False, "detail": str(bad)})
         here = st.vault().taken(wanted)
-        on_chain = st.v1.tag_owner(wanted)
+        on_chain = st.v1.tag_owner(wanted) or st.v1.tag_pending(wanted)
         elsewhere = None
         if not here and not on_chain:
             register_ = st.accounts()
@@ -247,7 +247,7 @@ def register(app, st, chains):
             "tag": wanted, "free": not here and not on_chain and not there,
             "here": here, "on_chain": bool(on_chain), "elsewhere": there,
             "detail": (f"@{wanted} is already signed up on this node" if here else
-                       f"@{wanted} is claimed on the chain" if on_chain else
+                       f"@{wanted} is claimed on the chain (or a claim for it is waiting for a block)" if on_chain else
                        f"@{wanted} already has an account on {there}: sign in instead, with the same name and "
                        f"password, and this arcade brings it here" if there else ""),
         })
@@ -271,6 +271,9 @@ def register(app, st, chains):
             owner = st.v1.tag_owner(wanted)
             if owner and owner != address:
                 raise ValueError(f"@{wanted} is claimed on the chain by another address")
+            waiting = "" if owner else st.v1.tag_pending(wanted)
+            if waiting and waiting != address:
+                raise ValueError(f"someone else's claim for @{wanted} is waiting for a block: pick another name")
             if not owner and not st.vault().taken(wanted):
                 held = vault_elsewhere(wanted, wait=SIGNUP_ELSEWHERE_WAIT)
                 if held and held.get("pubkey") and held["pubkey"] != pubkey:
