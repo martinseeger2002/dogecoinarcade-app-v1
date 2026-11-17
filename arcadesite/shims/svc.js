@@ -15,9 +15,23 @@
       return fetch('/r/svc/offers?service=' + encodeURIComponent(service || ''), { cache: 'no-store' }).then(json).then(function (v) { return v.offers || []; });
     },
     ask: function () { return Promise.reject(new Error('asking a service in your own name needs the Arcade app')); },
+    // The site answers at once with a job and works on it; this asks after it until it is done (a voice server that
+    // was asleep can take a couple of minutes to wake).
     local: function (service, body) {
       return fetch('/r/svc/local', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service, body: body || {} }) })
-        .then(json).then(function (v) { return v.result; });
+        .then(json).then(function (v) {
+          if (!v.job) return v.result;
+          var until = Date.now() + 6 * 60000, wait = 800;
+          return new Promise(function (resolve, reject) {
+            (function poll() {
+              fetch('/r/svc/job/' + encodeURIComponent(v.job), { cache: 'no-store' }).then(json).then(function (j) {
+                if (j.state === 'done') return resolve(j.result);
+                if (Date.now() > until) return reject(new Error('no answer in time'));
+                wait = Math.min(wait * 1.3, 2500); setTimeout(poll, wait);
+              }).catch(reject);
+            })();
+          });
+        });
     }
   };
 })();

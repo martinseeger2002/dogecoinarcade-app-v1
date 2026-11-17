@@ -6,6 +6,7 @@ arcade's helper from its own credit.
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -34,6 +35,7 @@ def register(app, st, chains):
     lock = threading.Lock()
     used: dict[str, dict] = {}       # visitor -> {day, chars, chats, now}
     node = {"id": None}
+    jobs: dict[str, dict] = {}       # request id -> {state, result | error, at}
 
     def me() -> str:
         if not node["id"]:
@@ -97,16 +99,38 @@ def register(app, st, chains):
             if len(used) > 50_000:
                 for k in [k for k, x in used.items() if x["day"] != day]:
                     used.pop(k, None)
-        try:
-            got = v1.cmd("svc.ask", _timeout=330, to=me(), service="models", body=ask, timeout=300) or {}
-            last = got.get("last") if isinstance(got, dict) else None
-            if isinstance(last, dict) and last.get("error"):
-                raise V1Error(str(last["error"]))
-            return _json({"ok": True, "result": last})
-        except V1Error as e:
-            with lock:
-                u[cost[0]] -= cost[1]                   # a failure costs the visitor nothing
-            return _json({"ok": False, "error": str(e)}, 502)
-        finally:
-            with lock:
-                u["now"] -= 1
+        # Answered at once with a job the page asks after (GET /r/svc/job/<id>): a voice server that was asleep can
+        # take longer to wake than the edge in front of this site waits for one request.
+        jid = secrets.token_urlsafe(12)
+        job = jobs[jid] = {"state": "working", "at": time.time()}
+
+        def run():
+            try:
+                got = v1.cmd("svc.ask", _timeout=330, to=me(), service="models", body=ask, timeout=300) or {}
+                last = got.get("last") if isinstance(got, dict) else None
+                if isinstance(last, dict) and last.get("error"):
+                    raise V1Error(str(last["error"]))
+                job.update(state="done", result=last)
+            except Exception as e:  # noqa: BLE001
+                with lock:
+                    u[cost[0]] -= cost[1]               # a failure costs the visitor nothing
+                job.update(state="failed", error=str(e))
+            finally:
+                with lock:
+                    u["now"] -= 1
+                    for k in [k for k, j in jobs.items() if time.time() - j["at"] > 900]:
+                        jobs.pop(k, None)
+        threading.Thread(target=run, daemon=True).start()
+        return _json({"ok": True, "job": jid}, 202)
+
+    @app.get("/r/svc/job/{jid}")
+    def r_svc_job(jid: str):
+        job = jobs.get(jid)
+        if not job:
+            return _json({"ok": False, "error": "no such request (they are kept 15 minutes)"}, 404)
+        if job["state"] == "working":
+            return _json({"ok": True, "state": "working"})
+        out = jobs.pop(jid)
+        if out["state"] == "failed":
+            return _json({"ok": False, "error": out["error"]}, 502)
+        return _json({"ok": True, "state": "done", "result": out["result"]})
