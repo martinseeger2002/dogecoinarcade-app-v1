@@ -32,7 +32,7 @@ const MAGIC = {main: ARCADE_MAGIC, test: ARCADE_MAGIC, doge: "Dogecoin Signed Me
   dgb: "DigiByte Signed Message:\n", dgbtest: "DigiByte Signed Message:\n", ltc: "Litecoin Signed Message:\n",
   ltctest: "Litecoin Signed Message:\n", btc: "Bitcoin Signed Message:\n"};
 
-const CODE = /^digiid:\/\/([a-z0-9.-]{1,253}(?::[0-9]{1,5})?)(\/[A-Za-z0-9._~\/-]{0,200})\?x=([A-Za-z0-9]{8,128})(&u=1)?$/;
+const CODE = /^digiid:\/\/([A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?)(\/[A-Za-z0-9._~\/-]{0,200})\?x=([A-Za-z0-9]{8,128})(&u=1)?$/;
 
 /** A scanned or pasted code: {uri, host, callback, plain} or throws. Only a Digi-ID code is read. */
 export function parse(text) {
@@ -40,7 +40,8 @@ export function parse(text) {
   const m = CODE.exec(uri);
   if (!m) throw new Error("that isn't a Digi-ID or ARCADE ID code");
   const plain = !!m[4];
-  return {uri, host: m[1], plain, callback: (plain ? "http://" : "https://") + uri.slice("digiid://".length)};
+  // Host names are any case (DigiAssetX's code says digiassetX.com); kept lowercase, so a site is one site.
+  return {uri, host: m[1].toLowerCase(), plain, callback: (plain ? "http://" : "https://") + uri.slice("digiid://".length)};
 }
 
 const le32 = (b, i) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
