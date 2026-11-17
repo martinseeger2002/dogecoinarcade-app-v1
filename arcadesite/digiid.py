@@ -365,7 +365,8 @@ def register(app, st, chains):
                 return no("this arcade can't pass answers to other sites yet (it needs a newer Arcade V1.0)", 501)
             return no(text, 400)
         if not out.get("ok"):
-            return no(f"{out.get('host', 'the site')} said no ({out.get('status')})" + (f": {out['said']}" if out.get("said") else ""), 502)
+            return no(f"{out.get('host', 'the site')} answered with an error ({out.get('status')})" + (f": {out['said']}" if out.get("said") else "")
+                      + ". Some Digi-ID sites sign you in anyway: look at the site.", 502)
         return JSONResponse({"ok": True, "host": out.get("host")})
 
     @app.get("/digiid.js", include_in_schema=False)
