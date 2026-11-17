@@ -330,15 +330,27 @@ window.arcadePreview = function (frame, html) {
       said.textContent = String(e.message || e); said.hidden = false;
     }
   });
-  // ARCADE ID (built on Digi-ID; the Digi-ID node module): offered only in a browser where it was turned on
+  // ARCADE ID (built on Digi-ID; the Digi-ID node module): shown wherever this arcade has it on. It signs in only in
+  // a browser where it was turned on (that browser keeps the sealed wallet); in any other, the button says how to
+  // turn it on there, so someone who heard of ARCADE ID finds it instead of a missing button.
   (async () => {
     try {
       const st = await (await fetch("/digiid/status", {cache: "no-store"})).json();
       if (!st.on) return;
       const digiid = await import("/digiid.js");
-      if (!(await digiid.kept())) return;
       const b = $("signbar-digiid"), said = $("signbar-said");
       b.hidden = false;
+      if (!(await digiid.kept())) {
+        b.dataset.setup = "1";
+        b.onclick = () => {
+          said.replaceChildren(
+            "ARCADE ID isn't on in this browser yet. Sign in once with your name and password, then turn it on in ",
+            Object.assign(document.createElement("a"), {href: "/me/arcadeid", textContent: "Wallet \u203a ARCADE ID"}),
+            ". After that, this button signs you in here with a scan.");
+          said.hidden = false;
+        };
+        return;
+      }
       b.onclick = async () => {
         b.disabled = true; said.hidden = true;
         try { await digiid.signIn(ARCADE_CHAIN); location.reload(); }

@@ -51,7 +51,7 @@ with sync_playwright() as pw:
     check(r.status_code == 200 and uri.startswith(f"digiid://{host}/digiid/callback?x=")
           and uri.endswith("&u=1") == BASE.startswith("http:"),
           f"the dialog shows a Digi-ID code and the wallet's scan is accepted ({r.status_code})")
-    page.wait_for_function("document.getElementById('digiid-said').textContent.includes('Digi-ID is on')", timeout=20000)
+    page.wait_for_function("document.getElementById('digiid-said').textContent.includes('ARCADE ID is on')", timeout=20000)
     try:
         page.wait_for_function(f"document.getElementById('digiid-state').textContent.includes('{w.address}')", timeout=15000)
     except Exception:
@@ -78,7 +78,11 @@ with sync_playwright() as pw:
 
     # another browser (no sealed copy): no Digi-ID button
     p2 = b.new_context().new_page(); p2.goto(BASE + "/feed"); p2.wait_for_timeout(3000)
-    check(p2.is_hidden("#signbar-digiid"), "a browser where it was never turned on doesn't offer it")
+    check(p2.is_visible("#signbar-digiid"), "a browser where it was never turned on still shows ARCADE ID")
+    p2.click("#signbar-digiid"); p2.wait_for_timeout(500)
+    said2 = p2.inner_text("#signbar-said")
+    check("isn't on in this browser yet" in said2 and p2.is_visible("#signbar-said a[href='/me/arcadeid']"), f"and says how to turn it on there: {said2}")
+    check(p2.evaluate("async () => (await (await fetch('/auth/who')).json()).pubkey") is None, "without signing anyone in")
     page.goto(BASE + "/me/digiid"); page.wait_for_selector("#digiid-off:not([hidden])", timeout=20000)
     page.click("#digiid-off"); page.wait_for_function("document.getElementById('digiid-said').textContent.includes('Turned off')", timeout=20000)
     check(page.evaluate("async () => !(await (await import('/digiid.js')).kept())"), "turned off: the sealed copy is gone")
