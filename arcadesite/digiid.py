@@ -348,6 +348,26 @@ def register(app, st, chains):
         gone = store.off(account.pubkey, device_id(said), everywhere=bool(said.get("all")))
         return JSONResponse({"ok": True, "forgotten": gone})
 
+    @app.post("/digiid/relay")
+    def digiid_relay(payload: Any = Body(None)):
+        """An ARCADE wallet's answer to ANOTHER site's Digi-ID code, passed on through this arcade (v1 id.relay): a
+        page may not post to another site, a server may. The arcade checks it is a well-formed code signed by that
+        address, sends it once, and only to a public internet address."""
+        said = payload if isinstance(payload, dict) else {}
+        params = {k: str(said.get(k) or "") for k in ("uri", "address", "signature")}
+        if said.get("chain"):
+            params["chain"] = str(said["chain"])
+        try:
+            out = st.v1.cmd("id.relay", _timeout=30, **params)
+        except Exception as e:                              # noqa: BLE001  (the arcade's own refusal, or an older arcade)
+            text = str(e)
+            if "unknown" in text.lower():
+                return no("this arcade can't pass answers to other sites yet (it needs a newer Arcade V1.0)", 501)
+            return no(text, 400)
+        if not out.get("ok"):
+            return no(f"{out.get('host', 'the site')} said no ({out.get('status')})" + (f": {out['said']}" if out.get("said") else ""), 502)
+        return JSONResponse({"ok": True, "host": out.get("host")})
+
     @app.get("/digiid.js", include_in_schema=False)
     @app.get("/arcadeid.js", include_in_schema=False)
     def digiid_js(request: Request):

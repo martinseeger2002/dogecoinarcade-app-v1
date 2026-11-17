@@ -91,7 +91,21 @@ export async function answer(code, chain, home) {
     r = await fetch(callback, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
                                mode: "cors", credentials: "omit"});
   } catch (e) {
-    throw new Error(`${host} didn't answer. Check you're online, and that the code is still on its screen.`);
+    // Most Digi-ID sites were made for phone apps and don't let a web page post to them: the browser stops it. This
+    // site's arcade passes the answer on instead (v1 id.relay), checked and sent once, to public addresses only.
+    r = null;
+  }
+  if (!r) {
+    let relayed;
+    try {
+      relayed = await fetch("/digiid/relay", {method: "POST", headers: {"Content-Type": "application/json"},
+                                              body: JSON.stringify(body), credentials: "same-origin"});
+    } catch (e) {
+      throw new Error(`${host} didn't answer. Check you're online, and that the code is still on its screen.`);
+    }
+    const said = await relayed.json().catch(() => ({}));
+    if (!relayed.ok) throw new Error(said.detail || `${host} didn't answer`);
+    return {host, address: key.address, chain, relayed: true};
   }
   const said = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(said.detail || `${host} said no`);
