@@ -10,9 +10,11 @@ class St:
     def set_setting(self, k, v): self.s[k] = v
 
 class V1:
-    def __init__(self): self.sent, self.fail = [], False
+    def __init__(self): self.sent, self.fail, self.asked = [], False, []
     def cmd(self, name, **kw):
         if name == "chains.list": return [{"key": "arctest", "installed": True, "indexes": ["addresses"]}]
+        if name == "faucet.arc":
+            self.asked.append(kw["address"]); return {"asked": True, "address": kw["address"], "target": 5_000_000}
         if name == "wallet.send":
             if self.fail: raise V1Error("no spendable coins yet")
             self.sent.append(kw); return {"txid": "ab" * 32}
@@ -37,4 +39,17 @@ assert c.welcome_arcade(pk) == "ab" * 32
 assert v1.sent == [{"chain": "arctest", "to": "aRcJf62XqzABU57fS7jcDR5R9a16Dh8qVH", "amount": 10_000_000, "send": True}]
 st.set_setting(f"arcade_gift_owed:{pk}", 0)
 assert c.welcome_arcade(pk, new=True) == "" and len(v1.sent) == 1, "never twice"
+# keep_arcade: an older account (never offered the gift) gets it on its first visit of the day, then the faucet asks.
+chainslib.Chains._arcade_day.clear()
+old = "22" * 32
+st.set_setting(f"address:{old}", "nVkQCLyB9Q4U15JGAhjAmBF22hjPYUwj3w")
+n = len(v1.sent)
+assert c.keep_arcade(old) == "gift" and len(v1.sent) == n + 1 and st.setting(f"arcade_gift:{old}")
+assert c.keep_arcade(old) == "" and not v1.asked, "once a day"
+chainslib.Chains._arcade_day[old] = 0                              # the next day
+assert c.keep_arcade(old) == "asked" and v1.asked == [c.arcade_address(old)] and len(v1.sent) == n + 1, "gift never twice; the faucet tops up"
+# An account whose gift is owed (none to give at sign-up) isn't given it twice: the faucet is asked meanwhile.
+chainslib.Chains._arcade_day.clear()
+v1.asked.clear()
+assert c.keep_arcade(pk) == "asked" and v1.asked == [c.arcade_address(pk)]
 print("ALL OK")

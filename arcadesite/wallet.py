@@ -170,6 +170,8 @@ def register(app, st, chains):
         # An ARCADE welcome gift still owed (none to give at sign-up): tried again in the background.
         if st.setting(f"arcade_gift_owed:{account.pubkey}") is not None and not st.setting(f"arcade_gift:{account.pubkey}"):
             threading.Thread(target=lambda: _quietly(chains.welcome_arcade, account.pubkey), daemon=True).start()
+        # Once a day: the gift for an account from before it, or the mesh faucet's top-up of its ARCADE address.
+        threading.Thread(target=lambda: _quietly(chains.keep_arcade, account.pubkey), daemon=True).start()
         mine = st.vault().by_pubkey(account.pubkey) or {}
         address = chains.account_address(account.pubkey, home)
         said: dict[str, Any] = {

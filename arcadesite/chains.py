@@ -172,6 +172,36 @@ class Chains:
         return txid
 
 
+    #: Accounts seen today (pubkey -> UTC day) by keep_arcade: once a day each. The mesh faucet keeps its own
+    #: once-a-day per address too, so a restart that forgets this asks again for nothing.
+    _arcade_day: dict = {}
+
+    def keep_arcade(self, pubkey: str) -> str:
+        """A signed-in account's ARCADE, so likes, comments and tips on the ARCADE network never lock it out (Martin
+        2026-11-16): once a UTC day, its one-time gift if it never had one (accounts from before the gift), else an
+        ask to the mesh faucet (V1.0 faucet.arc) to top its ARCADE address up (to 0.05 ARCADE, arcade-v1 #258).
+        What was done: "gift", "asked", or ""."""
+        day = int(time.time() // 86400)
+        if self._arcade_day.get(pubkey) == day:
+            return ""
+        self._arcade_day[pubkey] = day
+        if not self.st.setting(f"arcade_gift:{pubkey}") and self.st.setting(f"arcade_gift_owed:{pubkey}") is None:
+            self.st.set_setting(f"arcade_gift_owed:{pubkey}", 0)
+            try:
+                if self.welcome_arcade(pubkey):
+                    return "gift"
+            except Exception:                               # noqa: BLE001  (tried again on a later visit)
+                pass
+        to = self.arcade_address(pubkey)
+        if not to:
+            return ""
+        try:
+            out = self.v1.cmd("faucet.arc", address=to) or {}
+        except Exception:                                   # noqa: BLE001
+            return ""
+        return "asked" if out.get("asked") else ""
+
+
 class _V1Chain:
     """What arcade/faucet.pour asks of a chain: is_mainnet, and rpc().call("sendtoaddress", address, coins)."""
 
