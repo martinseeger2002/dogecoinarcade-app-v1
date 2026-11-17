@@ -307,7 +307,7 @@ window.arcadePreview = function (frame, html) {
   <input type="password" id="signbar-pw" autocomplete="current-password"
          placeholder="password" aria-label="Your password">
   <button type="submit" class="btn small" id="signbar-go">Sign in</button>
-  <button type="button" class="btn small ghost" id="signbar-digiid" hidden title="ARCADE ID, built on Digi-ID">ARCADE ID</button>
+  <button type="button" class="btn small ghost" id="signbar-digiid"{% if not arcadeid_button() %} hidden{% endif %} title="ARCADE ID, built on Digi-ID">ARCADE ID</button>
   <a class="signbar-new" href="/join?next={{ path|urlencode }}#make">Create a new account</a>
   <span class="signbar-said" id="signbar-said" role="status" hidden></span>
 </form>
@@ -330,34 +330,31 @@ window.arcadePreview = function (frame, html) {
       said.textContent = String(e.message || e); said.hidden = false;
     }
   });
-  // ARCADE ID (built on Digi-ID; the Digi-ID node module): shown wherever this arcade has it on. It signs in only in
-  // a browser where it was turned on (that browser keeps the sealed wallet); in any other, the button says how to
-  // turn it on there, so someone who heard of ARCADE ID finds it instead of a missing button.
-  (async () => {
-    try {
-      const st = await (await fetch("/digiid/status", {cache: "no-store"})).json();
-      if (!st.on) return;
-      const digiid = await import("/digiid.js");
-      const b = $("signbar-digiid"), said = $("signbar-said");
-      b.hidden = false;
-      if (!(await digiid.kept())) {
-        b.dataset.setup = "1";
-        b.onclick = () => {
+  // ARCADE ID (built on Digi-ID; the Digi-ID node module): drawn with the page wherever this arcade has it on, so it
+  // is there at once. It signs in only in a browser where it was turned on (that browser keeps the sealed wallet); in
+  // any other, it says how to turn it on there. The module and the sealed copy load in the background meanwhile.
+  (() => {
+    const b = $("signbar-digiid"), said = $("signbar-said");
+    if (!b || b.hidden) return;
+    const ready = import("/digiid.js").then(async (digiid) => ({digiid, kept: await digiid.kept()})).catch(() => null);
+    b.onclick = async () => {
+      b.disabled = true; said.hidden = true;
+      try {
+        const r = await ready;
+        if (!r) throw new Error("ARCADE ID didn't load: reload the page and try again");
+        if (!r.kept) {
           said.replaceChildren(
             "ARCADE ID isn't on in this browser yet. Sign in once with your name and password, then turn it on in ",
             Object.assign(document.createElement("a"), {href: "/me/arcadeid", textContent: "Wallet \u203a ARCADE ID"}),
             ". After that, this button signs you in here with a scan.");
           said.hidden = false;
-        };
-        return;
-      }
-      b.onclick = async () => {
-        b.disabled = true; said.hidden = true;
-        try { await digiid.signIn(ARCADE_CHAIN); location.reload(); }
-        catch (e) { if (String(e.message) !== "cancelled") { said.textContent = String(e.message || e); said.hidden = false; } }
-        finally { b.disabled = false; }
-      };
-    } catch (e) { /* no Digi-ID here */ }
+          return;
+        }
+        await r.digiid.signIn(ARCADE_CHAIN); location.reload();
+      } catch (e) {
+        if (String(e.message) !== "cancelled") { said.textContent = String(e.message || e); said.hidden = false; }
+      } finally { b.disabled = false; }
+    };
   })();
 </script>
 {% endif %}

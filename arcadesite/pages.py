@@ -183,6 +183,7 @@ def register(app, st, chains, template_dir: Path):
         "node_trades": lambda: False, "ord_tabs": lambda *a, **k: [], "ord_tab_names": lambda: (),
         "ord_wallet": ord_wallet, "pair_faces": lambda *a, **k: {},
         "doginal_content": lambda i: f"/content/{i}", "doginal_frame": lambda i: f"/inscriptions/{i}/full",
+        "arcadeid_button": lambda: bool(getattr(app.state, "digiid_on", lambda: False)()),  # base.html sign-in bar
     })
     templates.env.filters.update({
         "ago": L._ago, "coins": L._coins, "fromjson": L._fromjson, "who": who, "who_text": who_text,
