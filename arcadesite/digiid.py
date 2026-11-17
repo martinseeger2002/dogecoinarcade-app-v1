@@ -2,7 +2,7 @@
 
 ARCADE ID is Digi-ID, carried to every chain an ARCADE wallet holds. Digi-ID (https://www.digi-id.io) was created by
 the DigiByte community, and it is the backbone of this feature: its QR codes, its callback and its signed URI are used
-here unchanged, so DigiByte Go and every Digi-ID wallet work as they are. What ARCADE adds is one optional field: an
+here unchanged, so Digi-ID wallets (Coinomi is the one digi-id.io names) work as they are. What ARCADE adds is one optional field: an
 ARCADE wallet that scans the same code may answer with a key on any of its chains (Pepecoin, Dogecoin, Litecoin,
 Bitcoin, DigiByte and the rest) and says which in "chain". Credit for the idea and the protocol: the DigiByte community.
 

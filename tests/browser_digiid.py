@@ -1,6 +1,6 @@
 """Digi-ID in a real browser, against a running site (python -m arcadesite) with Digi-ID on and its gifts off:
 sign up a throwaway account, turn Digi-ID on, sign out, sign in again with only a Digi-ID scan (a made-up DigiByte key
-plays the wallet: it signs the code's URI and posts it to the callback, as DigiByte Go does).
+plays the wallet: it signs the code's URI and posts it to the callback, as a Digi-ID wallet such as Coinomi does).
     ARCADE_SRC=... python tests/browser_digiid.py http://127.0.0.1:8462"""
 import os, secrets, sys, requests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

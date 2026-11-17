@@ -87,7 +87,7 @@ async function scan(purpose, title, lead) {
   dlg.innerHTML = `<form method="dialog" class="digiid-box">
       <h2></h2><p class="digiid-lead"></p>
       <div class="digiid-qr" aria-label="Digi-ID QR code"></div>
-      <p class="digiid-how">Scan with any ARCADE wallet (Wallet \u203a ARCADE ID \u203a Scan a code) or a Digi-ID wallet such as DigiByte Go.</p>
+      <p class="digiid-how">Scan with any ARCADE wallet (Wallet \u203a ARCADE ID \u203a Scan a code) or a Digi-ID wallet such as Coinomi.</p>
       <p><a class="btn small digiid-open">Open in my Digi-ID wallet</a></p>
       <p class="digiid-said" role="status">Waiting for your wallet…</p>
       <p><button class="btn ghost small" value="cancel">Cancel</button></p>
