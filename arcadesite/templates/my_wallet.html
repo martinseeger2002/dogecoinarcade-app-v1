@@ -1313,6 +1313,8 @@ function landed() {
 
 function rowTitle(r) {
   const record = kept(SENT, []).find((s) => s.txid === r.txid);
+  if (r.inscribed) return `Inscribed: ${r.inscribed.label || "inscription"}`;
+  if (r.reveal_of) return "Inscription arrived";
   if (r.net >= 0) return r.spent ? "Moved within your wallet" : "Received";
   const tag = r.other_tag || (record && record.tag);
   if (tag) return `Sent to @${tag}`;
@@ -1367,7 +1369,7 @@ function drawActivity() {
     if (r.confirmations < 6) {
       mid.append(el("br"), el("span", "wl-pill wait", `${r.confirmations} of 6 confirmations`));
     }
-    b.append(el("span", "wl-ic" + (r.net > 0 ? " in" : ""), r.net > 0 ? "↓" : r.other ? "↑" : "★"),
+    b.append(el("span", "wl-ic" + (r.net > 0 && !r.reveal_of ? " in" : ""), r.inscribed || r.reveal_of ? "★" : r.net > 0 ? "↓" : r.other ? "↑" : "★"),
              mid, amountCell(r.net));
     b.onclick = () => openRow(r);
     box.append(b);
@@ -1441,6 +1443,19 @@ function openRow(r) {
                                    : el("span", "wl-pill wait", `${r.confirmations} of 6 confirmations`));
   body.append(head);
   if (r.net < 0 && r.other) body.append(kv("To", (r.other_tag ? "@" + r.other_tag + " · " : "") + r.other, !r.other_tag));
+  if (r.inscribed) {
+    // An inscription's commit: its coins came back to this wallet in the reveal; only fees left it.
+    body.append(el("p", "wl-note", "You made an inscription. Its coins came back to your own address in the reveal; what left the wallet is the fees."));
+    body.append(kv("Inscription", r.inscribed.id, true));
+    for (const p of r.inscribed.paid || []) {
+      body.append(kv("Also paid", `${coinsOf(p.value || 0)} ${COIN()} to ${p.tag ? "@" + p.tag + " · " : ""}${p.address} (the minting tool's or service's fee)`, true));
+    }
+    body.append(copyRow("Copy reveal transaction ID", r.inscribed.reveal));
+  }
+  if (r.reveal_of) {
+    body.append(el("p", "wl-note", "The reveal of an inscription you made: it brought the inscription to your address, on a small amount of coins from its commit."));
+    body.append(copyRow("Copy commit transaction ID", r.reveal_of));
+  }
   body.append(kv("When", r.time ? new Date(r.time * 1000).toLocaleString() : `block ${r.height}`));
   if (r.fee) body.append(kv("Network fee", `${coinsOf(r.fee)} ${COIN()}`));
   body.append(kv("Block", r.height.toLocaleString()));
