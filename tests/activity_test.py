@@ -17,6 +17,7 @@ from arcadesite.app import create_app  # noqa: E402
 from arcadesite.v1 import V1, V1Error  # noqa: E402
 
 ME, THEM = "nUCBUJGBZjQUjwpLq6MSPbQKDgr7DPLQiL", "ncpXrSCQx667v4y92zSWidxs96N5TtPjTE"
+P2SH, TOOL = "2N1stand1nP2SHaddressForTheCommitXyz", "nToo1FeeAddressStandInForTheMinter1"
 fails = []
 calls = []
 
@@ -50,7 +51,14 @@ def fake_cmd(self, _command, **p):
         outs = [{"vout": 0, "value": 50_000, "address": ME, "tag": None}]
         if h % 10 == 0:
             outs.insert(0, {"vout": 0, "value": 240_000, "address": THEM, "tag": "them"})
+        if h == 112:  # an inscription's commit: P2SH (spent by the reveal, 111), a minting tool's fee, change
+            outs = [{"value": 30_000, "address": P2SH, "spent_by": {"txid": f"{111:064x}", "vin": 0}},
+                    {"value": 20_000, "address": TOOL}, {"value": 40_000, "address": ME}]
+        if h == 111:  # its reveal: the inscription to ME
+            outs = [{"value": 10_000, "address": ME, "inscriptions": [f"{111:064x}i0"]}]
         return {"txid": p["txid"], "fee": 10_000, "outputs": outs}
+    if _command == "explorer.inscription":
+        return {"id": p["id"], "ct": "text/plain", "content": {"kind": "text", "text": '{"p":"drc-20","op":"mint","tick":"dogd","amt":"1000"}'}}
     raise V1Error(f"unknown method {_command}")
 
 
@@ -82,6 +90,14 @@ check(top["net"] == -250_000 and top["other"] == THEM and top["other_tag"] == "t
 check(top["time"] == 1_700_000_000 + 120 * 60 and top["confirmations"] == 6, "its block time and confirmations")
 ins = next(x for x in rows if x["height"] == 119)
 check(ins["net"] == -100_000 and "other" not in ins, f"an inscription-like spend has no other ({ins})")
+com = next(x for x in rows if x["height"] == 112)
+made = com.get("inscribed") or {}
+check("other" not in com and made.get("reveal") == f"{111:064x}" and made.get("id") == f"{111:064x}i0",
+      f"an inscription's commit is shown as inscribed, not sent to its P2SH ({com})")
+check(made.get("label") == "DRC-20 mint dogd 1000", f"named by its token op ({made.get('label')})")
+check([p["address"] for p in made.get("paid") or []] == [TOOL], f"the minting tool's fee is listed as paid ({made.get('paid')})")
+rev = next(x for x in rows if x["height"] == 111)
+check(rev.get("reveal_of") == f"{112:064x}", f"its reveal points back to the commit ({rev})")
 recv = next(x for x in rows if x["height"] == 118)
 check(recv["net"] == 100_000 and recv["spent"] == 0, "a receipt is positive")
 

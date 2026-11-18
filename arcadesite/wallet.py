@@ -12,6 +12,7 @@ picks coins the same way it always has. Coins carrying an inscription are kept o
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 import unicodedata
@@ -297,12 +298,61 @@ def register(app, st, chains):
                 except V1Error:
                     tx = {}
                 row["fee"] = tx.get("fee")
-                for o in tx.get("outputs") or []:
-                    if o.get("address") and o["address"] != address:
-                        row["other"], row["other_tag"] = o["address"], o.get("tag")
-                        break
+                made = inscribed(tx, one, address)
+                if made:
+                    # An inscription's commit (2026-11-18, @apple's DRC-20 mint read as "Sent to A23R…"): its P2SH
+                    # output went back to this address in the reveal, so nothing left the wallet but fees.
+                    row["inscribed"] = made
+                else:
+                    for o in tx.get("outputs") or []:
+                        if o.get("address") and o["address"] != address:
+                            row["other"], row["other_tag"] = o["address"], o.get("tag")
+                            break
             out.append(row)
+        # The reveal of a commit on this page: the inscription arriving, not coins received.
+        reveals = {row["inscribed"]["reveal"]: row["txid"] for row in out if row.get("inscribed")}
+        for row in out:
+            if row.get("txid") in reveals:
+                row["reveal_of"] = reveals[row["txid"]]
         return out, more
+
+    def inscribed(tx: dict, one: Chain, address: str) -> dict | None:
+        """When tx is an inscription's commit made by this address: an output (not to this address) spent by a reveal
+        whose outputs bring an inscription to this address. {reveal, id, label, paid: [{address, value}]} (paid: the
+        commit's other outputs to someone else, such as a minting tool's fee), else None."""
+        outs = tx.get("outputs") or []
+        for o in outs:
+            by = (o.get("spent_by") or {}).get("txid")
+            if not by or o.get("address") == address:
+                continue
+            try:
+                reveal = v1.cmd("explorer.tx", chain=one.key, txid=by) or {}
+            except V1Error:
+                continue
+            ids = [i for r in reveal.get("outputs") or [] if r.get("address") == address for i in r.get("inscriptions") or []]
+            if not ids:
+                continue
+            paid = [{"address": x["address"], "value": x.get("value"), "tag": x.get("tag")} for x in outs
+                    if x is not o and x.get("address") and x["address"] != address]
+            return {"reveal": by, "id": ids[0], "label": inscription_label(one, ids[0]), "paid": paid}
+        return None
+
+    def inscription_label(one: Chain, iid: str) -> str:
+        """A short name for an inscription: "DRC-20 mint dogd 1000" for a token op, else its content type."""
+        try:
+            ins = v1.cmd("explorer.inscription", chain=one.key, id=iid) or {}
+        except V1Error:
+            return "Inscription"
+        text = str((ins.get("content") or {}).get("text") or "")
+        try:
+            op = json.loads(text) if text.startswith("{") else None
+        except ValueError:
+            op = None
+        if isinstance(op, dict) and op.get("p") and op.get("op"):
+            bits = [str(op["p"]).upper(), str(op["op"]), str(op.get("tick") or ""), str(op.get("amt") or "")]
+            return " ".join(b for b in bits if b)[:60]
+        kind = str(ins.get("ct") or (ins.get("content") or {}).get("type") or "").split(";")[0]
+        return f"Inscription ({kind})" if kind else "Inscription"
 
     # ---------------------------------------------------------------- paying
     def where_to_pay(tag: str, one: Chain) -> str:
