@@ -1652,8 +1652,12 @@ def register(app, st, chains):
 
     @app.get("/account/ord/chains")
     def account_ord_chains(request: Request):
-        from arcade import ord_inscribe as oi
         signed_in_account(request)
+        return JSONResponse({"chains": ord_chain_list()}, headers={"Cache-Control": "no-store"})
+
+    def ord_chain_list() -> list[dict]:
+        """The chains this arcade inscribes ords on, with their rules and the name endings used on each."""
+        from arcade import ord_inscribe as oi
         out = []
         for net in (*oi.CHAINS, "test"):
             chain = ord_chain(net)
@@ -1665,8 +1669,9 @@ def register(app, st, chains):
                         "coin": p.coin, "ord": r.label, "indexer": r.indexer, "part": r.part, "empty_ok": r.empty_ok,
                         "fee_per_kb": fees.rate_for(p, fees.MIN_FEE_PER_KB),
                         "soft_dust": bool(getattr(p, "soft_dust", True)), "postage": oi.POSTAGE,
-                        "mainnet": bool(chain.is_mainnet), "max_bytes": oi.MAX_BYTES})
-        return JSONResponse({"chains": out}, headers={"Cache-Control": "no-store"})
+                        "mainnet": bool(chain.is_mainnet), "max_bytes": oi.MAX_BYTES,
+                        "endings": NAME_ENDINGS.get(net, [])})
+        return out
 
     def name_check(chain: str, name: str) -> dict:
         """Is `name` a name that counts, and is it free on `chain` (V1.0's explorer.name, its ord index's walk, and the
