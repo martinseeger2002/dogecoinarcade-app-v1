@@ -248,6 +248,18 @@ def register(app, st, chains, template_dir: Path):
         return Response(target.read_text(), media_type="application/javascript",
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
+    # The cutout (room.media's cutout, web/cutout/): its script, its model and their license, from this site only, so a
+    # viewer never fetches code or weights from anywhere else to look at somebody's camera.
+    cutout_files = {"cutout.js": "application/javascript", "cutout-model.bin": "application/octet-stream",
+                    "cutout-LICENSE.txt": "text/plain; charset=utf-8"}
+
+    @app.get("/cutout/{name}", include_in_schema=False)
+    def cutout(name: str):
+        f = template_dir.parent / "cutout" / name
+        if name not in cutout_files or not f.is_file():
+            return Response(status_code=404)
+        return FileResponse(f, media_type=cutout_files[name], headers={"Cache-Control": "public, max-age=86400"})
+
     @app.get("/content/{piece}/fit", include_in_schema=False)
     def content_fit(piece: str):
         """A card's frame (as the original): a picture drawn whole, anything else sent on to /content/<id>."""

@@ -791,7 +791,8 @@
           mediaOf(h); mediaWatch(); mediaRemoteSaid(n, h, peer);
         },
         event: function(h, ev){ var n = rtName(h); if (n) mediaEvent(n, h, ev); },
-        notice: function(text){ piecesNotice(text); }
+        notice: function(text){ piecesNotice(text); },
+        needCutout: function(){ cutLib().catch(function(){}); }
       }));
     }
     function piecesPeer(name, h, p){
@@ -901,14 +902,24 @@
     function mediaOf(h){
       return h.media || (h.media = {stream: null, video: false, audio: false, share: {}, hear: {}, place: {},
                                     tiles: {}, muted: {video: false, audio: false, sound: false}, volume: {}, mix: null, echo: null, amps: {}, ampCtx: null,
-                                    frames: {}, lag: {}, spatial: null, levels: null});
+                                    frames: {}, lag: {}, spatial: null, levels: null, cut: null, cutMode: ''});
     }
     function mediaPc(name, h, peer, pc){
       var polite = h.me.id > peer.p.id;                    // the one that did not offer the first time gives way
       peer.making = false; peer.ignoring = false; peer.senders = []; peer.xsenders = [];
       peer.remote = null; peer.xremote = null; peer.xid = '';
       var mc = peer.m = pc.createDataChannel('m', {negotiated: true, id: 2, ordered: true});
-      mc.onopen = function(){ if (peer.pc === pc) mediaPeerUp(name, h, peer); };
+      // THE CUTOUT's masks (cutout.js): their own channel, unordered and never sent again (the next mask is newer). Sent
+      // only to a viewer that said {cut: 1} here, so an older viewer, which has no channel 3, is never sent one.
+      var kc = peer.k = pc.createDataChannel('k', {negotiated: true, id: 3, ordered: false, maxRetransmits: 0});
+      kc.binaryType = 'arraybuffer';
+      kc.onmessage = function(ev){ if (peer.pc === pc) cutHeard(name, h, peer, ev.data); };
+      peer.cutOk = false; peer.masks = []; peer.maskAt = 0;
+      mc.onopen = function(){
+        if (peer.pc !== pc) return;
+        try { mc.send(JSON.stringify({cut: 1})); } catch (err) {}
+        mediaPeerUp(name, h, peer);
+      };
       // NEVER BOTH AT ONCE (2026-11-02, a Riffs Lounge, Firefox and Chrome: no picture either way, for good). When a link
       // comes up with the camera already on at both ends, both offered in the same instant. Chrome, the one giving way,
       // then refused Firefox's offer ("RTP extension ID reassignment not supported"): the rollback leaves Chrome's own
@@ -948,6 +959,7 @@
         if (peer.pc !== pc) return;
         var msg; try { msg = JSON.parse(ev.data); } catch (err) { return; }
         if (msg && typeof msg.x === 'string') { peer.xid = msg.x; return; }   // which stream is their second picture
+        if (msg && msg.cut === 1) { peer.cutOk = true; return; }              // they take masks (THE CUTOUT)
         // They could not take our offer and make one of their own: ours is undone, and we wait for theirs.
         if (msg && msg.yours) { clearTimeout(peer.yield); peer.wait = Date.now() + MEDIA_AFTER; back(); return; }
         var d = msg && msg.d;
@@ -1006,10 +1018,12 @@
         return t.readyState === 'live' && (!t.muted || (t.kind === 'video' && tile && tile.videoWidth > 0));
       }) : [];
       var video = tracks.some(function(t){ return t.kind === 'video'; }), audio = tracks.some(function(t){ return t.kind === 'audio'; });
-      var was = peer.said || '', now = video || audio ? (video ? 'v' : '') + (audio ? 'a' : '') : '';
+      var clear = video && cutLive(peer);
+      var was = peer.said || '', now = video || audio ? (video ? 'v' : '') + (audio ? 'a' : '') + (clear ? 't' : '') : '';
       if (was === now) { if (!quiet) mediaDraw(h); return; }
       peer.said = now;
-      if (now) mediaEvent(name, h, {type: 'media', member: peer.p, video: video, audio: audio});
+      if (now) mediaEvent(name, h, clear ? {type: 'media', member: peer.p, video: video, audio: audio, transparent: true}
+                                         : {type: 'media', member: peer.p, video: video, audio: audio});
       else mediaEvent(name, h, {type: 'media-off', member: peer.p});
       mediaDraw(h);
     }
@@ -1093,6 +1107,7 @@
       if (h.px) piecesOf().stop(h, quiet);
       mediaEchoOff(h, false);
       if (md.stream) md.stream.getTracks().forEach(function(t){ t.stop(); });
+      cutStop(md.cut); md.cut = null;
       var had = !!md.stream;
       mediaUnmix(md.mix); md.mix = null;
       if (md.xstream) { md.xstream.getTracks().forEach(function(t){ t.stop(); }); md.xstream = null; }
@@ -1334,6 +1349,7 @@
       if (!(md.echo && md.echo.mix)) mediaEchoOff(h, true);   // the Lounge mix's canceller is the mix's
       var x = md.xstream; md.xstream = null;
       x.getTracks().forEach(function(t){ t.stop(); });
+      if (md.cut) md.cut.setScreen(null);
       if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttachX(h, pr); });
       mediaDraw(h);
       if (told) mediaEvent(name, h, {type: 'media-state', state: 'screen-off'});
@@ -1351,6 +1367,7 @@
             if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
             mediaXOff(name, h, false);
             md.xstream = stream; md.muted.sound = false;
+            if (md.cut) md.cut.setScreen(stream.getVideoTracks()[0] || null);
             stream.getVideoTracks().forEach(function(t){
               t.contentHint = 'detail';
               t.addEventListener('ended', function(){ if (md.xstream === stream) mediaXOff(name, h, true); });
@@ -1390,6 +1407,9 @@
       if (m.do === 'start') {
         var want = {video: !!m.video, audio: !!m.audio, screen: !!m.screen, sound: !!(m.sound && m.screen)};
         if (want.screen) want.video = false;
+        // THE CUTOUT: none said keeps what the last start said; null or '' ends it.
+        var cutout = m.cutout === undefined ? md.cutMode || '' : m.cutout ? String(m.cutout) : '';
+        if (cutout && CUT_MODES.indexOf(cutout) < 0) { answer({ok: false, error: 'a cutout is ' + CUT_MODES.join(', ') + ' or none'}); return; }
         if (!want.video && !want.audio && !want.screen) { answer({ok: false, error: 'ask for video, audio, screen or a pair'}); return; }
         var md0 = navigator.mediaDevices;
         if (want.screen && !(md0 && typeof md0.getDisplayMedia === 'function')) {
@@ -1428,7 +1448,20 @@
               return stream;
             }, function(err){ if (shown) shown.getTracks().forEach(function(t){ t.stop(); }); throw err; });
           }).then(function(stream){
-            if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
+            // The camera through the cutter before anything is attached: nobody ever gets the background it hides.
+            var cam = !want.screen && stream.getVideoTracks()[0];
+            if (!cutout || !cam) { if (!cutout) md.cutMode = ''; return {stream: stream}; }
+            md.cutMode = cutout;
+            return cutMake(name, h, cam, cutout).then(function(cut){
+              var t = cut.track();
+              if (!t) { cutStop(cut); return {stream: stream, said: {cutout: 'off', cutoutWhy: 'this browser cannot make a picture from a canvas'}}; }
+              stream.removeTrack(cam); stream.addTrack(t);
+              return {stream: stream, cut: cut, said: cutSaid(cut)};
+            }, function(err){ return {stream: stream, said: {cutout: 'off', cutoutWhy: String((err && err.message) || err)}}; });
+          }).then(function(got){
+            var stream = got.stream;
+            if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); cutStop(got.cut); throw new Error('left the room'); }
+            if (md.cut !== got.cut) { cutStop(md.cut); md.cut = got.cut || null; }
             var old = md.stream, oldMix = md.mix;           // a second start: the new tracks replace the old
             mediaEchoOff(h, false);
             md.stream = stream; md.mix = stream.mix || null;
@@ -1456,7 +1489,7 @@
             mediaEchoOn(h);
             mediaDraw(h);
             mediaEvent(name, h, {type: 'media-state', state: 'on'});
-            answer(Object.assign({ok: true, video: md.video, audio: md.audio, screen: md.screen}, md.mix ? {sound: true} : {}));
+            answer(Object.assign({ok: true, video: md.video, audio: md.audio, screen: md.screen}, md.mix ? {sound: true} : {}, got.said || {}));
           }, function(err){
             // Closing the screen picker is no refusal of the microphone: 'cancelled', and nothing else changes.
             var why = String((err && (err.name || err.message)) || err);
@@ -1578,7 +1611,14 @@
         });
         return;
       }
-      answer({ok: false, error: 'media ops are start, stop, screen, share, hear, volume, place, mute, frames, spatial and levels'});
+      if (m.do === 'cutout') {
+        var mode = m.mode ? String(m.mode) : '';
+        if (mode && CUT_MODES.indexOf(mode) < 0) { answer({ok: false, error: 'a cutout is ' + CUT_MODES.join(', ') + ' or none'}); return; }
+        cutSet(name, h, mode).then(function(said){ answer(Object.assign({ok: true}, said)); },
+                                   function(err){ answer({ok: false, error: String((err && err.message) || err)}); });
+        return;
+      }
+      answer({ok: false, error: 'media ops are start, stop, screen, share, hear, volume, place, mute, frames, spatial, levels and cutout'});
     }
     var FRAME_MAX_W = 1920, FRAME_MAX_H = 1080, FRAME_MAX_FPS = 30, FRAME_LAG_MAX = 500;
     function framesStop(md, key){
@@ -1592,14 +1632,15 @@
       var f = md.frames[key] = {w: want.w, h: want.h, fps: want.fps, busy: false};
       f.timer = setInterval(function(){
         if (h.media !== md || md.frames[key] !== f || f.busy) return;
-        var v = md.tiles[key];
-        if (!v || v.readyState < 2 || !v.videoWidth || typeof createImageBitmap !== 'function') return;
+        var v = md.tiles[key], cv = v && v._cut && v._cut.width > 2 ? v._cut : null;   // a cut picture: with its transparency
+        if (!v || (!cv && (v.readyState < 2 || !v.videoWidth)) || typeof createImageBitmap !== 'function') return;
+        var W0 = cv ? cv.width : v.videoWidth, H0 = cv ? cv.height : v.videoHeight;
         // Inside w x h, the picture's own shape kept (never stretched).
-        var scale = Math.min(1, f.w / v.videoWidth, f.h / v.videoHeight);
-        var w = Math.max(1, Math.round(v.videoWidth * scale)), hh = Math.max(1, Math.round(v.videoHeight * scale));
+        var scale = Math.min(1, f.w / W0, f.h / H0);
+        var w = Math.max(1, Math.round(W0 * scale)), hh = Math.max(1, Math.round(H0 * scale));
         var t = Date.now();
         f.busy = true;
-        createImageBitmap(v, {resizeWidth: w, resizeHeight: hh, resizeQuality: scale < 0.5 ? 'medium' : 'low'}).then(function(bm){
+        createImageBitmap(cv || v, {resizeWidth: w, resizeHeight: hh, resizeQuality: scale < 0.5 ? 'medium' : 'low'}).then(function(bm){
           f.busy = false;
           if (h.media !== md || md.frames[key] !== f) { bm.close(); return; }
           var owner = key.replace(/#screen$/, ''), p = owner === 'me' ? h.me : (h.fast && h.fast.peers[owner] ? h.fast.peers[owner].p : null);
@@ -1735,6 +1776,185 @@
       fit();
       return el;
     }
+    // THE CUTOUT (2026-11-19, for any app; TxTOK's Screen layout first: "share your own screen as your own background and
+    // cut out your background"): start({video: true, cutout}) or cutout(mode) puts the camera through the cutter
+    // (/cutout/cutout.js, served by this site with its model; nothing from anywhere else, and no frame leaves this
+    // browser but as the call's own picture). Its canvas's track takes the camera's place in md.stream, so WebRTC and
+    // the pieces both send the cut picture. 'blur' and 'composite' are in the picture itself. 'transparent' sends the
+    // blurred picture and its mask: to a viewer that said {cut: 1}, on channel 3; to an app window, as pieces of kind
+    // 5. A viewer that has masks draws the person alone (a canvas over the tile, where the page placed it); one that
+    // has none shows the blurred picture.
+    var CUT_MODES = ['blur', 'composite', 'transparent'], CUT_BASE = '/cutout/', CUT_GONE = 3000, cutLibP = null, cutLoop = null;
+    function cutLib(){
+      if (window.ArcadeCutout) return Promise.resolve(window.ArcadeCutout);
+      return cutLibP || (cutLibP = new Promise(function(ok, no){
+        var sc = document.createElement('script');
+        sc.src = CUT_BASE + 'cutout.js'; sc.async = true;
+        sc.onload = function(){ if (window.ArcadeCutout) ok(window.ArcadeCutout); else { cutLibP = null; no(new Error('no cutout on this site')); } };
+        sc.onerror = function(){ cutLibP = null; no(new Error('no cutout on this site')); };
+        (document.head || document.documentElement).appendChild(sc);
+      }));
+    }
+    // A cutter on the camera's track, once it is running (or has said why it cannot).
+    function cutMake(name, h, cam, mode){
+      var md = h.media;
+      return cutLib().then(function(C){
+        return new Promise(function(ok){
+          var done = false, cut = C.start({track: cam, mode: mode, base: CUT_BASE, fps: 20, most: 640,
+            screen: md.xstream ? md.xstream.getVideoTracks()[0] || null : null,
+            onstate: function(st){
+              if (st.why !== 'getting ready' && !done) { done = true; ok(cut); }
+              if (h.media && h.media.cut === cut) mediaEvent(name, h, {type: 'media-cutout', mode: st.mode, want: st.want, why: st.why});
+            },
+            onframe: function(){ if (h.media && h.media.cut === cut) cutFrame(h, cut); }});
+          cut.raw = cam;
+          setTimeout(function(){ if (!done) { done = true; ok(cut); } }, 10000);
+        });
+      });
+    }
+    function cutSaid(cut){ return cut.mode === cut.want ? {cutout: cut.mode} : {cutout: cut.mode, cutoutWhy: cut.why}; }
+    function cutStop(cut){
+      if (!cut) return;
+      cut.stop();
+      try { cut.raw.stop(); } catch (err) {}
+    }
+    // cutout(mode) mid-call: on (the cut picture takes the camera's place on every link), changed, or off (the camera's own).
+    function cutSet(name, h, mode){
+      var md = h.media, cut = md.cut;
+      md.cutMode = mode;
+      var swap = function(from, to){
+        if (!md.stream || md.stream.getTracks().indexOf(from) < 0) return;
+        md.stream.removeTrack(from); md.stream.addTrack(to);
+        mediaMutes(md);
+        if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr && !pr.pieces) mediaAttach(h, pr); });
+        if (h.px) piecesOf().sync(h);
+        mediaDraw(h);
+      };
+      if (!mode) {
+        if (cut) { md.cut = null; if (cut.raw.readyState !== 'ended') swap(cut.track(), cut.raw); cut.stop(); }
+        mediaDraw(h);
+        return Promise.resolve({cutout: 'off'});
+      }
+      if (cut) { cut.setMode(mode); return Promise.resolve(cutSaid(cut)); }
+      var cam = md.stream && md.video && !md.screen ? md.stream.getVideoTracks()[0] : null;
+      if (!cam) return Promise.reject(new Error('no camera: start({video: true}) first'));
+      return cutMake(name, h, cam, mode).then(function(made){
+        if (h.media !== md || !md.stream || md.stream.getVideoTracks()[0] !== cam || md.cutMode !== mode || md.cut) { made.stop(); return {cutout: 'off'}; }
+        var t = made.track();
+        if (!t) { made.stop(); return {cutout: 'off', cutoutWhy: 'this browser cannot make a picture from a canvas'}; }
+        md.cut = made;
+        swap(cam, t);
+        return cutSaid(made);
+      });
+    }
+    // Each cut picture: in 'transparent' its mask to the viewers that take masks over WebRTC (app windows get theirs with
+    // each encoded picture, media_pieces.js); a new one as it comes, the same one again twice a second.
+    function cutFrame(h, cut){
+      var md = h.media, mine = md.tiles.me;
+      if (mine && !!mine._cut !== (cut.mode === 'transparent')) mediaDraw(h);   // your own picture, cut or not
+      if (cut.mode !== 'transparent' || !h.fast) return;
+      var m = cut.mask(), now = Date.now();
+      if (!m || (m.seq === cut.sentSeq && now - (cut.sentAt || 0) < 500)) return;
+      cut.sentSeq = m.seq; cut.sentAt = now;
+      var bytes = null;
+      Object.keys(md.share).forEach(function(id){
+        var pr = h.fast.peers[id];
+        if (!pr || pr.pieces || !pr.cutOk || !md.share[id].video || !pr.k || pr.k.readyState !== 'open' || pr.k.bufferedAmount > 65536) return;
+        if (!bytes) {
+          var head = piecesOf().header(5, false, m.seq, now >>> 0, 0, 1, m.w, m.h);
+          bytes = new Uint8Array(head.length + m.bytes.length); bytes.set(head); bytes.set(m.bytes, head.length);
+        }
+        try { pr.k.send(bytes); } catch (err) {}
+      });
+    }
+    // A mask from a viewer over WebRTC: kept by when it came (its picture comes later, through the video's own buffer).
+    function cutHeard(name, h, peer, buf){
+      if (!(buf instanceof ArrayBuffer)) return;
+      var C = window.ArcadeCutout;
+      if (!C) { cutLib().catch(function(){}); return; }
+      var x = piecesOf().parse(new Uint8Array(buf));
+      if (!x || x.kind !== 5) return;
+      var data = C.decodeMask(x.body, x.w, x.h);
+      if (!data) return;
+      var m = {t: performance.now(), w: x.w, h: x.h, data: data};
+      m.canvas = C.maskCanvas(document.createElement('canvas'), m);
+      C.keepMask(peer.masks, m, 12);
+      var was = cutLive(peer);
+      peer.maskAt = Date.now();
+      if (!was) mediaRemoteSaid(name, h, peer);
+    }
+    function cutLive(peer){
+      if (peer.pieces) return !!(mediaPieces && mediaPieces.cutOf(peer));
+      return !!(peer.maskAt && Date.now() - peer.maskAt < CUT_GONE);
+    }
+    // How far a viewer's picture runs behind its masks: the video's own buffer, asked every two seconds.
+    function cutDelay(peer){
+      var now = Date.now();
+      if (peer.pc && now - (peer.delayAt || 0) > 2000) {
+        peer.delayAt = now;
+        peer.pc.getStats().then(function(st){
+          st.forEach(function(r){
+            if (r.type === 'inbound-rtp' && r.kind === 'video' && r.jitterBufferEmittedCount > 0) {
+              peer.delay = Math.min(400, 1000 * r.jitterBufferDelay / r.jitterBufferEmittedCount + 15);
+            }
+          });
+        }).catch(function(){});
+      }
+      return peer.delay != null ? peer.delay : 60;
+    }
+    // What a tile's picture is cut by now: {source, mask} (or {alpha}: your own, already cut), or null.
+    function cutSource(h, key){
+      var md = h.media;
+      if (!md || key.indexOf('#') >= 0) return null;
+      if (key === 'me') return md.cut && md.cut.mode === 'transparent' && md.cut.alpha.width > 2 ? {alpha: md.cut.alpha} : null;
+      var pr = h.fast && h.fast.peers[key];
+      if (!pr || !window.ArcadeCutout) return null;
+      if (pr.pieces) return mediaPieces ? mediaPieces.cutOf(pr) : null;
+      if (!cutLive(pr) || !pr.masks.length) return null;
+      return {source: md.tiles[key], mask: window.ArcadeCutout.maskFor(pr.masks, performance.now() - cutDelay(pr))};
+    }
+    // A cut tile: a canvas over the video (which still plays the sound), placed as it is, the video itself unseen.
+    function cutTile(h, key, v){
+      var cs = cutSource(h, key);
+      if (!cs) {
+        if (v._cut) { v._cut.remove(); v._cut = null; v.style.opacity = ''; }
+        return;
+      }
+      var c = v._cut;
+      if (!c) {
+        c = v._cut = document.createElement('canvas');
+        c.dataset.media = key; c.dataset.cut = '1';
+        c.width = 2; c.height = 2;
+        mediaLayer().appendChild(c);
+      }
+      c.style.cssText = v.style.cssText;
+      c.style.background = 'transparent';
+      c.style.opacity = '';
+      c.style.zIndex = '1';                             // a cut picture is drawn over the others (your screen, say)
+      v.style.opacity = '0';
+      if (!cutLoop) cutLoop = (window.requestAnimationFrame || setTimeout)(cutPaint);
+    }
+    function cutPaint(){
+      cutLoop = null;
+      var any = false, C = window.ArcadeCutout;
+      for (var k in rt) {
+        var h = rt[k], md = h.media;
+        if (!md || !C) continue;
+        for (var key in md.tiles) {
+          var v = md.tiles[key];
+          if (!v._cut) continue;
+          var cs = cutSource(h, key);
+          if (!cs) { mediaDraw(h); continue; }                 // its masks stopped: the plain picture again
+          any = true;
+          if (cs.alpha) {
+            var c = v._cut, a = cs.alpha;
+            if (c.width !== a.width || c.height !== a.height) { c.width = a.width; c.height = a.height; }
+            var g = c.getContext('2d'); g.globalCompositeOperation = 'copy'; g.drawImage(a, 0, 0); g.globalCompositeOperation = 'source-over';
+          } else if (cs.source && (cs.source.width > 2 || cs.source.videoWidth)) C.paintMasked(v._cut, cs.source, cs.mask);
+        }
+      }
+      if (any) cutLoop = (window.requestAnimationFrame || setTimeout)(cutPaint);
+    }
     function mediaTile(md, key){
       var v = md.tiles[key];
       if (!v) {
@@ -1762,7 +1982,7 @@
         if (md.xstream) keep['me#screen'] = md.xstream;
       }
       for (var k in tiles) if (!keep[k]) {
-        try { tiles[k].srcObject = null; tiles[k].remove(); } catch (err) {}
+        try { tiles[k].srcObject = null; tiles[k].remove(); if (tiles[k]._cut) tiles[k]._cut.remove(); } catch (err) {}
         delete tiles[k];
         if (h.media) mediaLoud(h, k, null);
       }
@@ -1783,6 +2003,7 @@
           v.style.objectPosition = 'center';
           v.style.transform = at.mirror ? 'scaleX(-1)' : '';
         } else v.style.display = 'none';
+        cutTile(h, key, v);
       });
       mediaPill();
       if (h.media && !h.speakWatch) h.speakWatch = setInterval(function(){ mediaSpeak(h); }, 150);

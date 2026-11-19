@@ -269,6 +269,9 @@ arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
 | `on('media', fn(player, {video, audio}))` | a player is sending to you |
 | `on('media-off', fn(player))` | they stopped |
 | `on('state', fn(s))` | `'on'`, `'off'` (the player pressed Stop), `'denied'`, or `'screen-off'` (the browser's own Stop sharing ended the picture; the voice goes on) |
+| `start({video, audio, cutout})` | the camera with the person cut out: `cutout` is `'blur'`, `'composite'`, `'transparent'` or `null`. Left out, a second `start` keeps the last one. The answer has `cutout` (what runs) and `cutoutWhy` when that is not what you asked |
+| `cutout(mode)` | the same, mid-call: `{ok, cutout, cutoutWhy}`. `null` is the camera as it is |
+| `on('cutout', fn({mode, want, why}))` | the cutout changed: a screen was shared or stopped (`composite`), or the computer is too slow for it (`'off'`) |
 
 * **Share only with the player you mean.** A room's name can be guessed, and
   anybody who joins it is a peer. Check `p.address` before you call `share`
@@ -279,6 +282,37 @@ arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
   is on, the viewer shows so over your page, with a Stop button your page
   cannot cover.
 * Place the pictures again when your layout moves.
+
+#### The cutout: your background blurred, your screen behind you, or you alone
+
+```js
+room.media.start({video: true, audio: true, cutout: 'blur'});
+room.media.showScreen().then(function () {
+  room.media.cutout('transparent');                        // you alone...
+  room.media.place('me#screen', {x: 0, y: 0, w: 640, h: 360});
+  room.media.place('me', {x: 0, y: 0, w: 640, h: 360});    // ...over your own screen
+});
+room.media.on('media', function (p, has) {
+  if (has.transparent) {                                   // their picture comes without a background:
+    room.media.place(p.id + '#screen', screenBox);         // put their screen under it
+    room.media.place(p.id, screenBox);
+  }
+});
+```
+
+| mode | what goes | what the others see |
+|---|---|---|
+| `'blur'` | your picture, the background behind you blurred | the same, in every browser and app window |
+| `'composite'` | your picture with your own shared screen (`showScreen`) behind you, one picture | the same, everywhere. With no screen shared it runs `'blur'` and says so (`cutoutWhy`, and `on('cutout')`), and turns to `'composite'` once you share one |
+| `'transparent'` | the blurred picture, and beside it a small mask | you alone, over whatever their page put behind your picture (`'media'` says `transparent: true`; a picture without a background is drawn above the others). A browser or app window from before the cutout shows the blurred picture |
+
+* **It runs in the viewer, not in your page.** A small person-segmentation network (MediaPipe's selfie
+  segmenter, Apache-2.0) runs in the player's browser, from this site; your page still never gets the
+  camera's frames, and nothing is uploaded but the call's own picture.
+* **A slow computer turns it off** (`cutout: 'off'`, `cutoutWhy` says why): fewer than 5 masks a
+  second. Ask again with `cutout(mode)` later if you like.
+* The picture is not sent at all until the cutout is drawing (well under a second), so the background you
+  asked to hide never goes.
 
 ### Ringing a player whose app is closed
 

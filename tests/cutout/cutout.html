@@ -1,0 +1,205 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>media cutout</title>
+<body style="background:#222;color:#eee;font:14px system-ui">
+<p>The cutout (cutout.js): blur, composite, transparent, and what an older window or viewer shows of it.</p>
+<div id="shots" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+<script src="cutout.js"></script>
+<script src="media.js"></script>
+<script src="media_pieces.js"></script>
+<script src="old-media.js"></script>
+<script src="old-media_pieces.js"></script>
+<script>
+"use strict";
+const errors = [];
+window.addEventListener("error", (e) => errors.push(String(e.message)));
+window.addEventListener("unhandledrejection", (e) => errors.push(String(e.reason)));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const C = window.ArcadeCutout;
+
+// A camera of our own: a checkerboard (the room behind you) and a red ellipse (you), moving a little.
+const W = 640, H = 480, PERSON = [255, 40, 40];
+function scene() {
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  let n = 0;
+  const draw = () => {
+    for (let y = 0; y < H; y += 16) for (let x = 0; x < W; x += 16) { g.fillStyle = ((x + y) / 16) % 2 ? "#f0f0f0" : "#202020"; g.fillRect(x, y, 16, 16); }
+    g.fillStyle = "rgb(" + PERSON + ")";
+    g.beginPath(); g.ellipse(W / 2 + Math.sin(n++ / 10) * 4, H / 2 + 40, 130, 190, 0, 0, Math.PI * 2); g.fill();
+  };
+  draw(); setInterval(draw, 50);
+  return c.captureStream(20).getVideoTracks()[0];
+}
+// The screen you share: a blue to green gradient.
+function screenTrack() {
+  const c = document.createElement("canvas"); c.width = 1280; c.height = 720;
+  const g = c.getContext("2d"), gr = g.createLinearGradient(0, 0, 1280, 0);
+  gr.addColorStop(0, "#0030ff"); gr.addColorStop(1, "#00c040");
+  setInterval(() => { g.fillStyle = gr; g.fillRect(0, 0, 1280, 720); }, 100);
+  g.fillStyle = gr; g.fillRect(0, 0, 1280, 720);
+  return c.captureStream(10).getVideoTracks()[0];
+}
+// A picture of a person as a camera (tests/cutout/person.jpg, NASA, public domain), for the real network.
+async function photoTrack() {
+  const img = new Image(); img.src = "person.jpg"; await img.decode();
+  const c = document.createElement("canvas"); c.width = 640; c.height = 480;
+  const g = c.getContext("2d");
+  let n = 0;
+  const draw = () => { g.drawImage(img, (n++ % 2), 0, 640, 480); };
+  draw(); setInterval(draw, 50);
+  return c.captureStream(20).getVideoTracks()[0];
+}
+// The stand-in segmenter: red is the person.
+function redStub(img) {
+  const d = img.data, out = new Uint8Array(img.width * img.height);
+  for (let i = 0; i < out.length; i++) out[i] = d[i * 4] > 160 && d[i * 4 + 1] < 110 && d[i * 4 + 2] < 110 ? 255 : 0;
+  return out;
+}
+// A canvas's pixels at a few places: what the regions hold.
+function pixels(el, w, h) {
+  w = w || el.width || el.videoWidth; h = h || el.height || el.videoHeight;
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d"); g.drawImage(el, 0, 0, w, h);
+  return { w, h, d: g.getImageData(0, 0, w, h).data };
+}
+function region(px, x0, y0, x1, y1) {
+  // In fractions of the picture: mean color, mean alpha, and the spread of brightness (a checkerboard's is large).
+  let r = 0, g = 0, b = 0, a = 0, n = 0, lo = 255, hi = 0;
+  for (let y = Math.floor(y0 * px.h); y < Math.floor(y1 * px.h); y++) for (let x = Math.floor(x0 * px.w); x < Math.floor(x1 * px.w); x++) {
+    const i = (y * px.w + x) * 4, v = (px.d[i] + px.d[i + 1] + px.d[i + 2]) / 3;
+    r += px.d[i]; g += px.d[i + 1]; b += px.d[i + 2]; a += px.d[i + 3]; n++; lo = Math.min(lo, v); hi = Math.max(hi, v);
+  }
+  return { rgb: [r / n, g / n, b / n].map(Math.round), alpha: Math.round(a / n), spread: Math.round(hi - lo) };
+}
+const looks = (el, w, h) => {
+  const px = pixels(el, w, h);
+  return { w: px.w, h: px.h, person: region(px, 0.45, 0.5, 0.55, 0.65), corner: region(px, 0.02, 0.02, 0.2, 0.2), edge: region(px, 0.8, 0.3, 0.98, 0.7) };
+};
+function shot(el, label) {
+  const c = document.createElement("canvas"); c.width = 240; c.height = 180;
+  const g = c.getContext("2d");
+  for (let y = 0; y < 180; y += 10) for (let x = 0; x < 240; x += 10) { g.fillStyle = ((x + y) / 10) % 2 ? "#556" : "#334"; g.fillRect(x, y, 10, 10); }
+  g.drawImage(el, 0, 0, 240, 180);
+  g.fillStyle = "#fff"; g.font = "13px system-ui"; g.fillText(label, 6, 172);
+  document.getElementById("shots").appendChild(c);
+}
+
+// 1. The cutter alone, with the stand-in: blur, composite, composite with no screen, transparent's alpha picture.
+window.cutter = async function (mode, withScreen) {
+  const states = [];
+  let first = null;
+  const cut = C.start({ track: scene(), mode, segment: redStub, screen: withScreen ? screenTrack() : null, onstate: (s) => states.push(s),
+                        onframe: () => { if (!first) first = looks(cut.canvas); } });
+  await sleep(1500);
+  const out = { mode: cut.mode, why: cut.why, states, picture: looks(cut.canvas), first, errors };
+  if (mode === "transparent") { out.alpha = looks(cut.alpha); out.mask = cut.mask() && { w: cut.mask().w, h: cut.mask().h, bytes: cut.mask().bytes.length }; }
+  shot(cut.canvas, mode + (withScreen ? " + screen" : ""));
+  if (mode === "transparent") shot(cut.alpha, "transparent (alpha)");
+  if (mode === "composite" && !withScreen) {
+    cut.setScreen(screenTrack()); await sleep(800);
+    out.afterScreen = { mode: cut.mode, picture: looks(cut.canvas) };
+    shot(cut.canvas, "screen shared later");
+  }
+  cut.stop();
+  return out;
+};
+
+// 2. Transparent between windows and viewers, as pieces: a window sends (media.js), and four receive: a window and a
+// viewer of this version, and a window and a viewer from before the cutout.
+const me = { id: "guest-0000000a", node: "A" };
+function windowSeat(id) { return { name: "r", token: id, me: { id, node: id }, fast: { peers: { [me.id]: { p: me, state: "direct" } }, routes: { [me.id]: "direct" } }, media: null }; }
+function viewerSeat(id) { return { token: id, me: { id, node: id }, fast: { peers: { [me.id]: { p: me, state: "direct", pieces: true } } }, media: null }; }
+window.transparent = async function (senderIsViewer) {
+  C.stub = redStub;
+  const said = { sender: [], win: [], oldWin: [] };
+  const w2 = windowSeat("guest-0000000b"), ow = windowSeat("guest-0000000c"), v2 = viewerSeat("guest-0000000d"), ov = viewerSeat("guest-0000000e");
+  const perms = async () => ({ media: true, pictures: true });
+  const M2 = ArcadeMedia({ api: async () => ({}), push: (ev) => said.win.push(ev), perms });
+  const OM = OldArcadeMedia({ api: async () => ({}), push: (ev) => said.oldWin.push(ev), perms });
+  const env = { post: async () => ({ ok: true }), seatLost() {}, changed() {}, event() {}, notice() {} };
+  const P2 = ArcadePieces(env), OP = OldArcadePieces(env);
+  let pieces = 0, masks = 0;
+  const deliver = (b64) => {
+    pieces++;
+    if (atob(b64.slice(0, 4)).charCodeAt(1) === 5) masks++;
+    setTimeout(() => {
+      M2.heard(w2, { member: me, b64 }); OM.heard(ow, { member: me, b64 });
+      P2.heard(v2, v2.fast.peers[me.id], b64); OP.heard(ov, ov.fast.peers[me.id], b64);
+    }, 5);
+  };
+  const ids = [w2, ow, v2, ov].map((s) => s.me.id);
+  let stop;
+  // The camera is ours (getUserMedia answers with the scene), as a real one would be.
+  navigator.mediaDevices.getUserMedia = async (c) => new MediaStream(c.video ? [scene()] : []);
+  let start;
+  if (!senderIsViewer) {
+    const seat = { name: "r", token: "a", me, fast: { peers: {}, routes: {} }, media: null };
+    for (const s of [w2, ow, v2, ov]) { seat.fast.peers[s.me.id] = { p: s.me, state: "direct" }; seat.fast.routes[s.me.id] = "direct"; }
+    const M1 = ArcadeMedia({ api: async (cmd, a) => { if (cmd === "realtime.media") deliver(a.b64); return {}; }, push: (ev) => said.sender.push(ev), perms });
+    start = await M1.door(seat, { do: "start", video: true, cutout: "transparent" });
+    for (const id of ids) await M1.door(seat, { do: "share", peer: id, on: { video: true, audio: false } });
+    stop = () => M1.door(seat, { do: "stop" });
+  } else {
+    // A viewer sends: the doors put the cutter on h.media (media.cut) and the cut picture's track in its stream.
+    const h = { token: "a", me, fast: { peers: {} }, media: null };
+    for (const s of [w2, ow, v2, ov]) h.fast.peers[s.me.id] = { p: s.me, state: "direct", pieces: true };
+    const P1 = ArcadePieces({ post: async (hh, path, body) => { body.pieces.forEach((x) => deliver(x.b64)); return { ok: true }; },
+                              seatLost() {}, changed() {}, event() {}, notice() {} });
+    const raw = scene();
+    const cut = C.start({ track: raw, mode: "transparent" });
+    await sleep(300);
+    const stream = new MediaStream([cut.track()]);
+    h.media = { stream, xstream: null, video: true, audio: false, screen: false, muted: { video: false, audio: false }, cut,
+                share: Object.fromEntries(ids.map((id) => [id, { video: true, audio: false }])) };
+    P1.share(h);
+    start = { cutout: cut.mode };
+    stop = () => { P1.stop(h); cut.stop(); };
+  }
+  await sleep(3000);
+  const out = { start, pieces, masks, errors };
+  const tw = w2.media && w2.media.tiles[me.id], to = ow.media && ow.media.tiles[me.id];
+  out.win = tw ? looks(tw) : null;
+  out.winEvent = said.win.filter((e) => e.type === "media").map((e) => ({ video: e.video, transparent: !!e.transparent }));
+  out.oldWin = to ? looks(to) : null;
+  const cs = P2.cutOf(v2.fast.peers[me.id]);
+  if (cs) { const c = document.createElement("canvas"); C.paintMasked(c, cs.source, cs.mask); out.viewer = looks(c); shot(c, "viewer: transparent"); }
+  const opx = ov.fast.peers[me.id].px;
+  out.oldViewer = opx && opx.canvas.cam ? looks(opx.canvas.cam) : null;
+  out.oldViewerTrack = !!(ov.fast.peers[me.id].remote && ov.fast.peers[me.id].remote.getVideoTracks().length);
+  if (tw) shot(tw, "window: transparent");
+  if (to) shot(to, "older window: opaque");
+  if (opx && opx.canvas.cam) shot(opx.canvas.cam, "older viewer: opaque");
+  await stop();
+  C.stub = null;
+  return out;
+};
+
+// 3. The real network on a photo of a person: the mask, and how many masks a second, in a worker and on the page.
+window.realModel = async function (noWorker) {
+  const Wk = window.Worker;
+  if (noWorker) window.Worker = undefined;
+  // Kept on however slow (minFps): this test checks the mask; how fast it comes is printed, and is the computer's.
+  const cut = C.start({ track: await photoTrack(), mode: "blur", base: "", minFps: 0.5 });
+  const t0 = performance.now();
+  while (cut.why === "getting ready" && performance.now() - t0 < 15000) await sleep(100);
+  const ready = Math.round(performance.now() - t0);
+  await sleep(7000);
+  const st = cut.stats();
+  const out = { ready, stats: st, picture: looks(cut.canvas), errors };
+  // The mask itself: the person (the face, the suit) in, the room's corners out.
+  cut.setMode("transparent"); await sleep(600);
+  const m = cut.mask();
+  if (m) {
+    const at = (fx, fy) => m.data[Math.floor(fy * m.h) * m.w + Math.floor(fx * m.w)];
+    out.mask = { face: at(0.44, 0.25), suit: at(0.4, 0.8), topLeft: at(0.03, 0.05), topRight: at(0.97, 0.05), right: at(0.9, 0.45),
+                 share: m.data.filter((v) => v > 128).length / m.data.length };
+  }
+  shot(cut.canvas, "real network: blur (" + st.where + ")");
+  shot(cut.alpha, "real network: alpha");
+  cut.setMode("composite"); cut.setScreen(screenTrack()); await sleep(800); shot(cut.canvas, "real network: composite");
+  cut.stop();
+  window.Worker = Wk;
+  return out;
+};
+</script>
