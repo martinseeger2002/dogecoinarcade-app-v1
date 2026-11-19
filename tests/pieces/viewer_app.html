@@ -21,7 +21,8 @@ addEventListener("message", (e) => {
   if (!ev) return;
   if (ev.type === "peer" && ev.member) log.peers[ev.member.id] = ev.state;
   log.events.push({ type: ev.type, member: ev.member && ev.member.id, state: ev.state, video: ev.video, audio: ev.audio,
-                    on: ev.on, data: typeof ev.data === "string" ? ev.data : undefined, what: ev.what });
+                    on: ev.on, data: typeof ev.data === "string" ? ev.data : undefined, what: ev.what,
+                    transparent: ev.transparent, mode: ev.mode, want: ev.want, why: ev.why });
 });
 window.join = () => ask({ op: "join", game: GAME, fast: true });
 window.media = (m) => ask(Object.assign({ op: "media" }, m));

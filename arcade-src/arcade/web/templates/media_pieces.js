@@ -9,15 +9,16 @@
    passes them to its arcade on the seat's token. Players with WebRTC stay on WebRTC.
 
    A piece on the wire (as V1.0 media.js): 0xA1, kind (1 camera, 2 microphone, 3 screen, 4 screen sound,
-   9 a note), flags (1: key frame), seq (u32), time (u32, ms), part, parts, width (u16), height (u16), bytes.
-   A note is JSON: {kf: 1} send a key frame, {off: 1} I stopped sending, {screenOff: 1} my screen stopped.
+   5 the camera's mask, 9 a note), flags (1: key frame), seq (u32), time (u32, ms), part, parts, width (u16),
+   height (u16), bytes. A note is JSON: {kf: 1} send a key frame, {off: 1} I stopped sending, {screenOff: 1} my
+   screen stopped. A mask (the cutout, cutout.js) goes with a camera picture of the same time: the person alone.
 
-   ArcadePieces(env) -> {heard, drop, level, sync, share, unshare, stop, can, wake}. env:
+   ArcadePieces(env) -> {heard, drop, level, sync, share, unshare, stop, can, wake, cutOf}. env:
      post(h, path, body) -> Promise of the answer (the seat's token added by the caller),
      seatLost(h), changed(h, peer) (a peer's tracks changed), event(h, ev) (for the page), notice(text). */
 var ArcadePieces = (function () {
   "use strict";
-  var KIND = { cam: 1, mic: 2, scr: 3, snd: 4, note: 9 };
+  var KIND = { cam: 1, mic: 2, scr: 3, snd: 4, mask: 5, note: 9 };
   var HEAD = 17, PIECE = 48000, OUT_MOST = 80, BATCH = 24, BATCH_BYTES = 600000;
   var CAM = { most: 640, fps: 20, bitrate: 600000 }, SCR = { most: 1280, fps: 10, bitrate: 1500000 };
   var KEY_EVERY = 2000, GONE_AFTER = 3000, RATE = 48000;
@@ -156,7 +157,7 @@ var ArcadePieces = (function () {
 
     // ---------------- receiving ----------------
     function pxOf(h, peer) {
-      if (!peer.px) peer.px = { parts: {}, dec: {}, last: {}, level: {}, canvas: {}, track: {}, bad: {}, kfAt: 0 };
+      if (!peer.px) peer.px = { parts: {}, dec: {}, last: {}, level: {}, canvas: {}, track: {}, bad: {}, kfAt: 0, masks: [], shown: {} };
       rooms.add(h);
       watch();
       return peer.px;
@@ -196,8 +197,29 @@ var ArcadePieces = (function () {
         for (var k2 in px.parts) if (+k2.split("/")[1] < x.seq - 30) delete px.parts[k2];
       }
       if (x.kind === KIND.note) { heardNote(h, peer, body); return; }
+      if (x.kind === KIND.mask) { heardMask(h, peer, x, body); return; }
       if (x.kind === KIND.cam || x.kind === KIND.scr) heardVideo(h, peer, x.kind === KIND.cam ? "cam" : "scr", x.key, x.t, body, x.w, x.h);
       else if (x.kind === KIND.mic || x.kind === KIND.snd) heardAudio(h, peer, x.kind === KIND.mic ? "mic" : "snd", x.t, body);
+    }
+    // Their camera's mask (the cutout's transparent): kept with the last few, for the doors to draw the person alone.
+    function heardMask(h, peer, x, body) {
+      var C = window.ArcadeCutout, px = peer.px;
+      if (!C) { if (env.needCutout) env.needCutout(); return; }
+      var data = C.decodeMask(body, x.w, x.h);
+      if (!data) return;
+      var m = { t: x.t, w: x.w, h: x.h, data: data };
+      m.canvas = C.maskCanvas(document.createElement("canvas"), m);
+      C.keepMask(px.masks, m);
+      var was = px.maskAt && Date.now() - px.maskAt < GONE_AFTER;
+      px.maskAt = Date.now();
+      if (!was) env.changed(h, peer);
+    }
+    // What the doors draw a transparent picture from: the canvas their camera is decoded into, and the mask of the
+    // picture in it now. null while no masks come.
+    function cutOf(peer) {
+      var px = peer && peer.px, C = window.ArcadeCutout;
+      if (!px || !C || !px.masks.length || !px.maskAt || Date.now() - px.maskAt > GONE_AFTER || !px.canvas.cam || !px.track.cam) return null;
+      return { source: px.canvas.cam, mask: C.maskFor(px.masks, px.shown.cam || 0) };
     }
     function heardNote(h, peer, body) {
       var o; try { o = JSON.parse(new TextDecoder().decode(body)); } catch (err) { return; }
@@ -239,6 +261,7 @@ var ArcadePieces = (function () {
       var c = canvasOf(px, slot), w = frame.displayWidth, hh = frame.displayHeight;
       if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; }
       c.getContext("2d").drawImage(frame, 0, 0, w, hh);
+      px.shown[slot] = Math.round(frame.timestamp / 1000);
       frame.close();
       paintTrack(h, peer, slot);
     }
@@ -441,7 +464,7 @@ var ArcadePieces = (function () {
       var tx = h.px;
       if (tx) ["cam", "scr"].forEach(function (s) { if (tx.enc[s]) tx.enc[s].wantKey = true; });
     }
-    function startVideo(h, slot, kind, track, opt) {
+    function startVideo(h, slot, kind, track, opt, cutting) {
       var tx = txOf(h), v = document.createElement("video");
       v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.autoplay = true;
       v.style.cssText = "position:fixed;left:-10px;top:-10px;width:2px;height:2px;opacity:0;pointer-events:none";
@@ -473,17 +496,25 @@ var ArcadePieces = (function () {
       };
       e.timer = setInterval(function () {
         var md = h.media;
-        if (txOf(h).enc[slot] !== e || e.dead || v.readyState < 2 || !v.videoWidth || !md) return;
+        // The camera through the cutout (cutout.js): its canvas is the picture, and nothing goes before it draws.
+        var cut = cutting && md && md.cut;
+        if (cutting && !(cut && cut.drawnAt)) return;
+        var src = cut ? cut.canvas : v, sw = cut ? src.width : v.videoWidth, sh = cut ? src.height : v.videoHeight;
+        if (txOf(h).enc[slot] !== e || e.dead || (!cut && v.readyState < 2) || !sw || !md) return;
         if (slot === "cam" && md.muted && md.muted.video) return;
-        if (!targets(h, kind).length) { e.wantKey = true; return; }        // nobody to send to: nothing encoded
-        var scale = Math.min(1, opt.most / Math.max(v.videoWidth, v.videoHeight));
-        var w = Math.max(2, Math.round(v.videoWidth * scale / 2) * 2), hh = Math.max(2, Math.round(v.videoHeight * scale / 2) * 2);
+        var to = targets(h, kind);
+        if (!to.length) { e.wantKey = true; return; }                       // nobody to send to: nothing encoded
+        var scale = Math.min(1, opt.most / Math.max(sw, sh));
+        var w = Math.max(2, Math.round(sw * scale / 2) * 2), hh = Math.max(2, Math.round(sh * scale / 2) * 2);
         try { if (!e.enc || e.enc.state === "closed" || w !== e.w || hh !== e.h) make(w, hh); } catch (err) { return; }
         if (e.enc.encodeQueueSize > 4) return;                               // the encoder is behind: skip a frame
         if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; }
-        g.drawImage(v, 0, 0, w, hh);
-        var now = performance.now(), key = e.wantKey || now - e.lastKey > KEY_EVERY;
-        var frame = new VideoFrame(c, { timestamp: Math.round(now * 1000) });
+        g.drawImage(src, 0, 0, w, hh);
+        var now = Math.round(performance.now()), key = e.wantKey || now - e.lastKey > KEY_EVERY;
+        // Transparent: the mask of this picture goes first (a new one, or again with each key frame).
+        var mask = cut && cut.mask();
+        if (mask && (key || mask.seq !== e.maskSeq)) { e.maskSeq = mask.seq; sendPiece(h, KIND.mask, false, mask.seq, now, mask.bytes, mask.w, mask.h, to); }
+        var frame = new VideoFrame(c, { timestamp: now * 1000 });
         try { e.enc.encode(frame, { keyFrame: key }); if (key) { e.wantKey = false; e.lastKey = now; } } catch (err) { e.wantKey = true; }
         frame.close();
       }, Math.round(1000 / opt.fps));
@@ -530,7 +561,8 @@ var ArcadePieces = (function () {
       var md = h.media, s = md && md.stream, x = md && md.xstream;
       var live = function (t) { return t && t.readyState !== "ended" ? t : null; };
       return {
-        cam: { kind: KIND.cam, track: live(s && md.video ? s.getVideoTracks()[0] : null), opt: md && md.screen ? SCR : CAM },
+        cam: { kind: KIND.cam, track: live(s && md.video ? s.getVideoTracks()[0] : null), opt: md && md.screen ? SCR : CAM,
+               cut: !!(md && md.cut && !md.screen) },
         mic: { kind: KIND.mic, track: live(s && md.audio ? s.getAudioTracks()[0] : null) },
         scr: { kind: KIND.scr, track: live(x ? x.getVideoTracks()[0] : null), opt: SCR },
         snd: { kind: KIND.snd, track: live(x ? x.getAudioTracks()[0] : null) },
@@ -552,9 +584,10 @@ var ArcadePieces = (function () {
           return;
         }
         tx.had[slot] = to;
-        if (e && e.track === want.track && (!video || e.opt === want.opt)) return;
+        if (e && e.track === want.track && (!video || (e.opt === want.opt && !!e.cutting === !!want.cut))) return;
         if (e) stopSlot(h, slot);
-        if (video) startVideo(h, slot, want.kind, want.track, want.opt); else startAudio(h, slot, want.kind, want.track);
+        if (video) { startVideo(h, slot, want.kind, want.track, want.opt, want.cut); tx.enc[slot].cutting = !!want.cut; }
+        else startAudio(h, slot, want.kind, want.track);
       });
     }
     // Shared with one more player (a new viewer needs a key frame), or no longer.
@@ -579,6 +612,6 @@ var ArcadePieces = (function () {
     }
 
     return { heard: heard, drop: drop, level: level, sync: sync, share: share, unshare: unshare, stop: stop,
-             can: canDo, wake: wake, KIND: KIND, parse: parse };
+             can: canDo, wake: wake, cutOf: cutOf, KIND: KIND, parse: parse, header: header };
   };
 })();
