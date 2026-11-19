@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>media pieces interop</title>
+<body style="background:#222;color:#eee;font:14px system-ui">
+<p>An Arcade V1.0 app window's media.js (left) and this site's media_pieces.js (right), handing each other pieces.</p>
+<video id="sv" muted playsinline autoplay style="width:320px;height:240px;background:#000"></video>
+<video id="sx" muted playsinline autoplay style="width:320px;height:240px;background:#000"></video>
+<script src="media.js"></script>
+<script src="media_pieces.js"></script>
+<script>
+"use strict";
+// Two seats, as each side keeps them: the window's (media.js reads s.fast.peers and routes) and the viewer's (the
+// doors' h: fast.peers with pieces, media with stream, share, muted).
+const win = { name: "r", token: "w", me: { id: "guest-0000000a", node: "A" }, fast: { peers: {}, routes: {} }, media: null };
+const site = { token: "s", me: { id: "guest-0000000b", node: "B" }, fast: { peers: {} }, media: null };
+win.fast.peers[site.me.id] = { p: site.me, state: "direct" };
+win.fast.routes[site.me.id] = "direct";
+const winPeer = site.fast.peers[win.me.id] = { p: win.me, state: "direct", pieces: true };
+const out = { winEvents: [], siteEvents: [], changed: 0, toSite: [], toWin: 0, errors: [] };
+window.addEventListener("error", (e) => out.errors.push(String(e.message)));
+window.addEventListener("unhandledrejection", (e) => out.errors.push(String(e.reason)));
+// The window's arcade: realtime.media to the viewer is heard by the viewer (as an mchunk on its stream).
+const M = ArcadeMedia({
+  api: async (cmd, a) => {
+    if (cmd !== "realtime.media") return {};
+    if (a.to.includes(site.me.id)) { out.toSite.push(a.b64); setTimeout(() => P.heard(site, winPeer, a.b64), 5); }
+    return { sent: 1 };
+  },
+  push: (ev) => out.winEvents.push({ type: ev.type, member: ev.member && ev.member.id, video: ev.video, audio: ev.audio, state: ev.state }),
+  perms: async () => ({ media: true, pictures: true }),
+});
+// The viewer's site: POST /realtime/media pieces reach the window as mchunks.
+const P = ArcadePieces({
+  post: async (h, path, body) => {
+    if (path !== "/realtime/media") return { ok: false };
+    for (const x of body.pieces) if (x.to.includes(win.me.id)) { out.toWin++; setTimeout(() => M.heard(win, { member: site.me, b64: x.b64 }), 5); }
+    return { ok: true, sent: body.pieces.length };
+  },
+  seatLost() {}, changed() { out.changed++; },
+  event(h, ev) { out.siteEvents.push({ type: ev.type, what: ev.what, why: ev.why }); },
+  notice(t) { out.siteEvents.push({ notice: t }); },
+});
+function bright(el) {
+  const c = document.createElement("canvas"); c.width = 32; c.height = 24;
+  const g = c.getContext("2d"); g.drawImage(el, 0, 0, 32, 24);
+  const d = g.getImageData(0, 0, 32, 24).data; let sum = 0, min = 255, max = 0;
+  for (let i = 0; i < d.length; i += 4) { const v = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += v; min = Math.min(min, v); max = Math.max(max, v); }
+  return { mean: Math.round(sum / (d.length / 4)), spread: Math.round(max - min) };
+}
+window.run = async function () {
+  out.can = await P.can();
+  // The window: camera and microphone on, shared with the viewer.
+  out.winStart = await M.door(win, { do: "start", video: true, audio: true });
+  out.winShare = await M.door(win, { do: "share", peer: site.me.id, on: true });
+  await M.door(win, { do: "hear", peer: site.me.id, on: true });
+  // The viewer: its own camera and microphone, and a second picture as its "screen", shared with the window.
+  const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
+  const scr = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  site.media = { stream: cam, xstream: scr, video: true, audio: true, screen: false, muted: { video: false, audio: false },
+                 share: { [win.me.id]: { video: true, audio: true } } };
+  P.share(site);
+  // The loudest each side hears its other over a few seconds (the fake microphone beeps).
+  out.siteLevel = 0; out.winLevel = 0;
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    out.siteLevel = Math.max(out.siteLevel, P.level(winPeer, "mic"));
+    const rx = win.media && win.media.rx[site.me.id];
+    out.winLevel = Math.max(out.winLevel, rx ? rx.level.mic || 0 : 0);
+  }
+  // What the viewer has of the window: a picture and a voice, as tracks the doors place.
+  const remote = winPeer.remote;
+  out.siteTracks = remote ? remote.getTracks().map((t) => t.kind + ":" + t.readyState) : [];
+  const sv = document.getElementById("sv");
+  if (remote) { sv.srcObject = remote; await sv.play().catch(() => {}); }
+  await new Promise((r) => setTimeout(r, 1500));
+  out.siteVideo = { w: sv.videoWidth, h: sv.videoHeight, ...(sv.videoWidth ? bright(sv) : {}) };
+  // What the window has of the viewer: its camera and its screen drawn in tiles, its voice heard.
+  const md = win.media, tiles = md ? Object.keys(md.tiles) : [];
+  out.winTiles = tiles.map((k) => { const el = md.tiles[k]; return { key: k, tag: el.tagName, w: el.width || el.videoWidth || 0, ...((el.width || el.videoWidth) ? bright(el) : {}) }; });
+  // A browser that cannot decode the pictures says so where the picture would be.
+  const sorry = { p: { id: "guest-0000000c", node: "C", tag: "nodecoder" }, state: "direct", pieces: true };
+  site.fast.peers[sorry.p.id] = sorry;
+  const VD = window.VideoDecoder; window.VideoDecoder = undefined;
+  P.heard(site, sorry, out.toSite.find((b) => { const u = Uint8Array.from(atob(b), (c) => c.charCodeAt(0)); return u[1] === 1 && (u[2] & 1); }));
+  window.VideoDecoder = VD;
+  await new Promise((r) => setTimeout(r, 600));
+  const st = sorry.remote && sorry.remote.getVideoTracks()[0];
+  const sx = document.getElementById("sx");
+  if (st) { sx.srcObject = new MediaStream([st]); await sx.play().catch(() => {}); await new Promise((r) => setTimeout(r, 800)); }
+  out.sorry = { track: !!st, w: sx.videoWidth, ...(sx.videoWidth ? bright(sx) : {}), events: out.siteEvents.filter((e) => e.type === "media-unplayable") };
+  // Stopping: each side hears the other stop.
+  P.stop(site);
+  await M.door(win, { do: "stop" });
+  await new Promise((r) => setTimeout(r, 4000));
+  out.siteTracksAfter = winPeer.remote ? winPeer.remote.getTracks().length : 0;
+  out.winEventsAfter = out.winEvents.slice(-4);
+  out.recorded = out.toSite.slice(0, 160);
+  return JSON.parse(JSON.stringify(out, (k, v) => (k === "toSite" ? v.length : v)));
+};
+// For other browsers: what this viewer sends a window, recorded (the browser's fake camera and microphone).
+window.encodeOnly = async function () {
+  out.can = await P.can();
+  const sent = [], said = [];
+  const Q = ArcadePieces({ post: async (h, path, body) => { body.pieces.forEach((x) => sent.push(x.b64)); return { ok: true }; },
+                           seatLost() {}, changed() {}, event(h, ev) { said.push(ev); }, notice(t) { said.push({ notice: t }); } });
+  const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
+  site.media = { stream: cam, xstream: null, video: true, audio: true, screen: false, muted: { video: false, audio: false },
+                 share: { [win.me.id]: { video: true, audio: true } } };
+  Q.share(site);
+  await new Promise((r) => setTimeout(r, 5000));
+  Q.stop(site, true);
+  return { can: out.can, pieces: sent, said, errors: out.errors };
+};
+// A window decoding what another browser's viewer sent.
+window.windowDecode = async function (pieces) {
+  for (const b of pieces) { M.heard(win, { member: site.me, b64: b }); await new Promise((r) => setTimeout(r, 15)); }
+  await new Promise((r) => setTimeout(r, 1000));
+  const md = win.media, el = md && md.tiles[site.me.id], rx = md && md.rx[site.me.id];
+  return { tile: el ? { w: el.width, ...(el.width ? bright(el) : {}) } : null, decoders: rx ? Object.keys(rx.dec) : [],
+           events: out.winEvents.filter((e) => e.type === "media"), errors: out.errors };
+};
+// For other browsers: decode pieces recorded in Chromium (no camera needed).
+window.decodeOnly = async function (pieces) {
+  out.can = await P.can();
+  const peer = { p: { id: "guest-0000000d", node: "D" }, state: "direct", pieces: true };
+  site.fast.peers[peer.p.id] = peer;
+  let level = 0;
+  for (const b of pieces) { P.heard(site, peer, b); await new Promise((r) => setTimeout(r, 30)); level = Math.max(level, P.level(peer, "mic")); }
+  await new Promise((r) => setTimeout(r, 800));
+  const t = peer.remote ? peer.remote.getTracks().map((x) => x.kind) : [];
+  const sv = document.getElementById("sv");
+  if (peer.remote) { sv.srcObject = peer.remote; await sv.play().catch(() => {}); }
+  await new Promise((r) => setTimeout(r, 1500));
+  const canvas = peer.px && peer.px.canvas.cam;
+  return { can: out.can, tracks: t, video: { w: sv.videoWidth, ...(sv.videoWidth ? bright(sv) : {}) },
+           canvas: canvas ? { w: canvas.width, ...bright(canvas) } : null, level,
+           events: out.siteEvents, errors: out.errors, sorry: peer.px && peer.px.sorry || null };
+};
+</script>

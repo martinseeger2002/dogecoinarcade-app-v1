@@ -155,28 +155,29 @@
                                  body: JSON.stringify(body), keepalive: path === '/realtime/leave'})
         .then(function(r){ return r.json(); });
     }
-    // One way into a room, used for the first join and for every rejoin.
-    function realtimeConnectAt(base, name, game, guest, onWait){
+    // One way into a room, used for the first join and for every rejoin. `fast`: the seat takes the arcades' fast lane
+    // too (an Arcade V1.0 behind this site), for players without WebRTC (MEDIA PIECES).
+    function realtimeConnectAt(base, name, game, guest, onWait, fast){
       return fetch(base + '/realtime/hello', {cache: 'no-store', credentials: base ? 'omit' : 'same-origin'})
         .then(function(r){ return r.json(); })
         .then(function(hello){
           if (!hello.online) return {ok: true, online: false, why: hello.why || 'this node is not on the mesh'};
           return realtimeProof(hello, base, onWait).then(function(proof){
-            return realtimePost('/realtime/join', {game: game, room: name, guest: guest || '',
+            return realtimePost('/realtime/join', {game: game, room: name, guest: guest || '', fast: !!fast,
                                 sig: proof && proof.sig, expires: proof && proof.expires,
                                 address: proof && proof.address}, base);
           });
         }).then(function(j){ if (j) j.base = base; return j; });
     }
-    function realtimeConnect(name, game, guest, onWait){
+    function realtimeConnect(name, game, guest, onWait, fast){
       return realtimeBase().then(function(base){
-        if (!base) return realtimeConnectAt('', name, game, guest, onWait);
-        return realtimeConnectAt(base, name, game, guest, onWait).then(function(j){
+        if (!base) return realtimeConnectAt('', name, game, guest, onWait, fast);
+        return realtimeConnectAt(base, name, game, guest, onWait, fast).then(function(j){
           if (j && j.ok && j.token) return j;
           throw new Error('that node said no');
         }).catch(function(){                      // the chosen node failed: this one, and choose again later
           realtimeForget();
-          return realtimeConnectAt('', name, game, guest, onWait);
+          return realtimeConnectAt('', name, game, guest, onWait, fast);
         });
       });
     }
@@ -304,6 +305,16 @@
           rtcHeard(name, h, d.member, d.data.slice(RTC.length));
           return;                 // the fast lane's own talk: never the page's
         }
+        // From the arcades' fast lane (a seat joined with fast, MEDIA PIECES): only a player without WebRTC sends
+        // there, so whoever does is one. Fast data goes to the page as from a data channel; pieces are the viewer's.
+        if (d.type === 'fast' || d.type === 'mchunk') {
+          var lp = h.fast && d.member && h.fast.peers[d.member.id];
+          if (!lp) return;
+          if (!lp.pieces) piecesPeer(name, h, lp.p);
+          if (d.type === 'mchunk') { if (typeof d.b64 === 'string') piecesOf().heard(h, lp, d.b64); return; }
+          try { fastHeard(name, h, lp.p, typeof d.b64 === 'string' ? fastUnB64(d.b64) : String(d.data == null ? '' : d.data)); } catch (err) {}
+          return;
+        }
         if (d.type === 'message' && typeof d.data === 'string'
             && d.data.indexOf(TRADE) === 0) {
           tradeHeard(name, d.member, d.data.slice(TRADE.length));
@@ -373,7 +384,7 @@
         if (rt[name] !== h) return;              // left in the meantime
         tries++;
         Promise.resolve(letGo).then(function(){
-          return realtimeConnect(name, h.game, h.me && h.me.guest ? h.me.id : '');
+          return realtimeConnect(name, h.game, h.me && h.me.guest ? h.me.id : '', null, h.wantFast);
         }).then(function(j){
           if (rt[name] !== h) {
             if (j && j.token) realtimePost('/realtime/leave', {token: j.token}, j.base).catch(function(){});
@@ -491,6 +502,7 @@
       var out = {}, ids = h.fast ? Object.keys(h.fast.peers) : [];
       Promise.all(ids.map(function(id){
         var peer = h.fast.peers[id];
+        if (peer.pieces && peer.state === 'direct') { out[id] = (h.fast.routes && h.fast.routes[id]) || 'direct'; return null; }
         if (peer.state !== 'direct' || !peer.pc) { out[id] = peer.state === 'room' ? 'none' : 'connecting'; return null; }
         return peer.pc.getStats().then(function(stats){ out[id] = fastRouteOf(stats) || 'direct'; }, function(){ out[id] = 'direct'; });
       })).then(function(){ answer({ok: true, routes: out}); });
@@ -511,6 +523,7 @@
       if (!keep) mediaStop(h, true);
       for (var id in h.fast.peers) fastDrop(h, id, true, keep);
       clearInterval(h.fast.pump);
+      clearInterval(h.fast.lanes);
       h.fast = null;
     }
     function fastSay(name, h, p, state){
@@ -532,6 +545,7 @@
       if (!peer) return;
       clearTimeout(peer.timer);
       clearTimeout(peer.stuck);
+      if (peer.px) piecesOf().drop(h, peer);
       mediaGone(h, peer, keep);
       try { if (peer.pc) peer.pc.close(); } catch (err) {}
       delete h.fast.peers[id];
@@ -540,10 +554,11 @@
       if (!h.fast || h.fast.peers[peer.p.id] !== peer || peer.state === 'direct') return;
       fastSay(name, h, peer.p, 'room');
       fastPump(name, h);
+      piecesLanes(name, h);                    // an app window that never said 'p' (an older one) is found by its lane
     }
     function fastPc(name, h, peer){
       return fastServers().then(function(servers){
-        if (!h.fast || h.fast.peers[peer.p.id] !== peer) throw new Error('gone');
+        if (!h.fast || h.fast.peers[peer.p.id] !== peer || peer.pieces) throw new Error('gone');
         try { if (peer.pc) peer.pc.close(); } catch (err) {}
         var pc = peer.pc = new RTCPeerConnection({iceServers: servers});
         pc._relay = servers.some(function(s){ return !!s.username; });
@@ -704,6 +719,7 @@
       for (var i = 0; i < n; i++) if (got[i] == null) return;
       delete h.fast.parts[key];
       var o; try { o = JSON.parse(got.join('')); } catch (err) { return; }
+      if (o.t === 'p') { piecesPeer(name, h, p); return; }   // an app window: no WebRTC there, its media goes as pieces
       if (o.t === 'n') {                       // they do not link with us: let them go, do not carry them over the room
         if (h.fast.peers[p.id]) { fastDrop(h, p.id); fastSay(name, h, p, 'gone'); }
         return;
@@ -735,14 +751,16 @@
       var data = bin ? m.data : String(m.data == null ? '' : m.data);
       if ((bin ? data.byteLength : data.length) > FAST_MAX) return;
       var to = Array.isArray(m.to) ? m.to.slice(0, FAST_TO_MAX).map(String) : null;
-      var reliable = !!m.reliable, viaRoom = false;
+      var reliable = !!m.reliable, viaRoom = false, lane = [];
       for (var id in h.fast.peers) {
         if (to && to.indexOf(id) < 0) continue;
         var peer = h.fast.peers[id], dc = reliable ? peer.r : peer.u;
-        if (peer.state === 'direct' && dc && dc.readyState === 'open') {
+        if (peer.pieces && peer.state === 'direct') lane.push(id);
+        else if (peer.state === 'direct' && dc && dc.readyState === 'open') {
           try { dc.send(data); } catch (err) {}
         } else if (peer.state === 'room') viaRoom = true;
       }
+      if (lane.length) laneSend(h, {to: lane.slice(0, FAST_TO_MAX), reliable: reliable, bin: bin, data: data});
       if (viaRoom) {
         var d = bin ? fastB64(data) : data, it = {d: d};
         if (bin) it.b = 1;
@@ -752,6 +770,108 @@
           else h.fast.latest = it;
         }
       }
+    }
+    // MEDIA PIECES (2026-11-18, TxTOK live: a V1.0 app window went live and a phone here showed "2 watching" and no
+    // picture). An Arcade V1.0 app window has no WebRTC: its camera, microphone and screen go as WebCodecs pieces over
+    // the arcades' fast lane (V1.0 media.js), and it tells a viewer so with the signal 'p'. With such a player this
+    // viewer makes no WebRTC link: the pair is on the lane (direct while the arcade behind this site says it reaches
+    // them, realtime.lanes), fast data goes there (POST /realtime/fast), and pictures and sound go both ways as the
+    // same pieces (media_pieces.js; POST /realtime/media). A player found on the lane without saying 'p' (an older
+    // window, whose WebRTC wait ran out) is taken as one too, if it plays through another arcade than ours.
+    // Players with WebRTC stay on WebRTC.
+{% include "media_pieces.js" %}
+    var mediaPieces = null, LANES_EVERY = 1500;
+    function piecesOf(){
+      return mediaPieces || (mediaPieces = ArcadePieces({
+        post: function(h, path, body){ body.token = h.token; return realtimePost(path, body, h.base); },
+        seatLost: function(h){ var n = rtName(h); if (n) realtimeRejoin(n, h.frame, h); },
+        changed: function(h, peer){
+          var n = rtName(h);
+          if (!n || !h.fast || h.fast.peers[peer.p.id] !== peer) return;
+          mediaOf(h); mediaWatch(); mediaRemoteSaid(n, h, peer);
+        },
+        event: function(h, ev){ var n = rtName(h); if (n) mediaEvent(n, h, ev); },
+        notice: function(text){ piecesNotice(text); }
+      }));
+    }
+    function piecesPeer(name, h, p){
+      if (!h.fast || !p || !h.me || p.id === h.me.id) return;
+      var peer = h.fast.peers[p.id];
+      if (!peer) { fastMeet(name, h, p); peer = h.fast.peers[p.id]; }
+      if (!peer || peer.pieces) return;
+      peer.pieces = true;
+      try { if (peer.pc) peer.pc.close(); } catch (err) {}
+      peer.pc = null; peer.u = peer.r = peer.m = null;
+      if (peer.state === 'direct') fastSay(name, h, peer.p, 'connecting');
+      piecesOf().can();
+      piecesLanes(name, h);
+    }
+    // Which players the arcades' lane reaches, asked while a pair is on it or waits on the room.
+    function piecesLanes(name, h){
+      var fast = h.fast;
+      if (!fast || fast.lanes || fast.noLanes) return;
+      var look = function(){
+        if (h.fast !== fast || rt[name] !== h) { clearInterval(fast.lanes); return; }
+        var need = false;
+        for (var id in fast.peers) if (fast.peers[id].pieces || fast.peers[id].state === 'room') need = true;
+        if (!need || fast.asking) return;
+        fast.asking = true;
+        realtimePost('/realtime/lanes', {token: h.token}, h.base).then(function(j){
+          fast.asking = false;
+          if (h.fast !== fast) return;
+          if (seatLost(j)) { realtimeRejoin(name, h.frame, h); return; }
+          // A site or arcade without the lane for its viewers (an older one, or another node's road): no pieces there.
+          if (!j || !j.ok || !Array.isArray(j.up)) { if (!j || j.detail || /fast lane/.test(j.error || '')) { fast.noLanes = true; clearInterval(fast.lanes); } return; }
+          var up = {}; j.up.forEach(function(id){ up[id] = true; });
+          fast.routes = j.routes || {};
+          for (var pid in fast.peers) {
+            var peer = fast.peers[pid];
+            if (!peer.pieces && peer.state === 'room' && up[pid] && peer.p.node && h.me && h.me.node && peer.p.node !== h.me.node) {
+              piecesPeer(name, h, peer.p);
+            }
+            if (!peer.pieces) continue;
+            if (up[pid] && peer.state !== 'direct') { clearTimeout(peer.timer); fastSay(name, h, peer.p, 'direct'); if (h.media) piecesOf().sync(h); }
+            else if (!up[pid] && peer.state === 'direct') { fastSay(name, h, peer.p, 'room'); fastPump(name, h); }
+          }
+        }, function(){ fast.asking = false; });
+      };
+      fast.lanes = setInterval(look, LANES_EVERY);
+      look();
+    }
+    // Fast data for players on the lane: one request at a time, carrying what waits; of the unreliable sends to the same
+    // players only the newest (a position), the reliable ones all, in order.
+    function laneSend(h, msg){
+      var fast = h.fast, q = fast.laneOut || (fast.laneOut = []);
+      var it = {to: msg.to, reliable: msg.reliable};
+      if (msg.bin) it.b64 = fastB64(msg.data); else it.data = msg.data;
+      if (!msg.reliable) {
+        var key = msg.to.join(',');
+        for (var i = 0; i < q.length; i++) if (!q[i].reliable && q[i].to.join(',') === key) { q[i] = it; laneNext(h, fast); return; }
+      }
+      if (q.length >= 200) q.shift();
+      q.push(it);
+      laneNext(h, fast);
+    }
+    function laneNext(h, fast){
+      if (fast.laneBusy || h.fast !== fast || !fast.laneOut || !fast.laneOut.length) return;
+      var batch = fast.laneOut.splice(0, 32);
+      fast.laneBusy = true;
+      realtimePost('/realtime/fast', {token: h.token, sends: batch}, h.base).then(function(j){
+        if (seatLost(j)) { var n = rtName(h); if (n) realtimeRejoin(n, h.frame, h); }
+      }, function(){}).then(function(){ fast.laneBusy = false; laneNext(h, fast); });
+    }
+    var piecesNoteEl = null;
+    function piecesNotice(text){
+      var layer = mediaLayer();
+      if (piecesNoteEl) piecesNoteEl.remove();
+      var el = piecesNoteEl = document.createElement('div');
+      el.className = 'panel arcade-media-note';
+      el.setAttribute('role', 'status');
+      el.style.cssText = 'position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:min(520px,90%);'
+        + 'pointer-events:auto;padding:10px 14px;text-align:center;z-index:3';
+      el.textContent = text;
+      layer.appendChild(el);
+      setTimeout(function(){ if (piecesNoteEl === el) { el.remove(); piecesNoteEl = null; } }, 8000);
     }
     // CAMERA & MICROPHONE (2026-10-22: a game card can be allowed the camera and microphone "in the same way
     // that they allow an app Wallet access"; base.html, CAMERA & MICROPHONE, PER GAME). A sandboxed game has no origin,
@@ -970,6 +1090,7 @@
       var md = h && h.media;
       if (!md) return;
       if (h.fast) for (var id in h.fast.peers) mediaDetach(h.fast.peers[id]);
+      if (h.px) piecesOf().stop(h, quiet);
       mediaEchoOff(h, false);
       if (md.stream) md.stream.getTracks().forEach(function(t){ t.stop(); });
       var had = !!md.stream;
@@ -1260,6 +1381,7 @@
     }
     function mediaDoor(name, h, m, answer){
       var md = mediaOf(h), peer = h.fast && h.fast.peers[String(m.peer || '')];
+      if (mediaPieces) mediaPieces.wake();                // the app's call may follow a tap in its frame
       // While the room is taken again there are no links for a moment (2026-11-02: a page's calls in that moment all failed
       // as if it had never asked for the fast lane). What needs no link works; share and hear say 'reconnecting'.
       var back = !h.fast && h.wantFast && h.rejoining;
@@ -1355,7 +1477,25 @@
         // on: true (both kinds), false (neither) or {video, audio}
         var kinds = m.on && typeof m.on === 'object' ? {video: !!m.on.video, audio: !!m.on.audio}
                   : {video: !!m.on, audio: !!m.on};
-        if (!kinds.video && !kinds.audio) { delete md.share[peer.p.id]; mediaDetach(peer); answer({ok: true}); return; }
+        if (!kinds.video && !kinds.audio) {
+          delete md.share[peer.p.id]; mediaDetach(peer);
+          if (peer.pieces) piecesOf().unshare(h, peer.p.id);
+          answer({ok: true}); return;
+        }
+        if (peer.pieces) {                     // an app window: our pictures and sound go to it as pieces (MEDIA PIECES)
+          if (peer.state !== 'direct') { answer({ok: false, error: 'not direct'}); return; }
+          md.share[peer.p.id] = kinds;
+          piecesOf().share(h);
+          piecesOf().can().then(function(c){
+            var out = {ok: true, sending: !!(md.stream || md.xstream)};
+            if ((kinds.video && !c.encode.video) || (kinds.audio && !(c.encode.audio && c.worklet))) {
+              out.pieces = {video: kinds.video && c.encode.video, audio: kinds.audio && c.encode.audio && c.worklet};
+              out.why = 'this browser cannot encode ' + (!c.encode.video && kinds.video ? 'VP8 video' : 'Opus sound') + ' for a player without WebRTC';
+            }
+            answer(out);
+          });
+          return;
+        }
         if (peer.state !== 'direct' || !peer.m || peer.m.readyState !== 'open') {
           answer({ok: false, error: 'not direct'}); return;
         }
@@ -1487,6 +1627,7 @@
         }
         var owner = key.replace(/#screen$/, ''), pr = h.fast && h.fast.peers[owner];
         var stream = pr ? (key === owner ? pr.remote : pr.xremote) : null;
+        if (pr && pr.pieces && md.hear[owner]) loud = piecesOf().level(pr, key === owner ? 'mic' : 'snd');
         if (pr && pr.pc && stream && md.hear[owner]) pr.pc.getReceivers().forEach(function(rcv){
           if (!rcv.track || rcv.track.kind !== 'audio' || !rcv.getSynchronizationSources) return;
           if (stream.getAudioTracks().indexOf(rcv.track) < 0) return;
@@ -1662,6 +1803,7 @@
       };
       if (h.fast) for (var id in h.fast.peers) {
         var pr = h.fast.peers[id], lv = 0;
+        if (pr.pieces && md.hear[id]) lv = piecesOf().level(pr, 'mic');
         if (pr.pc && pr.remote && md.hear[id]) pr.pc.getReceivers().forEach(function(r){
           if (!r.track || r.track.kind !== 'audio' || !r.getSynchronizationSources) return;
           if (pr.remote.getAudioTracks().indexOf(r.track) < 0) return;       // their screen's sound, not their voice
@@ -1798,7 +1940,7 @@
         // Only a page whose realtime.js reads a "pending" answer is sent one (an older copy would take it as a no).
         var onWait = m.waits ? function(why){ frame.postMessage({arcade: 'realtime', seq: m.seq, pending: why}, '*'); }
                              : null;
-        realtimeConnect(name, game, '', onWait).then(function(j){
+        realtimeConnect(name, game, '', onWait, !!m.fast).then(function(j){
           if (j.ok && j.online === false && !j.token) { answer(j); return; }
           if (!j.ok) { answer({ok: false, error: j.error || 'refused'}); return; }
           var h = realtimeOpen(name, frame, j, game, !!m.fast, m.link, m.max);
