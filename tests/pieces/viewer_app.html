@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<body style="background:#334;color:#eee;font:13px system-ui">
+<p>A test app in the viewer's sandboxed frame: room.media and fast sends through the doors.</p>
+<script>
+"use strict";
+const ROOM = "live-1", GAME = "piecestest";
+let seq = 0;
+const waits = {};
+window.log = { events: [], peers: {} };
+function ask(m) {
+  m.arcade = "realtime"; m.seq = ++seq; m.room = ROOM;
+  parent.postMessage(m, "*");
+  return new Promise((r) => { waits[m.seq] = r; });
+}
+addEventListener("message", (e) => {
+  const d = e.data || {};
+  if (d.arcade !== "realtime") return;
+  if (d.seq && waits[d.seq]) { waits[d.seq](d); delete waits[d.seq]; return; }
+  const ev = d.event;
+  if (!ev) return;
+  if (ev.type === "peer" && ev.member) log.peers[ev.member.id] = ev.state;
+  log.events.push({ type: ev.type, member: ev.member && ev.member.id, state: ev.state, video: ev.video, audio: ev.audio,
+                    on: ev.on, data: typeof ev.data === "string" ? ev.data : undefined, what: ev.what });
+});
+window.join = () => ask({ op: "join", game: GAME, fast: true });
+window.media = (m) => ask(Object.assign({ op: "media" }, m));
+window.fast = (to, data) => parent.postMessage({ arcade: "realtime", op: "fast", room: ROOM, data, to: [to], seq: ++seq }, "*");
+window.fastRoutes = () => ask({ op: "fastroutes" });
+</script>

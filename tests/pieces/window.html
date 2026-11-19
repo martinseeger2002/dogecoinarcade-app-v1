@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a V1.0 app window (test)</title>
+<body style="background:#123;color:#eee;font:14px system-ui">
+<p>An Arcade V1.0 app window's room and media, on its own arcade (media.js over /rpc), for the end-to-end test.</p>
+<script src="/t/media.js"></script>
+<script>
+"use strict";
+// What appwindow.js does for a room joined with {fast: true}, cut down to what the test needs: the seat, its
+// members, which pairs the arcades' lane reaches (realtime.lanes), the signal 'p' to viewers, and media.js.
+const GAME = "piecestest", ROOM = "live-1", ME = "guest-0000aaaa", RTC = "\u001farcade-rtc:";
+const rpc = (method, params) => fetch("/t/rpc-b", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method, params }) })
+  .then((r) => r.json()).then((j) => { if (j.error) throw new Error(j.error.message); return j.result; });
+const s = { name: ROOM, token: "", me: null, members: {}, fast: { peers: {}, routes: {} }, media: null };
+const log = { events: [], fast: [], signals: [], errors: [] };
+window.addEventListener("error", (e) => log.errors.push(String(e.message)));
+const M = ArcadeMedia({ api: (cmd, a) => rpc(cmd, a), push: (ev) => log.events.push({ type: ev.type, member: ev.member && ev.member.id, video: ev.video, audio: ev.audio, state: ev.state }),
+                        perms: async () => ({ media: true, pictures: true }) });
+let k = 0;
+function signal(to, body) {
+  const d = JSON.stringify(body);
+  return rpc("realtime.send", { token: s.token, data: RTC + JSON.stringify({ to, k: (++k).toString(36), i: 0, n: 1, d }) }).catch(() => {});
+}
+function meet(p) {
+  if (p.id === s.me.id || s.fast.peers[p.id]) return;
+  s.fast.peers[p.id] = { p, state: "connecting" };
+  if (s.me.id < p.id) signal(p.id, { t: "p" });
+}
+async function poll() {
+  for (;;) {
+    let r; try { r = await rpc("realtime.poll", { token: s.token, wait: 2000 }); } catch (err) { continue; }
+    for (const ev of r.events || []) {
+      if (ev.type === "join" && ev.member) { s.members[ev.member.id] = ev.member; meet(ev.member); }
+      else if (ev.type === "mchunk") M.heard(s, ev);
+      else if (ev.type === "fast") log.fast.push({ from: ev.member.id, data: ev.data, b64: ev.b64 });
+      else if (ev.type === "message" && typeof ev.data === "string" && ev.data.indexOf(RTC) === 0) {
+        let m; try { m = JSON.parse(ev.data.slice(RTC.length)); } catch (err) { continue; }
+        if (m.to !== s.me.id) continue;
+        let o; try { o = JSON.parse(m.d); } catch (err) { continue; }
+        log.signals.push({ from: ev.member.id, t: o.t });
+        if (o.t === "o" || o.t === "h") { meet(ev.member); signal(ev.member.id, { t: "p" }); }   // as appwindow.js answers
+      }
+    }
+  }
+}
+async function lanes() {
+  for (;;) {
+    try {
+      const r = await rpc("realtime.lanes", { token: s.token });
+      s.fast.routes = r.routes || {};
+      for (const id of r.up || []) if (s.fast.peers[id]) s.fast.peers[id].state = "direct";
+    } catch (err) {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+window.start = async function () {
+  const j = await rpc("realtime.join", { page: GAME, game: GAME, room: ROOM, member: ME, fast: true });
+  s.token = j.token; s.me = j.me;
+  for (const p of j.members || []) { s.members[p.id] = p; meet(p); }
+  poll(); lanes();
+  return j.me;
+};
+// Live: camera and microphone on, shared with every viewer the lane reaches, their picture placed and voice heard.
+window.goLive = async function () {
+  const started = await M.door(s, { do: "start", video: true, audio: true });
+  const shared = [];
+  for (const id in s.fast.peers) {
+    if (s.fast.peers[id].state !== "direct") continue;
+    await M.door(s, { do: "share", peer: id, on: true });
+    await M.door(s, { do: "hear", peer: id, on: true });
+    await M.door(s, { do: "place", who: id, rect: { x: 10, y: 60, w: 320, h: 240 } });
+    shared.push(id);
+  }
+  return { started, shared };
+};
+window.sendFast = async function (to, data) { return rpc("realtime.fast", { token: s.token, to: [to], data }); };
+window.state = function () {
+  const md = s.media, tiles = {};
+  if (md) for (const key in md.tiles) {
+    const el = md.tiles[key], w = el.width || el.videoWidth || 0;
+    tiles[key] = { w, spread: w ? spread(el) : 0 };
+  }
+  const levels = {};
+  if (md) for (const id in md.rx) levels[id] = md.rx[id].level.mic || 0;
+  return { me: s.me, peers: Object.fromEntries(Object.entries(s.fast.peers).map(([id, p]) => [id, p.state])), tiles, levels, log };
+};
+function spread(el) {
+  const c = document.createElement("canvas"); c.width = 32; c.height = 24;
+  const g = c.getContext("2d"); g.drawImage(el, 0, 0, 32, 24);
+  const d = g.getImageData(0, 0, 32, 24).data; let min = 255, max = 0;
+  for (let i = 0; i < d.length; i += 4) { const v = (d[i] + d[i + 1] + d[i + 2]) / 3; min = Math.min(min, v); max = Math.max(max, v); }
+  return Math.round(max - min);
+}
+</script>

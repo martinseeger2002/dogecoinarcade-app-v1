@@ -6,6 +6,11 @@ The viewer (_page_doors) asks these routes on its page's behalf, exactly as it a
     POST /realtime/join                   into a room: a signed-in account as its address (its browser signed V1.0's
                                           certificate words), a signed guest address, or a plain guest
     POST /realtime/send, /realtime/leave
+    POST /realtime/fast, /realtime/media, /realtime/lanes
+                                          for a seat joined with fast: fast data and media pieces for players without
+                                          WebRTC (Arcade V1.0 app windows), and which players the arcades' fast lane
+                                          reaches -- V1.0's realtime.fast / realtime.media / realtime.lanes on the seat's
+                                          token, many in one JSON-RPC batch (see MEDIA PIECES below)
     GET  /realtime/stream?token=          the room's events (server-sent), passed through from V1.0
     POST /realtime/hub/attach|detach, GET /realtime/hub?id=
                                           many rooms on one stream (kept here, fed by V1.0's streams)
@@ -43,6 +48,16 @@ NODE_RELAYS_FILE = "node-relays.json"
 HEARTBEAT = 15.0
 HUB_MAX_ROOMS = 16
 HUB_IDLE = 120.0
+#: MEDIA PIECES (2026-11-18, TxTOK live: a V1.0 app window went live and a phone here showed "2 watching" and no picture).
+#: An app window has no WebRTC: its camera, microphone and screen go as WebCodecs pieces over the arcades' fast lane
+#: (realtime.media). A viewer here speaks the same pieces (_page_doors, media_pieces.js); this site only passes them
+#: between the viewer and its arcade, on the seat's token, opaque. One request carries what the viewer has waiting.
+PIECES_MOST = 48                 # pieces in one request
+PIECE_B64_MOST = 81_000          # a piece is at most 60 KB (V1.0's MEDIA_MAX), as base64
+FAST_MOST = 64                   # fast sends in one request
+FAST_B64_MOST = 22_000           # a fast message is at most 16 KB
+TO_MOST = 64                     # players one piece or send names
+BODY_MOST = 4 << 20
 CORS = {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"}
 
 
@@ -98,7 +113,7 @@ def register(app, st, chains):
         except ValueError:
             body = {}
         body = body if isinstance(body, dict) else {}
-        out = {"game": str(body.get("game") or ""), "room": str(body.get("room") or "")}
+        out = {"game": str(body.get("game") or ""), "room": str(body.get("room") or ""), "fast": body.get("fast") is True}
         account = app.state.signed_in(request)
         if account is not None and body.get("sig"):
             out.update(address=chains.account_address(account.pubkey, chains.account_chain()),
@@ -128,6 +143,111 @@ def register(app, st, chains):
         except ValueError:
             body = {}
         return await door("leave", {"token": str((body or {}).get("token") or "")})
+
+    # ---------------------------------------------------------------- the fast lane, for players without WebRTC
+    async def rpc_batch(calls: list[dict]) -> list | None:
+        """V1.0's commands in one JSON-RPC batch on /rpc, with its cookie (a new one after it restarts)."""
+        for fresh in (False, True):
+            try:
+                auth = v1._auth(fresh=fresh)
+            except OSError:
+                return None
+            try:
+                r = await client.post("/rpc", json=calls, auth=auth, timeout=15.0)
+            except httpx.HTTPError:
+                return None
+            if r.status_code == 401 and not fresh:
+                continue
+            try:
+                got = r.json()
+            except ValueError:
+                return None
+            return got if isinstance(got, list) else None
+        return None
+
+    async def body_of(request: Request) -> dict:
+        if int(request.headers.get("content-length") or 0) > BODY_MOST:
+            return {}
+        try:
+            body = await request.json()
+        except ValueError:
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    def players(v) -> list[str] | None:
+        if not isinstance(v, list) or not 0 < len(v) <= TO_MOST:
+            return None
+        to = [str(x)[:64] for x in v if isinstance(x, str)]
+        return to if len(to) == len(v) else None
+
+    async def lane(token: str, method: str, items: list[dict]) -> JSONResponse:
+        """Each item as one V1.0 command on the seat's token; the answers summed. A seat V1.0 no longer knows says so
+        (the viewer takes its seat again)."""
+        if not token:
+            return JSONResponse({"ok": False, "error": "join the room first"}, status_code=400, headers=CORS)
+        if not items:
+            return JSONResponse({"ok": True, "sent": 0, "dropped": 0, "failed": 0}, headers=CORS)
+        calls = [{"jsonrpc": "2.0", "id": i, "method": method, "params": {"token": token, **it}} for i, it in enumerate(items)]
+        got = await rpc_batch(calls)
+        if got is None:
+            return JSONResponse({"ok": False, "error": "the arcade did not answer"}, status_code=503, headers=CORS)
+        out = {"ok": True, "sent": 0, "dropped": 0, "failed": 0}
+        for a in got:
+            res, err = (a or {}).get("result"), (a or {}).get("error")
+            if isinstance(res, dict):
+                out["sent"] += int(res.get("sent") or 0)
+                out["dropped"] += int(res.get("dropped") or 0)
+                continue
+            why = str((err or {}).get("message") or "refused")
+            if "join the room first" in why or "fast lane" in why:
+                return JSONResponse({"ok": False, "error": why}, status_code=400, headers=CORS)
+            out["failed"] += 1
+            out["error"] = why
+        return JSONResponse(out, headers=CORS)
+
+    @app.post("/realtime/media")
+    async def media(request: Request):
+        """Pieces of the viewer's camera, microphone or screen for players without WebRTC: {token, pieces: [{to, b64}]}."""
+        body = await body_of(request)
+        items = []
+        for p in (body.get("pieces") or [])[:PIECES_MOST] if isinstance(body.get("pieces"), list) else []:
+            to, b = players((p or {}).get("to")) if isinstance(p, dict) else None, (p or {}).get("b64") if isinstance(p, dict) else None
+            if to and isinstance(b, str) and 0 < len(b) <= PIECE_B64_MOST:
+                items.append({"to": to, "b64": b})
+        return await lane(str(body.get("token") or ""), "realtime.media", items)
+
+    @app.post("/realtime/fast")
+    async def fast(request: Request):
+        """Fast data for players without WebRTC: {token, sends: [{to, data | b64, reliable}]}, in order."""
+        body = await body_of(request)
+        items = []
+        for m in (body.get("sends") or [])[:FAST_MOST] if isinstance(body.get("sends"), list) else []:
+            to = players(m.get("to")) if isinstance(m, dict) else None
+            if not to:
+                continue
+            it = {"to": to, "reliable": m.get("reliable") is True}
+            if isinstance(m.get("b64"), str) and len(m["b64"]) <= FAST_B64_MOST:
+                it["b64"] = m["b64"]
+            elif isinstance(m.get("data"), str) and len(m["data"]) <= FAST_B64_MOST:
+                it["data"] = m["data"]
+            else:
+                continue
+            items.append(it)
+        return await lane(str(body.get("token") or ""), "realtime.fast", items)
+
+    @app.post("/realtime/lanes")
+    async def lanes(request: Request):
+        """Which players of the seat's room the arcades' fast lane reaches now: {up: [ids], routes: {id: how}}."""
+        body = await body_of(request)
+        token = str(body.get("token") or "")
+        got = await rpc_batch([{"jsonrpc": "2.0", "id": 0, "method": "realtime.lanes", "params": {"token": token}}])
+        if not got:
+            return JSONResponse({"ok": False, "error": "the arcade did not answer"}, status_code=503, headers=CORS)
+        res, err = got[0].get("result"), got[0].get("error")
+        if not isinstance(res, dict):
+            return JSONResponse({"ok": False, "error": str((err or {}).get("message") or "refused")}, status_code=400, headers=CORS)
+        return JSONResponse({"ok": True, "up": [str(x) for x in res.get("up") or []],
+                             "routes": {str(k): str(v) for k, v in (res.get("routes") or {}).items()}}, headers=CORS)
 
     async def upstream(token: str):
         """V1.0's server-sent events for one seat, line by line."""
