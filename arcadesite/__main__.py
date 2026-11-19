@@ -16,7 +16,10 @@ def main() -> None:
     import uvicorn
     from .app import create_app
     uvicorn.run(create_app(a.home), host=a.host, port=a.port, proxy_headers=True, forwarded_allow_ips="127.0.0.1",
-                log_level="info")
+                log_level="info",
+                # Live connections (/events, realtime) never close by themselves: a stop gives them 3 seconds, not
+                # systemd's 90 (2026-11-15: each restart left the site down for a minute and a half).
+                timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":
