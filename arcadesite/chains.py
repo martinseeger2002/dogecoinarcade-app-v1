@@ -33,9 +33,10 @@ ARCTEST = dataclasses.replace(
 NETWORKS.setdefault("arctest", ARCTEST)
 
 #: The original's order of chains in a wallet (its Params order), by original network name.
-ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "ltctest", "dgbtest",
-         "arctest")
-# Bitcoin (config.BITCOIN) is defined but not listed yet (the operator, 2026-11-12: "no Bitcoin yet").
+ORDER = ("test", "main", "doge", "ltc", "dgb", "kot", "flop", "wjk", "bel", "lky", "shic", "jkc", "btc", "ltctest",
+         "dgbtest", "arctest")
+# Bitcoin (config.BITCOIN, legacy "1..." addresses on BIP44 coin type 0, as Arcade V1.0's wallet) is listed since
+# 2026-11-24 (the operator: "enable Bitcoin"). Like every chain here, it shows only when V1.0 keeps it or borrows it.
 
 
 @dataclass(frozen=True)
