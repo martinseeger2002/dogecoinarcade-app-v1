@@ -71,7 +71,7 @@ def register(app, st, chains):
         """An account's address on a chain: the one its browser gave, else the same key's (a real-coin chain shares
         the Pepecoin mainnet key, a test chain the testnet key: coins.js coin types 3 and 1)."""
         said = chains.account_address(pubkey, chain)
-        if said:
+        if said or chain.network in OWN_KEY_ONLY:
             return said
         sib = chains.by_network("main" if chain.params.real_coins else "test")
         base = chains.account_address(pubkey, sib) if sib is not None else ""
@@ -82,13 +82,18 @@ def register(app, st, chains):
         except Exception:                                   # noqa: BLE001
             return ""
 
+    #: Coins whose key is not the shared real-coin key (coin type 3) or test key (type 1): Bitcoin's is type 0, so its
+    #: address is only ever the one the account's browser filed, never made from another coin's key hash.
+    OWN_KEY_ONLY = {"btc"}
+
     #: Every coin a profile names an address on (2026-11-12, the operator: "profiles must carry an address for every
-    #: coin the arcade supports so anyone can send any profile any coin"; no Bitcoin yet), besides Pepecoin and
+    #: coin the arcade supports so anyone can send any profile any coin"; Bitcoin since 2026-11-24), besides Pepecoin and
     #: Dogecoin, which have their own places in the announcement. Coins this site keeps no wallet for (ARCADE) are
     #: named from the same key: one key hash on every real-coin chain (BIP44 type 3), another on every test chain
     #: (type 1), as Arcade V1.0 derives them.
     PROFILE_COINS = {"ltc": True, "dgb": True, "kot": True, "flop": True, "wjk": True, "bel": True, "lky": True,
-                     "shic": True, "jkc": True, "arc": True, "ltctest": False, "dgbtest": False, "arctest": False}
+                     "shic": True, "jkc": True, "arc": True, "btc": True, "ltctest": False, "dgbtest": False,
+                     "arctest": False}
 
     def key_hash(pubkey: str, real: bool) -> bytes:
         sib = chains.by_network("main" if real else "test")
@@ -111,12 +116,13 @@ def register(app, st, chains):
                     h = b58check_decode(a)[1] if a else b""
                 except Exception:                           # noqa: BLE001
                     h = b""
-            out[net] = h or key_hash(pubkey, real)
+            out[net] = h or (b"" if net in OWN_KEY_ONLY else key_hash(pubkey, real))
         return {net: h for net, h in out.items() if len(h) == 20}
 
-    def profile_missing(address: str) -> list[str]:
+    def profile_missing(address: str, pubkey: str = "") -> list[str]:
         """The coins of PROFILE_COINS the account's published profile names no address on (Arcade V1.0's `linked`);
-        [] when it has published none (nothing to update) or V1.0 does not answer."""
+        [] when it has published none (nothing to update) or V1.0 does not answer. With `pubkey`, only coins a new
+        profile would name (Bitcoin once the account has filed its Bitcoin address), so the card can be done."""
         try:
             prof = (v1.cmd("profile", who=address) or {})
         except V1Error:
@@ -125,7 +131,8 @@ def register(app, st, chains):
         if not prof.get("stated") and not prof.get("txid"):
             return []
         have = {str(row.get("chain") or "") for row in prof.get("linked") or []}
-        return [net for net in PROFILE_COINS if net not in have]
+        can = chain_hashes(pubkey) if pubkey else None
+        return [net for net in PROFILE_COINS if net not in have and (can is None or net in can)]
 
     def doge_hash(pubkey: str) -> bytes:
         doge = chains.by_network("doge")
@@ -313,7 +320,7 @@ def register(app, st, chains):
         (2026-11-12). `skipped`: the account said "not now" to this same list already."""
         account = signed_in_account(request)
         address = chains.account_address(account.pubkey, chains.account_chain())
-        nets = profile_missing(address) if address else []
+        nets = profile_missing(address, account.pubkey) if address else []
         said = st.setting(f"profile_coins_skipped:{account.pubkey}", "") or ""
         return JSONResponse({"missing": nets, "labels": [coin_label(n) for n in nets],
                              "skipped": bool(nets) and said == ",".join(nets)})
@@ -323,7 +330,7 @@ def register(app, st, chains):
         """"Not now" to the card: remembered for this list of coins, so it is asked once (a coin added later asks again)."""
         account = signed_in_account(request)
         address = chains.account_address(account.pubkey, chains.account_chain())
-        nets = profile_missing(address) if address else []
+        nets = profile_missing(address, account.pubkey) if address else []
         st.set_setting(f"profile_coins_skipped:{account.pubkey}", ",".join(nets))
         return JSONResponse({"skipped": nets})
 

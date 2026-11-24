@@ -240,6 +240,12 @@ export const ADDRESS_KINDS = {
     {id: "legacy", label: "Legacy", path: "m/44'/3'/0'/0/0"},
     {id: "p2wpkh", label: "Native SegWit", hrp: "bel", path: "m/84'/3'/0'/0/0"},
   ],
+  // Bitcoin (2026-11-24): coin type 0, so these are the addresses any Bitcoin wallet makes from the same words.
+  btc: [
+    {id: "legacy", label: "Legacy", path: "m/44'/0'/0'/0/0"},
+    {id: "p2sh-p2wpkh", label: "P2SH (Nested SegWit)", scripthash: 5, path: "m/49'/0'/0'/0/0"},
+    {id: "p2wpkh", label: "Native SegWit", hrp: "bc", path: "m/84'/0'/0'/0/0"},
+  ],
 };
 export const addressKinds = (network) => ADDRESS_KINDS[network] || [];
 

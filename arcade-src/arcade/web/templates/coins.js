@@ -210,7 +210,7 @@ export const P2SH_VERSION = {ltc: 50, ltctest: 58, dgb: 63, dgbtest: 140};
 //: Every SegWit chain's bech32 prefix (config.py `bech32_hrp`), for saying which address a SegWit output pays
 //: (2026-11-07: a send on real DigiByte or Litecoin may pay dgb1q.../ltc1q..., and a D... signer's own address
 //: cannot say the prefix).
-export const SEGWIT_HRP = {ltc: "ltc", ltctest: "tltc", dgb: "dgb", dgbtest: "dgbt", bel: "bel"};
+export const SEGWIT_HRP = {ltc: "ltc", ltctest: "tltc", dgb: "dgb", dgbtest: "dgbt", bel: "bel", btc: "bc"};
 
 /** A private key as Wallet Import Format text, for a compressed public key. */
 export async function wif(key, version) {
