@@ -866,7 +866,8 @@ SHIBACOIN = dataclasses.replace(
 
 # Bitcoin (2026-11-12, the same ask). Versions 0 ("1...") and 5 ("3..."), WIF 128; keys on BIP44 coin type 0 as Arcade
 # V1.0's wallet derives them (coins.js COIN_TYPE), so the same twelve words give the same address in both. Arcade V1.0's
-# price (fee_policy default: 20,000 sat/kB, dust 1,000). Legacy addresses only here. No arcade tokens (class_b False).
+# price (fee_policy default: 20,000 sat/kB, dust 1,000). Legacy first; SegWit (bc1q, 3...) since 2026-11-24, paying
+# Taproot (bc1p) too. No arcade tokens (class_b False).
 BTC_MAINNET_FLOOR = 925_000
 BITCOIN = dataclasses.replace(
     LITECOIN,
@@ -885,7 +886,7 @@ BITCOIN = dataclasses.replace(
     genesis="000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
     auxpow_chain_id=None, pow_algo="sha256d", pow_limit_bits=0x1D00FFFF,
     addon=True, node_dir=".bitcoin", node_conf="bitcoin.conf",
-    letter="B", family="BTC", net_word="bitcoin", real_coins=True, bech32_hrp="", mweb=False,
+    letter="B", family="BTC", net_word="bitcoin", real_coins=True, bech32_hrp="bc", mweb=False,
     class_b=False,
 )
 

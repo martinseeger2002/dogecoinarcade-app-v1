@@ -9,6 +9,8 @@ picks coins the same way it always has. Coins carrying an inscription are kept o
     GET  /account/activity          what changed (tx.activity)
     POST /account/send              build a payment for the browser to sign (nothing broadcast)
     POST /account/sign              the browser's signatures -> checked against the offer -> tx.broadcast
+    POST /account/segwit/register   file the card's SegWit address of one kind (its key's proof)
+    GET  /account/segwit/balance    what that address holds
 """
 from __future__ import annotations
 
@@ -228,7 +230,8 @@ def register(app, st, chains):
             return JSONResponse({"detail": str(exc)}, status_code=400)
         own = chains.account_address(account.pubkey, one)
         address = address or own
-        if address != own and importedlib.entry(st, one.network, account.pubkey, address) is None:
+        if (address != own and importedlib.entry(st, one.network, account.pubkey, address) is None
+                and segwit_mine(account.pubkey, one, address) is None):
             return JSONResponse({"detail": "only this account's own addresses"}, status_code=403)
         a = CoinDB(v1, one).coins_of([address]).get(address) or {}
         rows = [{"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
@@ -250,7 +253,8 @@ def register(app, st, chains):
             return JSONResponse({"detail": str(exc)}, status_code=400)
         own = chains.account_address(account.pubkey, one)
         address = address.strip()
-        if address and address != own and importedlib.entry(st, one.network, account.pubkey, address) is None:
+        if (address and address != own and importedlib.entry(st, one.network, account.pubkey, address) is None
+                and segwit_mine(account.pubkey, one, address) is None):
             return JSONResponse({"detail": "only this account's own addresses"}, status_code=403)
         address = address or own
         if not address:
@@ -393,9 +397,11 @@ def register(app, st, chains):
         hrp = getattr(one.params, "bech32_hrp", "")
         if hrp and to.lower().startswith(hrp + "1"):
             version, program = segwit_decode(hrp, to.lower())
-            if version != 0:
-                raise ValueError("that is not a native SegWit address for this chain")
-            return bytes([0x00, len(program)]) + program
+            if version == 0 and program is not None:
+                return bytes([0x00, len(program)]) + program
+            if version == 1 and program is not None and len(program) == 32:
+                return bytes([0x51, 32]) + program                # Taproot: OP_1 <32-byte key>
+            raise ValueError("that is not a SegWit or Taproot address this arcade can pay on this chain")
         return txbuild.p2pkh_script(to, one.params)
 
     @app.post("/account/address")
@@ -431,6 +437,97 @@ def register(app, st, chains):
             st.set_setting(chains.coinkey_key(account.pubkey, one), coin)
         return JSONResponse({"address": address, "chain": one.network})
 
+    # ---------------------------------------------------------------- the card's other address kinds (SegWit)
+    # The Wallet card's address type (wallet_js ADDRESS_KINDS): a Native SegWit (m/84') or P2SH-nested (m/49') address
+    # of the same words. Their keys are the browser's, so the browser files each one here, once, with its key's proof;
+    # then its balance shows and a send can be built from it. Ported from the original (arcade/web/app.py) on
+    # 2026-11-24: until then these two routes were missing here, so the card's SegWit addresses never showed a balance.
+    def segwit_kind(one: Chain, addr: str) -> str | None:
+        """"p2wpkh" or "p2sh-p2wpkh" for an address of that shape on this chain (one with SegWit), else None."""
+        from arcade.config import unpayable_versions
+        from arcade.script import b58check_decode
+        hrp = getattr(one.params, "bech32_hrp", "")
+        if not hrp or not addr:
+            return None
+        version, program = segwit_decode(hrp, addr.lower())
+        if version == 0 and program is not None and len(program) == 20:
+            return "p2wpkh"
+        try:
+            version, payload = b58check_decode(addr)
+        except Exception:                                   # noqa: BLE001
+            return None
+        if (version == one.params.scripthash_version and len(payload) == 20
+                and version not in unpayable_versions(one.params)):
+            return "p2sh-p2wpkh"
+        return None
+
+    def segwit_setting(pubkey: str, one: Chain, kind: str) -> str:
+        """Where an account's filed address of that kind is kept (the original's names)."""
+        return (f"segwit_watch:{pubkey}:{one.network}" if kind == "p2wpkh"
+                else f"segwit_watch:{kind}:{pubkey}:{one.network}")
+
+    def segwit_mine(pubkey: str, one: Chain, addr: str) -> str | None:
+        """The kind of `addr` when it is this account's filed SegWit address on this chain, else None."""
+        kind = segwit_kind(one, addr)
+        return kind if kind and st.setting(segwit_setting(pubkey, one, kind)) == addr else None
+
+    app.state.segwit_mine = segwit_mine
+
+    @app.post("/account/segwit/register")
+    def account_segwit_register(request: Request, payload: Any = Body(None)):
+        """File this account's SegWit address of one kind on one chain: one per kind, never another account's, and a
+        first filing proved by that address's own key (wallet_imports.check_proof). A nested address keeps its key
+        hash, which a send from it needs. V1.0 indexes every address, so nothing is watched here."""
+        from arcade import wallet_imports
+        account = signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            one = chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        addr = str(said.get("address") or "").strip()
+        kind = segwit_kind(one, addr)
+        if kind is None:
+            return JSONResponse({"detail": "that is not a SegWit address for this chain"}, status_code=400)
+        key = segwit_setting(account.pubkey, one, kind)
+        prior = st.setting(key)
+        if prior and prior != addr:
+            return JSONResponse({"detail": "this account already filed a different SegWit address on this chain"},
+                                status_code=409)
+        if any(value == addr and name != key and name.startswith("segwit_watch:")
+               and name.endswith(f":{one.network}") for name, value in st.settings().items()):
+            return JSONResponse({"detail": "that address is another account's on this arcade"}, status_code=409)
+        if not prior:
+            try:
+                pub = wallet_imports.check_proof(one.params, account.pubkey, one.network, addr,
+                                                 str(said.get("pubkey") or "").strip(), kind,
+                                                 str(said.get("address_signature") or "").strip())
+            except wallet_imports.ImportRefused as exc:
+                return JSONResponse({"detail": f"that address was not proved to be this account's: {exc}"},
+                                    status_code=400)
+            if kind == "p2sh-p2wpkh":
+                st.set_setting(f"segwit_keyhash:{account.pubkey}:{one.network}", hash160(pub).hex())
+            st.set_setting(key, addr)
+        return JSONResponse({"ok": True, "watching": addr, "kind": kind, "chain": one.network})
+
+    @app.get("/account/segwit/balance")
+    def account_segwit_balance(request: Request, address: str = "", network: str = ""):
+        """What a filed SegWit address of this account holds (the card's address type), from V1.0's address index."""
+        account = signed_in_account(request)
+        try:
+            one = chain_asked({"chain": network} if network else {})
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        addr = (address or "").strip()
+        if segwit_mine(account.pubkey, one, addr) is None:
+            return JSONResponse({"detail": "file this SegWit address on the Wallet page first"}, status_code=400)
+        try:
+            got = balances(one, addr)
+        except V1Error as exc:
+            return JSONResponse({"detail": f"the arcade could not read it: {exc}"}, status_code=503)
+        return JSONResponse({"address": addr, "chain": one.network, "balance": got["spendable"],
+                             "confirmed": got["balance"], "incoming": got["incoming"], "watched": True})
+
     @app.post("/account/send")
     def account_send(request: Request, payload: Any = Body(None)):
         account = signed_in_account(request)
@@ -444,7 +541,19 @@ def register(app, st, chains):
             return JSONResponse({"detail": f"this account has no {one.label} address yet"}, status_code=400)
         keyhash = None
         want_from = str(said.get("from") or "").strip()
-        if want_from not in ("", address):
+        kind = segwit_mine(account.pubkey, one, want_from) if want_from not in ("", address) else None
+        if kind is not None:
+            # The card's SegWit address (its key the same words' m/84' or m/49'): its coins, its change back to it.
+            if kind == "p2sh-p2wpkh":
+                try:
+                    keyhash = bytes.fromhex(st.setting(f"segwit_keyhash:{account.pubkey}:{one.network}") or "")
+                except ValueError:
+                    keyhash = b""
+                if len(keyhash) != 20:
+                    return JSONResponse({"detail": "file this address again on the Wallet page: its key was not kept"},
+                                        status_code=400)
+            address = want_from
+        elif want_from not in ("", address):
             # An imported wallet of this account: only an address it registered with its key's signature. Its coins
             # only, its change back to it; the browser signs with that wallet's key.
             imported = importedlib.entry(st, one.network, account.pubkey, want_from)

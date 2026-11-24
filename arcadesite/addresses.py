@@ -57,8 +57,12 @@ def _check_address(address: str, *, mainnet: bool, segwit_ok: bool = False) -> s
                     return None
                 if version is None:
                     return "that does not look like an address (the checksum does not match)."
-                return (f"that is a {params.label} Taproot address ({hrp}1p…). This arcade pays legacy, "
-                        "P2SH and native SegWit addresses for now; ask for one of those.")
+                # Taproot (v1, a 32-byte key, 2026-11-24: most Bitcoin wallets hand out bc1p...): paying one is an
+                # output script too, OP_1 <key>. A later witness version has no rules yet, so it stays refused.
+                if version == 1 and program is not None and len(program) == 32:
+                    return None
+                return (f"that is a {params.label} SegWit address of a version this arcade cannot pay yet; "
+                        "ask for a legacy, SegWit or Taproot one.")
             return (f"that is a {params.label} SegWit or Taproot address ({hrp}1…). This arcade pays "
                     f"{params.label}'s legacy addresses for now; ask for one of those.")
     try:
