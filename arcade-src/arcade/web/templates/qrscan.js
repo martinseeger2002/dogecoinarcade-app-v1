@@ -91,6 +91,70 @@ export function scanQR() {
     })();
   });
 }
+/* Reading a code shown on this same device's screen (2026-11-26: "scan from screen" for ARCADE ID): the screen or
+   window picked in the browser's share dialog is read a few times a second, at full size so a small code on a big
+   screen still reads, and sharing stops when a code is found or after two minutes. Nothing is kept or sent. A
+   browser that can't share a screen (phones) uses a screenshot instead: readImage() below. */
+export const canShareScreen = () => !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+async function fullReader() {
+  const read = await qrReader();
+  if (!window.jsQR) return read;   // BarcodeDetector reads any size
+  const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d", {willReadFrequently: true});
+  return async (source) => {
+    const w = source.videoWidth || source.width, h = source.videoHeight || source.height;
+    if (!w || !h) return null;
+    const k = Math.min(1, 2560 / Math.max(w, h));
+    canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const hit = window.jsQR(img.data, img.width, img.height, {inversionAttempts: "attemptBoth"});
+    return hit ? hit.data : null;
+  };
+}
+/** Read the first QR code in a picture (a screenshot file or a pasted image), or null. */
+export async function readImage(file) {
+  const read = await fullReader();
+  return read(await createImageBitmap(file));
+}
+/** Share a screen and resolve with the first QR code's text that `accept` takes, or null (cancelled, none found). */
+export function scanScreen(accept = () => true) {
+  return new Promise((resolve, reject) => {
+    if (!canShareScreen()) return reject(new Error("This browser can't share its screen: use a screenshot of the code instead."));
+    const box = el("div", "wl-scanbox");
+    const say = el("p", "", "Pick the screen or window that shows the QR code\u2026");
+    const close = el("button", "wl-scan", "Stop"); close.type = "button";
+    const row = el("div", "row"); row.append(close); box.append(say, row);
+    document.body.append(box);
+    let stream = null, done = false;
+    const finish = (text, err) => {
+      if (done) return; done = true;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      box.remove(); err ? reject(err) : resolve(text || null);
+    };
+    close.onclick = () => finish(null);
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({video: {frameRate: {max: 5}}, audio: false});
+      } catch (e) {
+        return finish(null, e && e.name === "NotAllowedError" ? null : new Error("This browser can't share its screen here: use a screenshot of the code instead."));
+      }
+      if (done) { stream.getTracks().forEach((t) => t.stop()); return; }
+      stream.getVideoTracks()[0].addEventListener("ended", () => finish(null));
+      say.textContent = "Looking for a QR code on the screen you shared\u2026";
+      const video = document.createElement("video"); video.muted = true; video.playsInline = true;
+      video.srcObject = stream; await video.play().catch(() => {});
+      let read; try { read = await fullReader(); } catch (e) { return finish(null, e); }
+      const until = Date.now() + 120000;
+      const tick = async () => {
+        if (done) return;
+        if (Date.now() > until) return finish(null, new Error("No code found on the shared screen. Make sure the QR code is showing, then try again."));
+        try { const text = video.videoWidth ? await read(video) : null; if (text && accept(text)) return finish(text); } catch (e) { /* the next frame */ }
+        setTimeout(tick, 400);
+      };
+      tick();
+    })();
+  });
+}
 /** What a scanned code says to Send: an address, an @name, or a payment link with an amount. */
 export function parseQR(text) {
   const t = String(text || "").trim();

@@ -35,7 +35,9 @@
   <p>A site shows an ARCADE ID or Digi-ID code? Scan it here to sign in there with this wallet. Each site gets its own key, never the one that holds your coins.</p>
   <p class="row" style="gap:8px;flex-wrap:wrap">
     <button class="btn" id="aid-scan">Scan a code</button>
-    <input type="text" id="aid-code" placeholder="or paste a digiid:// code" style="flex:1;min-width:220px" autocomplete="off" spellcheck="false">
+    <button class="btn ghost" id="aid-screen" title="Read a code shown on this device's own screen: pick the window or screen that shows it, or a screenshot">From screen (Desktop)</button>
+    <input type="file" id="aid-shot" accept="image/*" hidden>
+    <input type="text" id="aid-code" placeholder="or paste a digiid:// code (or a screenshot of it)" style="flex:1;min-width:220px" autocomplete="off" spellcheck="false">
   </p>
   <div id="aid-ask" hidden>
     <p>Sign in to <strong id="aid-host"></strong>?</p>
@@ -98,6 +100,32 @@
     const {scanQR} = await import("/qrscan.js");
     const text = await scanQR();
     if (text) { $("aid-code").value = text; ask(text); }
+  };
+  // the same device's screen: a shared screen or window, or a screenshot (picked, or pasted into the code box)
+  const isCode = (t) => /^digiid:\/\//i.test(String(t || "").trim());
+  async function fromImage(file) {
+    if (!file) return;
+    $("aid-said").textContent = "Reading the screenshot…";
+    try {
+      const {readImage} = await import("/qrscan.js");
+      const text = await readImage(file);
+      if (isCode(text)) { $("aid-said").textContent = ""; $("aid-code").value = text.trim(); ask(text.trim()); }
+      else $("aid-said").textContent = text ? "That QR code isn't an ARCADE ID or Digi-ID code." : "No QR code found in that picture. Take the screenshot with the whole code showing.";
+    } catch (e) { $("aid-said").textContent = String(e.message || e); }
+  }
+  $("aid-shot").onchange = () => { const f = $("aid-shot").files[0]; $("aid-shot").value = ""; fromImage(f); };
+  $("aid-code").addEventListener("paste", (e) => {
+    const f = [...(e.clipboardData ? e.clipboardData.files : [])].find((x) => x.type.startsWith("image/"));
+    if (f) { e.preventDefault(); fromImage(f); }
+  });
+  $("aid-screen").onclick = async () => {
+    $("aid-said").textContent = "";
+    const {scanScreen, canShareScreen} = await import("/qrscan.js");
+    if (!canShareScreen()) { $("aid-said").textContent = "This browser can't share its screen: pick a screenshot of the code, or paste one into the code box."; $("aid-shot").click(); return; }
+    try {
+      const text = await scanScreen(isCode);
+      if (text) { $("aid-code").value = text.trim(); ask(text.trim()); }
+    } catch (e) { $("aid-said").textContent = String(e.message || e); $("aid-shot").click(); }
   };
   $("aid-code").oninput = () => { if ($("aid-code").value.trim().startsWith("digiid://")) ask($("aid-code").value); };
   $("aid-cancel").onclick = () => { $("aid-ask").hidden = true; code = null; $("aid-code").value = ""; };
